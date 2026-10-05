@@ -1,0 +1,11 @@
+[package]
+name = "pi-protocol"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+pi-chord = { path = "../pi-chord" }
+serde_json = { workspace = true, features = ["preserve_order"] }
+thiserror.workspace = true

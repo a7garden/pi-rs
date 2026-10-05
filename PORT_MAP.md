@@ -70,11 +70,11 @@ The sync session MUST:
 
 | Crate | Status | Upstream tag ported | Deviations |
 |---|---|---|---|
-| pi-telemetry | not started | — | |
+| pi-telemetry | ported | v1.0.3 | backend-neutral abstraction behind dyn-safe traits; rejection-identity via `Arc<dyn SpanError>` `ptr_eq`; TS type-level machinery has no runtime counterpart (documented); details in crate docs |
 | pi-chord | not started | — | |
 | pi-codemode | not started | — | |
 | pi-mcp | not started | — | |
-| pi-protocol | not started | — | |
+| pi-protocol | ported | v1.0.3 | CBOR input via explicit `CborValue` enum; JS dynamic-value guards (`isJsonValue`/`copyJson`) collapse into serde types; `serde_json/preserve_order` keeps CBOR map encoding byte-compatible; per-module details in crate docs |
 | pi-ai | not started | — | |
 | pi-runtime | not started | — | new crate, no upstream counterpart |
 | pi-agent | not started | — | |
