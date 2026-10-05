@@ -71,7 +71,7 @@ The sync session MUST:
 | Crate | Status | Upstream tag ported | Deviations |
 |---|---|---|---|
 | pi-telemetry | ported | v1.0.3 | backend-neutral abstraction behind dyn-safe traits; rejection-identity via `Arc<dyn SpanError>` `ptr_eq`; TS type-level machinery has no runtime counterpart (documented); details in crate docs |
-| pi-chord | not started | — | |
+| pi-chord | ported | v1.0.3 | JS Proxy drafts → explicit `Draft` API; `AbortSignal` pure-Rust; TS conditional types → runtime member tables (`RemoteServiceImpl`); esbuild/CJS behind `FacetCompiler`/`FacetBundleModuleLoader` traits (pi-runtime implements); `reportErrorAsync` logs instead of crashing host; `serde_json/preserve_order` for key-order parity; details in crate docs |
 | pi-codemode | not started | — | |
 | pi-mcp | not started | — | |
 | pi-protocol | ported | v1.0.3 | CBOR input via explicit `CborValue` enum; JS dynamic-value guards (`isJsonValue`/`copyJson`) collapse into serde types; `serde_json/preserve_order` keeps CBOR map encoding byte-compatible; per-module details in crate docs |
