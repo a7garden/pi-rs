@@ -1,0 +1,18 @@
+[package]
+name = "pi-codemode"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Sandboxed JavaScript execution where the only capability is calling injected tools (Rust port of @earendil-works/pi-codemode)"
+
+[dependencies]
+serde = { workspace = true }
+# `preserve_order` keeps JSON object key insertion order, matching upstream JS
+# semantics where `Object.keys()` order is observable (schema property ordering
+# uses explicit sort, but `const`/`enum`/store snapshots rely on stable order).
+serde_json = { workspace = true, features = ["preserve_order"] }
+thiserror = { workspace = true }
+# Project convention: parking_lot mutexes at immediate-lock call sites.
+parking_lot = "0.12"
+tokio = { workspace = true }
