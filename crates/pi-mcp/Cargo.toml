@@ -1,0 +1,42 @@
+[package]
+name = "pi-mcp"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+# preserve_order keeps JSON object key order stable (wire shapes pass through verbatim);
+# same choice as pi-protocol/pi-chord.
+serde_json = { workspace = true, features = ["preserve_order"] }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+async-trait = "0.1"
+# HTTP client for the Streamable HTTP transport and OAuth flows. Server side is not
+# implemented by this crate (upstream is client-only too); test servers live behind cfg(test).
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
+# Response body streams of the transport's fetch abstraction carry `Bytes` chunks
+# (reqwest's native chunk type).
+bytes = "1"
+url = "2"
+sha2 = "0.10"
+base64 = "0.22"
+getrandom = "0.2"
+futures-core = "0.3"
+futures-util = "0.3"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+# Deterministic clocks for timeout tests (mirrors upstream's vitest fake timers).
+tokio = { workspace = true, features = ["test-util"] }
+
+[[bin]]
+name = "mcp-stdio-fixture"
+path = "tests/fixtures/stdio_server.rs"
+
+[[bin]]
+name = "mcp-stubborn-fixture"
+path = "tests/fixtures/stubborn_server.rs"
