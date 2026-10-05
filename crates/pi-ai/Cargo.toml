@@ -1,0 +1,31 @@
+[package]
+name = "pi-ai"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+# Wire types cross process/network boundaries (models store, generated catalog, provider payloads).
+serde = { workspace = true }
+# TelemetryContext passed through provider request options.
+pi-telemetry = { path = "../pi-telemetry" }
+serde_json = { workspace = true, features = ["preserve_order"] }
+thiserror = { workspace = true }
+# Adapter tasks (lazy_stream spawn), abort races, sleep, default fetch client runtime.
+tokio = { workspace = true }
+# Async provider methods (trait objects) — pi-chord/pi-mcp precedent.
+async-trait = "0.1"
+# Stream trait for AssistantMessageEventStream and SSE response bodies.
+futures-core = "0.3"
+futures-util = { version = "0.3", default-features = false, features = ["std", "async-await"] }
+# Default HTTP adapter behind the crate's FetchFunction seam (rustls, pi-mcp precedent).
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
+# Randomness for uuidv7 (upstream crypto.getRandomValues).
+getrandom = "0.2"
+# Context-overflow error patterns (utils/overflow.ts) and model-data validation.
+regex = "1"
+
+[dev-dependencies]
+# Paused-clock tests (tokio::time::pause/advance) for retry backoff timing.
+tokio = { workspace = true, features = ["test-util"] }
