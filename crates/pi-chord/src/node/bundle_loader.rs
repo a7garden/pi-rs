@@ -470,12 +470,20 @@ fn absolute(path: &Path) -> PathBuf {
 
 /// Stand-in for `mkdtemp`'s random suffix.
 fn unique_suffix() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{SystemTime, UNIX_EPOCH};
+    // Upstream uses `mkdtemp` (kernel-guaranteed unique). Nanos alone repeat
+    // under coarse clocks (two calls in one tick collide); mix in a process
+    // local counter so concurrent loads/tests never share a directory.
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_nanos() as u64)
         .unwrap_or_default();
-    format!("{:x}", nanos ^ (std::process::id() as u64).rotate_left(32))
+    let mixed = nanos
+        ^ (std::process::id() as u64).rotate_left(32)
+        ^ COUNTER.fetch_add(1, Ordering::Relaxed).rotate_left(17);
+    format!("{mixed:x}")
 }
 
 #[cfg(test)]

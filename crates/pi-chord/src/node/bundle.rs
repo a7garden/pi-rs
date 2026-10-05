@@ -431,14 +431,20 @@ pub fn short_hash(value: &str) -> String {
     hex[..12].to_string()
 }
 
-/// Stand-in for `randomUUID()`: a collision-resistant-enough suffix for
-/// staging/backup directory names within one machine.
+/// Stand-in for `randomUUID()`/`mkdtemp`: a collision-resistant suffix for
+/// staging/backup directory names within one machine. Nanos alone repeat
+/// under coarse clocks, so a process-local counter is mixed in.
 fn unique_suffix() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_nanos() as u64)
         .unwrap_or_default();
-    format!("{:x}", nanos ^ (process::id() as u64).rotate_left(32))
+    let mixed = nanos
+        ^ (process::id() as u64).rotate_left(32)
+        ^ COUNTER.fetch_add(1, Ordering::Relaxed).rotate_left(17);
+    format!("{mixed:x}")
 }
 
 /// Upstream `resolve(workingDirectory, source)` for sources that may not exist
