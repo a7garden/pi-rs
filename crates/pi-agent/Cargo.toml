@@ -1,0 +1,21 @@
+[package]
+name = "pi-agent"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+# Message/event/context wire types, EventStream, transcript helpers, abort, faux (tests).
+pi-ai = { path = "../pi-ai" }
+serde = { workspace = true }
+# Agent events/tool arguments cross process boundaries in host integrations.
+serde_json = { workspace = true, features = ["preserve_order"] }
+# Loop runs inside spawned tasks; Agent uses Notify for waitForIdle.
+tokio = { workspace = true }
+# Stream trait for EventStream iteration.
+futures-core = "0.3"
+futures-util = { version = "0.3", default-features = false, features = ["std", "async-await"] }
+# Sync locks that are never poisoned (state, queues, default stream fn).
+parking_lot = "0.12"
+thiserror = { workspace = true }
