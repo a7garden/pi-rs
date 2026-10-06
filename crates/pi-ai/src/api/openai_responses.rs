@@ -227,7 +227,9 @@ fn build_request_headers(
 		for (key, value) in options_headers {
 			match value {
 				Some(value) => headers.push((key.clone(), value.clone())),
-				None => headers.retain(|(name, _)| name != key),
+				// Case-insensitive: upstream SDK null-deletion removes the
+				// default regardless of the casing the caller used.
+				None => headers.retain(|(name, _)| !name.eq_ignore_ascii_case(key)),
 			}
 		}
 	}

@@ -21,7 +21,15 @@ pub fn meta_provider() -> Arc<dyn Provider> {
 		name: Some("Meta".to_string()),
 		base_url: Some("https://api.meta.ai/v1".to_string()),
 		headers: None,
-		auth: ProviderAuth { api_key: Some(env_api_key_auth("Meta Model API key", &["META_API_KEY"])), oauth: None },
+		auth: ProviderAuth {
+			api_key: Some(env_api_key_auth("Meta Model API key", &["META_API_KEY"])),
+			oauth: Some(Arc::new(crate::auth::helpers::lazy_oauth(crate::auth::helpers::LazyOAuthInput {
+				name: "Meta (Muse subscription)".to_string(),
+				is_subscription: true,
+				login_label: Some("Sign in with Meta".to_string()),
+				load: crate::auth::oauth::load::load_meta_oauth,
+			}))),
+		},
 		models: super::meta_models::meta_any_models(),
 		fetch_models: None,
 		filter_models: None,

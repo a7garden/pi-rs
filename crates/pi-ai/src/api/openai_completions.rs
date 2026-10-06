@@ -2262,7 +2262,16 @@ async fn stream_inner(
 			}
 		}
 	}
-	set_header(&mut headers, "Authorization", format!("Bearer {api_key}"));
+	// Upstream passes merged headers as the SDK's defaultHeaders: an explicit
+	// options `authorization` entry overrides the SDK Bearer, and a null entry
+	// deletes it entirely (SDK v5 null-deletion semantics).
+	let has_authorization_entry = options
+		.headers
+		.as_ref()
+		.is_some_and(|h| h.keys().any(|key| key.eq_ignore_ascii_case("authorization")));
+	if !has_authorization_entry {
+		set_header(&mut headers, "Authorization", format!("Bearer {api_key}"));
+	}
 
 	let fetch: FetchFn = options.fetch.clone().unwrap_or_default();
 	let url = format!("{}/chat/completions", model.base.base_url.trim_end_matches('/'));
@@ -2598,5 +2607,93 @@ mod tests {
 			vec![AssistantContent::Text(TextContent { text: "hello".to_string(), text_signature: None })]
 		);
 		assert_eq!(*events.lock().expect("events lock"), vec![first_chunk, final_chunk]);
+	}
+
+	fn terminal_sse_body() -> String {
+		let mut body = String::new();
+		body.push_str("data: {\"id\":\"c\",\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n");
+		body.push_str("data: [DONE]\n\n");
+		body
+	}
+
+	fn recording_fetch(body: String) -> (FetchFn, Arc<Mutex<Vec<(String, String)>>>) {
+		let captured: Arc<Mutex<Vec<(String, String)>>> = Arc::new(Mutex::new(Vec::new()));
+		let sink = captured.clone();
+		let fetch = FetchFn::new(move |request: HttpRequest| {
+			let sink = sink.clone();
+			let body = body.clone();
+			Box::pin(async move {
+				sink.lock().expect("capture lock").extend(request.headers);
+				Ok(HttpResponse { status: 200, headers: vec![], body: HttpBody::Bytes(body.into_bytes()) })
+			})
+		});
+		(fetch, captured)
+	}
+
+	// Upstream passes merged headers as the SDK defaultHeaders: a caller
+	// `authorization` overrides the Bearer, and `authorization: null` deletes
+	// the header entirely.
+	#[tokio::test]
+	async fn options_authorization_overrides_or_deletes_sdk_bearer() {
+		let body = terminal_sse_body();
+
+		// Default: Bearer from api key.
+		let (fetch, captured) = recording_fetch(body.clone());
+		let mut options = SimpleStreamOptions::default();
+		options.base.base.api_key = Some("test".to_string());
+		options.base.base.fetch = Some(fetch);
+		let context = normalize_context(&Context {
+			system_prompt: None,
+			messages: vec![Message::User(UserMessage {
+				content: crate::types::UserContentField::Text("hi".to_string()),
+				timestamp: now_ms(),
+			})],
+			tools: None,
+		});
+		stream_simple(&openrouter_model(), &context, &options).result().await;
+		let auth: Vec<String> = captured
+			.lock()
+			.expect("capture lock")
+			.iter()
+			.filter(|(name, _)| name.eq_ignore_ascii_case("authorization"))
+			.map(|(_, value)| value.clone())
+			.collect();
+		assert_eq!(auth, vec!["Bearer test".to_string()]);
+
+		// Custom authorization wins; no Bearer.
+		let (fetch, captured) = recording_fetch(body.clone());
+		let mut options = SimpleStreamOptions::default();
+		options.base.base.api_key = Some("test".to_string());
+		options.base.base.fetch = Some(fetch);
+		let mut headers = std::collections::BTreeMap::new();
+		headers.insert("authorization".to_string(), Some("Custom xyz".to_string()));
+		options.base.base.headers = Some(headers);
+		stream_simple(&openrouter_model(), &context, &options).result().await;
+		let auth: Vec<String> = captured
+			.lock()
+			.expect("capture lock")
+			.iter()
+			.filter(|(name, _)| name.eq_ignore_ascii_case("authorization"))
+			.map(|(_, value)| value.clone())
+			.collect();
+		assert_eq!(auth, vec!["Custom xyz".to_string()]);
+
+		// Null authorization deletes the header entirely.
+		let (fetch, captured) = recording_fetch(body);
+		let mut options = SimpleStreamOptions::default();
+		options.base.base.api_key = Some("test".to_string());
+		options.base.base.fetch = Some(fetch);
+		let mut headers = std::collections::BTreeMap::new();
+		headers.insert("authorization".to_string(), None);
+		options.base.base.headers = Some(headers);
+		stream_simple(&openrouter_model(), &context, &options).result().await;
+		let auth: Vec<String> = captured
+			.lock()
+			.expect("capture lock")
+			.iter()
+			.filter(|(name, _)| name.eq_ignore_ascii_case("authorization"))
+			.map(|(_, value)| value.clone())
+			.collect();
+		assert_eq!(auth, Vec::<String>::new());
 	}
 }

@@ -148,7 +148,15 @@ pub fn anthropic_provider() -> Arc<dyn Provider> {
 		name: Some("Anthropic".to_string()),
 		base_url: Some("https://api.anthropic.com".to_string()),
 		headers: None,
-		auth: ProviderAuth { api_key: Some(anthropic_api_key_auth()), oauth: None },
+		auth: ProviderAuth {
+			api_key: Some(anthropic_api_key_auth()),
+			oauth: Some(Arc::new(crate::auth::helpers::lazy_oauth(crate::auth::helpers::LazyOAuthInput {
+				name: "Anthropic (Claude Pro/Max)".to_string(),
+				is_subscription: true,
+				login_label: None,
+				load: crate::auth::oauth::load::load_anthropic_oauth,
+			}))),
+		},
 		models: super::anthropic_models::anthropic_any_models(),
 		fetch_models: None,
 		filter_models: None,

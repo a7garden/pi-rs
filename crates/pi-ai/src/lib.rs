@@ -137,18 +137,37 @@
 
 pub mod api;
 pub mod auth;
+pub mod bedrock_provider;
+pub mod compat;
+pub mod env_api_keys;
 pub mod http;
+pub mod image_models;
+pub mod images;
+pub mod images_api_registry;
+pub mod legacy_api_aliases;
 pub mod model_catalog;
 pub mod models;
 pub mod models_generated;
 pub mod models_store;
+pub mod oauth;
 pub mod providers;
+pub mod session_resources;
 pub mod types;
 pub mod utils;
 
 // Mirrors upstream `src/index.ts` re-exports (in-scope modules; per-API option
 // types carry the D2 `*ApiOptions` names, deferred modules land with later waves).
 pub use api::lazy::{lazy_api, lazy_stream, LazyApiCapabilities};
+pub use api::azure_openai_config::AzureEndpointOptions;
+pub use api::azure_openai_responses::AzureOpenAIResponsesOptions;
+pub use api::bedrock_converse_stream::{BedrockOptions, BedrockThinkingDisplay};
+pub use api::google_generative_ai::GoogleOptions;
+pub use api::google_shared::{GoogleApiThinkingLevel, ResolvedGoogleThinkingLevel};
+pub use api::google_vertex::GoogleVertexOptions;
+pub use api::mistral_conversations::MistralOptions;
+// Upstream also re-exports `OpenAICodexResponsesOptions`/`OpenAICodexWebSocketDebugStats`
+// here; the codex API has no options struct yet (D27 in api/openai_codex_responses.rs).
+pub use api::pi_messages::PiMessagesApiOptions;
 pub use models::{
 	calculate_cost, clamp_thinking_level, create_models, create_provider, get_supported_thinking_levels, has_api,
 	models_are_equal, CreateModelsOptions, CreateProviderOptions, Models, ModelsPublication, ModelsRefreshOptions,
@@ -173,6 +192,15 @@ pub use types::{
 pub use auth::context::default_provider_auth_context;
 pub use auth::credential_store::InMemoryCredentialStore;
 pub use auth::helpers::{env_api_key_auth, lazy_oauth, LazyOAuthInput};
+pub use auth::oauth::{
+	anthropic_oauth, create_radius_oauth, github_copilot_oauth, kimi_coding_oauth, load_anthropic_oauth,
+	load_github_copilot_oauth, load_kimi_coding_oauth, load_meta_oauth, load_openai_chatgpt_oauth,
+	load_openai_codex_oauth, load_openrouter_oauth, load_radius_oauth, load_xai_oauth, meta_oauth,
+	openai_chatgpt_oauth, openai_codex_oauth, openrouter_oauth, xai_oauth, abortable_sleep, generate_pkce, oauth_fetch,
+	poll_oauth_device_code_flow, set_oauth_fetch, start_oauth_callback_server, wait_for_callback_or_manual_input,
+	CallbackOrManual, CallbackServerError, OAuthCallbackServer, OAuthDeviceCodePollOptions, OAuthDeviceCodePollResult,
+	RadiusOAuthOptions,
+};
 pub use auth::types::{
 	ApiKeyAuth, ApiKeyCredential, AuthCheck, AuthContext,
 	AuthEvent, AuthInfoLink, AuthInteraction, AuthOperationOptions, AuthPrompt, AuthResult, AuthType, Credential,

@@ -12,6 +12,7 @@ pub mod headers;
 pub mod json_parse;
 pub mod model_operations;
 pub mod models_error;
+pub mod oauth_page;
 pub mod overflow;
 pub mod pi_user_agent;
 pub mod provider_env;
