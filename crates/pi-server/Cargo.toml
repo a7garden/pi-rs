@@ -1,0 +1,20 @@
+[package]
+name = "pi-server"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+pi-chord = { path = "../pi-chord" }
+pi-protocol = { path = "../pi-protocol" }
+serde = { workspace = true }
+# preserve_order keeps JSON object key order stable (wire shapes pass through
+# verbatim); same choice as pi-protocol/pi-chord.
+serde_json = { workspace = true, features = ["preserve_order"] }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+async-trait = "0.1"
+parking_lot = "0.12"
+# uuidv4 attachment/placeholder ids (upstream crypto.randomUUID()).
+getrandom = "0.2"
