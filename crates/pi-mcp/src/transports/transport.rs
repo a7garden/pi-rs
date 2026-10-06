@@ -1,6 +1,7 @@
 //! Port of `packages/mcp/src/transports/transport.ts`.
 
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc};
+use {parking_lot::Mutex};
 
 use async_trait::async_trait;
 
@@ -64,8 +65,8 @@ pub struct TransportEvents {
 	close_emitted: Arc<Mutex<bool>>,
 }
 
-fn lock_list<L>(cell: &ListenerCell<L>) -> std::sync::MutexGuard<'_, ListenerList<L>> {
-	cell.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+fn lock_list<L>(cell: &ListenerCell<L>) -> parking_lot::MutexGuard<'_, ListenerList<L>> {
+	cell.lock()
 }
 
 impl TransportEvents {
@@ -110,7 +111,7 @@ impl TransportEvents {
 
 	pub fn emit_close(&self) {
 		{
-			let mut emitted = self.close_emitted.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+			let mut emitted = self.close_emitted.lock();
 			if *emitted {
 				return;
 			}

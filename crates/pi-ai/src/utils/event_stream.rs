@@ -14,7 +14,8 @@
 use std::collections::VecDeque;
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc};
+use {parking_lot::Mutex};
 use std::task::{Context as TaskContext, Poll, Waker};
 
 use crate::types::{AssistantMessage, AssistantMessageEvent, StreamDoneReason, StreamErrorReason};
@@ -68,7 +69,7 @@ impl<T, R: Clone + Send + 'static> EventStream<T, R> {
 
 		let mut wakers: Vec<Waker> = Vec::new();
 		{
-			let mut state = self.inner.state.lock().expect("event stream lock");
+			let mut state = self.inner.state.lock();
 			if state.done {
 				return;
 			}
@@ -84,7 +85,7 @@ impl<T, R: Clone + Send + 'static> EventStream<T, R> {
 		}
 		if complete {
 			let result_waker = {
-				let mut result = self.inner.result.lock().expect("event stream result lock");
+				let mut result = self.inner.result.lock();
 				result.value = extracted;
 				result.waker.take()
 			};
@@ -101,10 +102,10 @@ impl<T, R: Clone + Send + 'static> EventStream<T, R> {
 	/// that never saw a completing event (upstream `end(result?)`).
 	pub fn end(&self, result: Option<R>) {
 		let waker = {
-			let mut state = self.inner.state.lock().expect("event stream lock");
+			let mut state = self.inner.state.lock();
 			state.done = true;
 			if let Some(value) = result {
-				let mut result_state = self.inner.result.lock().expect("event stream result lock");
+				let mut result_state = self.inner.result.lock();
 				if result_state.value.is_none() {
 					result_state.value = Some(value);
 				}
@@ -118,7 +119,7 @@ impl<T, R: Clone + Send + 'static> EventStream<T, R> {
 		}
 		// Wake iteration waiters so they observe termination.
 		let waiters = {
-			let mut state = self.inner.state.lock().expect("event stream lock");
+			let mut state = self.inner.state.lock();
 			std::mem::take(&mut state.waiters)
 		};
 		for waiter in waiters {
@@ -133,7 +134,7 @@ impl<T, R: Clone + Send + 'static> EventStream<T, R> {
 
 	/// Whether the stream has terminated.
 	pub fn is_done(&self) -> bool {
-		self.inner.state.lock().expect("event stream lock").done
+		self.inner.state.lock().done
 	}
 }
 
@@ -147,7 +148,7 @@ impl<T: Send + 'static, R: Send + 'static> futures_core::Stream for EventStream<
 	type Item = T;
 
 	fn poll_next(self: Pin<&mut Self>, cx: &mut TaskContext<'_>) -> Poll<Option<T>> {
-		let mut state = self.inner.state.lock().expect("event stream lock");
+		let mut state = self.inner.state.lock();
 		if let Some(event) = state.queue.pop_front() {
 			return Poll::Ready(Some(event));
 		}
@@ -168,7 +169,7 @@ impl<T, R: Clone> Future for EventResultFuture<T, R> {
 	type Output = R;
 
 	fn poll(self: Pin<&mut Self>, cx: &mut TaskContext<'_>) -> Poll<R> {
-		let mut result = self.inner.result.lock().expect("event stream result lock");
+		let mut result = self.inner.result.lock();
 		if let Some(value) = &result.value {
 			return Poll::Ready(value.clone());
 		}

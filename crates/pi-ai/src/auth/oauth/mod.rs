@@ -53,7 +53,7 @@ pub use pkce::generate_pkce;
 pub use radius::{create_radius_oauth, RadiusOAuthOptions};
 pub use xai::xai_oauth;
 
-use std::sync::RwLock;
+use parking_lot::RwLock;
 
 use crate::http::{default_fetch, FetchFn};
 use crate::utils::abort::AbortSignal;
@@ -66,12 +66,12 @@ static OAUTH_FETCH: RwLock<Option<FetchFn>> = RwLock::new(None);
 /// Replace the ambient oauth fetch (`vi.stubGlobal("fetch", …)` equivalent);
 /// `None` restores the crate default adapter.
 pub fn set_oauth_fetch(fetch: Option<FetchFn>) {
-	*OAUTH_FETCH.write().unwrap() = fetch;
+	*OAUTH_FETCH.write() = fetch;
 }
 
 /// Fetch used by every oauth flow request (upstream bare `fetch(...)` calls).
 pub fn oauth_fetch() -> FetchFn {
-	OAUTH_FETCH.read().unwrap().clone().unwrap_or_else(default_fetch)
+	OAUTH_FETCH.read().clone().unwrap_or_else(default_fetch)
 }
 
 /// Error thrown by an oauth request wrapper (upstream `new Error(...)`) — the

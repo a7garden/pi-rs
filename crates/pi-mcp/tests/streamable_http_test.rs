@@ -1,6 +1,7 @@
 //! Port of `test/streamable-http.test.ts`.
 
-use std::sync::{Arc, Mutex as StdMutex};
+use std::sync::{Arc};
+use {parking_lot::Mutex as StdMutex};
 
 use bytes::Bytes;
 use futures_util::future::BoxFuture;
@@ -68,12 +69,12 @@ async fn protocol_handler(
 	if request.method == "GET" {
 		requests
 			.lock()
-			.unwrap_or_else(std::sync::PoisonError::into_inner)
+			
 			.push(RecordedRequest { method: "GET".to_string(), headers: request.headers.clone(), message: None });
 		return HttpResponse { status: 405, headers: Vec::new(), body: body_from(Bytes::new()) };
 	}
 	if request.method == "DELETE" {
-		requests.lock().unwrap_or_else(std::sync::PoisonError::into_inner).push(RecordedRequest {
+		requests.lock().push(RecordedRequest {
 			method: "DELETE".to_string(),
 			headers: request.headers.clone(),
 			message: None,
@@ -89,7 +90,7 @@ async fn protocol_handler(
 	};
 	requests
 		.lock()
-		.unwrap_or_else(std::sync::PoisonError::into_inner)
+		
 		.push(RecordedRequest {
 			method: request.method.clone(),
 			headers: request.headers.clone(),
@@ -134,7 +135,7 @@ async fn protocol_handler(
 }
 
 fn recorded(requests: &Recorded) -> Vec<RecordedRequest> {
-	requests.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone()
+	requests.lock().clone()
 }
 
 fn transport_options(url: &str) -> StreamableHttpTransportOptions {
@@ -258,7 +259,7 @@ async fn fails_only_the_request_whose_sse_stream_breaks() {
 	let errors: Arc<StdMutex<Vec<String>>> = Arc::new(StdMutex::new(Vec::new()));
 	let error_sink = Arc::clone(&errors);
 	client.on_error(Arc::new(move |error: &McpError| {
-		error_sink.lock().unwrap_or_else(std::sync::PoisonError::into_inner).push(error.to_string());
+		error_sink.lock().push(error.to_string());
 	}));
 	client.connect(transport).await.expect("connect");
 
@@ -275,7 +276,7 @@ async fn fails_only_the_request_whose_sse_stream_breaks() {
 		serde_json::to_value(&result).unwrap(),
 		serde_json::json!({ "content": [{ "type": "text", "text": "hello" }] })
 	);
-	assert_eq!(errors.lock().unwrap_or_else(std::sync::PoisonError::into_inner).len(), 1);
+	assert_eq!(errors.lock().len(), 1);
 	client.close().await.expect("close");
 	server.close().await;
 }
@@ -297,7 +298,7 @@ async fn opens_the_get_stream_after_initialization_and_sends_last_event_id_only_
 					serde_json::from_str(&read_body(&request).await).unwrap_or(serde_json::Value::Null);
 				order
 					.lock()
-					.unwrap_or_else(std::sync::PoisonError::into_inner)
+					
 					.push(
 						message
 							.get("method")
@@ -309,7 +310,7 @@ async fn opens_the_get_stream_after_initialization_and_sends_last_event_id_only_
 			}
 			order
 				.lock()
-				.unwrap_or_else(std::sync::PoisonError::into_inner)
+				
 				.push(request.method.clone());
 			protocol_handler(request, requests, None).await
 		})
@@ -322,7 +323,7 @@ async fn opens_the_get_stream_after_initialization_and_sends_last_event_id_only_
 	let _ = client.call_tool("echo", None, &Default::default()).await.expect("call");
 	let _ = client.list_tools(&Default::default()).await.expect("list");
 	client.close().await.expect("close");
-	let order = order.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone();
+	let order = order.lock().clone();
 	let get_position = order.iter().position(|entry| entry == "GET").expect("GET observed");
 	let initialized_position =
 		order.iter().position(|entry| entry == "notifications/initialized").expect("initialized observed");
@@ -348,7 +349,7 @@ async fn resumes_a_response_stream_the_server_closed_before_answering() {
 				if let Some(last_event_id) = header(&request.headers, "last-event-id") {
 					resume_sink
 						.lock()
-						.unwrap_or_else(std::sync::PoisonError::into_inner)
+						
 						.push(last_event_id.to_string());
 					return sse_response(
 						Vec::new(),
@@ -383,7 +384,7 @@ async fn resumes_a_response_stream_the_server_closed_before_answering() {
 	let errors: Arc<StdMutex<Vec<String>>> = Arc::new(StdMutex::new(Vec::new()));
 	let error_sink = Arc::clone(&errors);
 	client.on_error(Arc::new(move |error: &McpError| {
-		error_sink.lock().unwrap_or_else(std::sync::PoisonError::into_inner).push(error.to_string());
+		error_sink.lock().push(error.to_string());
 	}));
 	client.connect(transport).await.expect("connect");
 	let result = client.call_tool("echo", None, &Default::default()).await.expect("resumed call");
@@ -392,10 +393,10 @@ async fn resumes_a_response_stream_the_server_closed_before_answering() {
 		serde_json::json!({ "content": [{ "type": "text", "text": "resumed" }] })
 	);
 	assert_eq!(
-		resume_headers.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone(),
+		resume_headers.lock().clone(),
 		vec!["1".to_string()]
 	);
-	assert!(errors.lock().unwrap_or_else(std::sync::PoisonError::into_inner).is_empty());
+	assert!(errors.lock().is_empty());
 	client.close().await.expect("close");
 	server.close().await;
 }
@@ -461,14 +462,14 @@ async fn reconnects_the_get_stream_after_it_drops() {
 			}
 			requests
 				.lock()
-				.unwrap_or_else(std::sync::PoisonError::into_inner)
+				
 				.push(RecordedRequest {
 					method: "GET".to_string(),
 					headers: request.headers.clone(),
 					message: None,
 				});
 			let count = {
-				let mut gets = gets.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+				let mut gets = gets.lock();
 				*gets += 1;
 				*gets
 			};
@@ -506,10 +507,10 @@ async fn reconnects_the_get_stream_after_it_drops() {
 	client.on_notification(
 		"notifications/tools/list_changed",
 		Arc::new(move |_params| {
-			let mut changes = changes_sink.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+			let mut changes = changes_sink.lock();
 			*changes += 1;
 			if *changes == 2 {
-				if let Some(tx) = second_change_flag.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take() {
+				if let Some(tx) = second_change_flag.lock().take() {
 					let _ = tx.send(());
 				}
 			}
@@ -517,7 +518,7 @@ async fn reconnects_the_get_stream_after_it_drops() {
 	);
 	client.connect(transport).await.expect("connect");
 	let _ = tokio::time::timeout(std::time::Duration::from_secs(10), second_change_rx).await;
-	assert_eq!(*changes.lock().unwrap_or_else(std::sync::PoisonError::into_inner), 2);
+	assert_eq!(*changes.lock(), 2);
 	let requests = recorded(&requests);
 	let last_event_ids: Vec<Option<&str>> = requests
 		.iter()
@@ -625,7 +626,7 @@ async fn hands_401_and_insufficient_scope_403_responses_to_the_auth_provider() {
 		})
 	}))
 	.await;
-	*token.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = "old".to_string();
+	*token.lock() = "old".to_string();
 	let seen: Arc<StdMutex<Vec<(u16, Option<String>)>>> = Arc::new(StdMutex::new(Vec::new()));
 	let seen_sink = Arc::clone(&seen);
 	let token_for_provider = Arc::clone(&token);
@@ -648,7 +649,7 @@ async fn hands_401_and_insufficient_scope_403_responses_to_the_auth_provider() {
 		serde_json::json!({ "content": [{ "type": "text", "text": "hello" }] })
 	);
 	assert_eq!(
-		seen.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone(),
+		seen.lock().clone(),
 		vec![(401u16, Some("old".to_string())), (403u16, Some("new".to_string()))]
 	);
 	client.close().await.expect("close");
@@ -664,7 +665,7 @@ struct RecordingAuthProvider {
 #[async_trait::async_trait]
 impl AuthProvider for RecordingAuthProvider {
 	async fn token(&self) -> Result<Option<String>, McpError> {
-		Ok(Some(self.token_for_provider.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone()))
+		Ok(Some(self.token_for_provider.lock().clone()))
 	}
 
 	fn handles_unauthorized(&self) -> bool {
@@ -674,12 +675,12 @@ impl AuthProvider for RecordingAuthProvider {
 	async fn on_unauthorized(&self, context: UnauthorizedContext) -> Result<(), McpError> {
 		self.seen_sink
 			.lock()
-			.unwrap_or_else(std::sync::PoisonError::into_inner)
+			
 			.push((context.response.status, context.token.clone()));
 		if context.response.status == 401 {
-			*self.token_for_provider.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = "new".to_string();
+			*self.token_for_provider.lock() = "new".to_string();
 		} else {
-			*self.token_for_provider.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = "admin".to_string();
+			*self.token_for_provider.lock() = "admin".to_string();
 		}
 		Ok(())
 	}
@@ -752,7 +753,7 @@ struct ContextFetchProvider {
 #[async_trait::async_trait]
 impl AuthProvider for ContextFetchProvider {
 	async fn token(&self) -> Result<Option<String>, McpError> {
-		Ok(self.token_for_provider.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone())
+		Ok(self.token_for_provider.lock().clone())
 	}
 
 	fn handles_unauthorized(&self) -> bool {
@@ -770,7 +771,7 @@ impl AuthProvider for ContextFetchProvider {
 		.await
 		.expect("context fetch");
 		drop(response);
-		*self.token_for_provider.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some("token".to_string());
+		*self.token_for_provider.lock() = Some("token".to_string());
 		Ok(())
 	}
 }
@@ -788,7 +789,7 @@ async fn classifies_an_expired_established_session() {
 		Box::pin(async move {
 			if request.method == "POST" {
 				let expired = {
-					let mut count = posts.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+					let mut count = posts.lock();
 					*count += 1;
 					*count >= 3
 				};
@@ -838,7 +839,7 @@ async fn parses_chunked_crlf_events_comments_ids_and_multiline_data() {
 			on_event: Box::new(move |event| {
 				sink
 					.lock()
-					.unwrap_or_else(std::sync::PoisonError::into_inner)
+					
 					.push((event.event, event.data, event.id));
 			}),
 			on_id: None,
@@ -848,7 +849,7 @@ async fn parses_chunked_crlf_events_comments_ids_and_multiline_data() {
 	.await
 	.expect("parse");
 	assert_eq!(
-		events.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone(),
+		events.lock().clone(),
 		vec![(None, "{\"one\":\n1}".to_string(), Some("7".to_string()))]
 	);
 }
@@ -863,7 +864,7 @@ async fn rejects_events_whose_data_lines_exceed_the_limit_without_a_blank_line()
 		(sent_for_stream, 0usize),
 		|(sent, count)| async move {
 			{
-				let mut sent = sent.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+				let mut sent = sent.lock();
 				*sent += 1;
 			}
 			if count > 1000 {
@@ -885,5 +886,5 @@ async fn rejects_events_whose_data_lines_exceed_the_limit_without_a_blank_line()
 	.await
 	.expect_err("over-limit");
 	assert_eq!(error.to_string(), "MCP SSE event exceeds 256 bytes");
-	assert!(*sent.lock().unwrap_or_else(std::sync::PoisonError::into_inner) < 100);
+	assert!(*sent.lock() < 100);
 }

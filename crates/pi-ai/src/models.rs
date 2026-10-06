@@ -159,21 +159,21 @@ pub enum ModelsStoreWrite {
 /// `Models` collection owns the underlying closure.
 #[derive(Clone)]
 pub struct PublishHandle {
-	inner: Arc<std::sync::Mutex<dyn FnMut(ModelsPublication) -> Pin<Box<dyn Future<Output = bool> + Send>> + Send>>,
+	inner: Arc<parking_lot::Mutex<dyn FnMut(ModelsPublication) -> Pin<Box<dyn Future<Output = bool> + Send>> + Send>>,
 }
 
 impl PublishHandle {
 	pub fn new(
 		publish: impl FnMut(ModelsPublication) -> Pin<Box<dyn Future<Output = bool> + Send>> + Send + 'static,
 	) -> PublishHandle {
-		PublishHandle { inner: Arc::new(std::sync::Mutex::new(Box::new(publish))) }
+		PublishHandle { inner: Arc::new(parking_lot::Mutex::new(Box::new(publish))) }
 	}
 
 	/// Run one publication through the generation-checked gate. Resolves to
 	/// false when the publication was superseded or aborted.
 	pub async fn publish(&self, publication: ModelsPublication) -> bool {
 		let future = {
-			let mut publish = self.inner.lock().expect("publish handle lock");
+			let mut publish = self.inner.lock();
 			(*publish)(publication)
 		};
 		future.await
@@ -392,7 +392,7 @@ pub fn create_provider(input: CreateProviderOptions) -> Result<Arc<dyn Provider>
 		has_fetch_deferred: bool,
 		has_cancel_deferred: bool,
 		baseline_models: Vec<AnyModel>,
-		dynamic_models: Arc<std::sync::Mutex<Vec<AnyModel>>>,
+		dynamic_models: Arc<parking_lot::Mutex<Vec<AnyModel>>>,
 		fetch_models: Option<
 			Box<
 				dyn Fn(&RefreshModelsContext)
@@ -412,7 +412,7 @@ pub fn create_provider(input: CreateProviderOptions) -> Result<Arc<dyn Provider>
 	impl GeneratedProvider {
 		fn current_models(&self) -> Vec<AnyModel> {
 			let mut merged = self.baseline_models.clone();
-			let dynamic = self.dynamic_models.lock().expect("dynamic models lock");
+			let dynamic = self.dynamic_models.lock();
 			for model in dynamic.iter() {
 				match merged.iter().position(|entry| entry.model_type() == model.model_type() && entry.id() == model.id()) {
 					Some(index) => merged[index] = model.clone(),
@@ -507,7 +507,7 @@ pub fn create_provider(input: CreateProviderOptions) -> Result<Arc<dyn Provider>
 					let published = {
 						let state = Arc::clone(&dynamic_models);
 						let update = move || {
-							*state.lock().expect("dynamic models lock") = restored;
+							*state.lock() = restored;
 						};
 						context
 							.publish
@@ -539,7 +539,7 @@ pub fn create_provider(input: CreateProviderOptions) -> Result<Arc<dyn Provider>
 					let state = Arc::clone(&dynamic_models);
 					let for_update = refreshed.clone();
 					let update = move || {
-						*state.lock().expect("dynamic models lock") = for_update;
+						*state.lock() = for_update;
 					};
 					context
 						.publish
@@ -758,7 +758,7 @@ pub fn create_provider(input: CreateProviderOptions) -> Result<Arc<dyn Provider>
 		has_fetch_deferred,
 		has_cancel_deferred,
 		baseline_models: input.models,
-		dynamic_models: Arc::new(std::sync::Mutex::new(Vec::new())),
+		dynamic_models: Arc::new(parking_lot::Mutex::new(Vec::new())),
 		fetch_models: input.fetch_models,
 		filter_models: input.filter_models,
 		filter_all_models: input.filter_all_models,
@@ -1129,7 +1129,8 @@ impl Default for CreateModelsOptions {
 //   the store-signal test below) compare abort-state propagation instead.
 
 use std::collections::BTreeSet;
-use std::sync::{Mutex, OnceLock, RwLock, Weak};
+use std::sync::{OnceLock, Weak};
+use {parking_lot::Mutex, parking_lot::RwLock};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::api::lazy::lazy_stream;
@@ -1388,12 +1389,12 @@ impl ModelsImpl {
 
 	fn supersede_provider_refresh(&self, provider_id: &str) -> u64 {
 		let generation = {
-			let mut generations = self.refresh_generations.lock().expect("refresh generations lock");
+			let mut generations = self.refresh_generations.lock();
 			let generation = generations.entry(provider_id.to_string()).or_insert(0);
 			*generation += 1;
 			*generation
 		};
-		if let Some(previous) = self.refresh_controllers.lock().expect("refresh controllers lock").remove(provider_id) {
+		if let Some(previous) = self.refresh_controllers.lock().remove(provider_id) {
 			previous.1.abort();
 		}
 		generation
@@ -1404,13 +1405,12 @@ impl ModelsImpl {
 		let controller = AbortController::new();
 		self.refresh_controllers
 			.lock()
-			.expect("refresh controllers lock")
 			.insert(provider_id.to_string(), (generation, controller.clone()));
 		(generation, controller.signal())
 	}
 
 	fn finish_provider_refresh(&self, provider_id: &str, generation: u64) {
-		let mut controllers = self.refresh_controllers.lock().expect("refresh controllers lock");
+		let mut controllers = self.refresh_controllers.lock();
 		if controllers.get(provider_id).is_some_and(|(stored, _)| *stored == generation) {
 			controllers.remove(provider_id);
 		}
@@ -1430,7 +1430,6 @@ impl ModelsImpl {
 		let chain = {
 			self.publication_chains
 				.lock()
-				.expect("publication chains lock")
 				.entry(provider_id.to_string())
 				.or_default()
 				.clone()
@@ -1443,7 +1442,7 @@ impl ModelsImpl {
 			let _guard = chain.lock().await;
 			let published = run_publication(&this, &provider_id, generation, &task_signal, publication).await;
 			let _ = sender.send(published);
-			let mut chains = this.publication_chains.lock().expect("publication chains lock");
+			let mut chains = this.publication_chains.lock();
 			if chains.get(&provider_id).is_some_and(|existing| Arc::ptr_eq(existing, &chain)) {
 				chains.remove(&provider_id);
 			}
@@ -1552,7 +1551,7 @@ impl ModelsImpl {
 								)),
 								error => error,
 							};
-							errors.lock().expect("refresh errors lock").insert(provider.id().to_string(), error);
+							errors.lock().insert(provider.id().to_string(), error);
 						}
 					}
 					Err(_aborted) => {}
@@ -1561,7 +1560,7 @@ impl ModelsImpl {
 			}));
 		}
 		let _ = race_with_abort_signal(futures_util::future::join_all(handles), caller_signal.clone()).await;
-		let errors = errors.lock().expect("refresh errors lock").clone();
+		let errors = errors.lock().clone();
 		ModelsRefreshResult { aborted: caller_signal.aborted(), errors }
 	}
 
@@ -1806,7 +1805,7 @@ async fn run_publication(
 	publication: ModelsPublication,
 ) -> bool {
 	let generation_current = || {
-		*this.refresh_generations.lock().expect("refresh generations lock").get(provider_id).unwrap_or(&0) == generation
+		*this.refresh_generations.lock().get(provider_id).unwrap_or(&0) == generation
 	};
 	if signal.aborted() || !generation_current() {
 		return false;
@@ -1869,11 +1868,11 @@ fn resolve_provider_auth_view<'a>(
 #[async_trait::async_trait]
 impl Models for ModelsImpl {
 	fn get_providers(&self) -> Vec<Arc<dyn Provider>> {
-		self.providers.read().expect("providers lock").values().cloned().collect()
+		self.providers.read().values().cloned().collect()
 	}
 
 	fn get_provider(&self, id: &str) -> Option<Arc<dyn Provider>> {
-		self.providers.read().expect("providers lock").get(id).cloned()
+		self.providers.read().get(id).cloned()
 	}
 
 	fn get_models(&self, provider: Option<&str>) -> Vec<Model> {
@@ -2333,18 +2332,18 @@ impl ModelsImpl {
 impl MutableModels for ModelsImpl {
 	fn set_provider(&self, provider: Arc<dyn Provider>) {
 		self.supersede_provider_refresh(provider.id());
-		self.providers.write().expect("providers lock").insert(provider.id().to_string(), provider);
+		self.providers.write().insert(provider.id().to_string(), provider);
 	}
 
 	fn delete_provider(&self, id: &str) {
 		self.supersede_provider_refresh(id);
-		self.providers.write().expect("providers lock").remove(id);
+		self.providers.write().remove(id);
 	}
 
 	fn clear_providers(&self) {
 		let ids: Vec<String> = {
-			let providers = self.providers.read().expect("providers lock");
-			let controllers = self.refresh_controllers.lock().expect("refresh controllers lock");
+			let providers = self.providers.read();
+			let controllers = self.refresh_controllers.lock();
 			providers
 				.keys()
 				.map(str::to_string)
@@ -2354,7 +2353,7 @@ impl MutableModels for ModelsImpl {
 		for id in ids {
 			self.supersede_provider_refresh(&id);
 		}
-		self.providers.write().expect("providers lock").clear();
+		self.providers.write().clear();
 	}
 }
 
@@ -2640,7 +2639,7 @@ mod models_collection_tests {
 
 		fn record(&self, model: &Model, options: RecordedOptions) {
 			if let Some(calls) = &self.calls {
-				calls.lock().expect("calls lock").push(RecordedCall { model: model.clone(), options });
+				calls.lock().push(RecordedCall { model: model.clone(), options });
 			}
 		}
 
@@ -2913,7 +2912,7 @@ mod models_collection_tests {
 			let refreshes = refreshes.clone();
 			let get_models_list = list.clone();
 			TestProvider::new("dyn")
-				.with_get_models(Box::new(move || get_models_list.lock().expect("list lock").clone()))
+				.with_get_models(Box::new(move || get_models_list.lock().clone()))
 				.with_refresh(Arc::new(move |context: RefreshModelsContext| {
 					let list = list.clone();
 					let refreshes = refreshes.clone();
@@ -2927,7 +2926,7 @@ mod models_collection_tests {
 							.publish(ModelsPublication {
 								persist: None,
 								update: Some(Box::new(move || {
-									*list.lock().expect("list lock") = vec![test_model("dyn", "after")];
+									*list.lock() = vec![test_model("dyn", "after")];
 								})),
 							})
 							.await;
@@ -2975,7 +2974,6 @@ mod models_collection_tests {
 						Box::pin(async move {
 							recorded
 								.lock()
-								.expect("calls lock")
 								.push(format!("{}:{}", id, if context.allow_network { "network" } else { "cache" }));
 							Ok(())
 						})
@@ -2992,7 +2990,7 @@ mod models_collection_tests {
 			.await;
 
 		assert_eq!(result.errors.len(), 0);
-		assert_eq!(*calls.lock().expect("calls lock"), vec!["two:cache".to_string(), "two:network".to_string()]);
+		assert_eq!(*calls.lock(), vec!["two:cache".to_string(), "two:network".to_string()]);
 	}
 
 	#[tokio::test]
@@ -3074,7 +3072,7 @@ mod models_collection_tests {
 		}
 		impl SharedStore {
 			fn entry_snapshot(&self) -> Option<ModelsStoreEntry> {
-				self.entry.lock().expect("entry lock").clone()
+				self.entry.lock().clone()
 			}
 		}
 		#[async_trait::async_trait]
@@ -3092,7 +3090,7 @@ mod models_collection_tests {
 				entry: ModelsStoreEntry,
 				_options: Option<ModelsStoreOperationOptions>,
 			) -> Result<(), ThrownValue> {
-				*self.entry.lock().expect("entry lock") = Some(entry);
+				*self.entry.lock() = Some(entry);
 				Ok(())
 			}
 			async fn delete(
@@ -3100,12 +3098,12 @@ mod models_collection_tests {
 				_provider_id: &str,
 				_options: Option<ModelsStoreOperationOptions>,
 			) -> Result<(), ThrownValue> {
-				*self.entry.lock().expect("entry lock") = None;
+				*self.entry.lock() = None;
 				Ok(())
 			}
 		}
 		let store = Arc::new(SharedStore::default());
-		*store.entry.lock().expect("entry lock") = Some(ModelsStoreEntry {
+		*store.entry.lock() = Some(ModelsStoreEntry {
 			models: vec![AnyModel::Chat(test_model("dynamic", "stored"))],
 			..Default::default()
 		});
@@ -3136,7 +3134,7 @@ mod models_collection_tests {
 								persist: Some(ModelsStoreWrite::Delete),
 								update: Some(Box::new(move || {
 									assert!(entry_probe.entry_snapshot().is_none());
-									*state.lock().expect("state lock") = "deleted".to_string();
+									*state.lock() = "deleted".to_string();
 								})),
 							})
 							.await;
@@ -3147,7 +3145,7 @@ mod models_collection_tests {
 							.publish(ModelsPublication {
 								persist: None,
 								update: Some(Box::new(move || {
-									*state.lock().expect("state lock") = "ephemeral".to_string();
+									*state.lock() = "ephemeral".to_string();
 								})),
 							})
 							.await;
@@ -3163,7 +3161,7 @@ mod models_collection_tests {
 
 		assert_eq!(result.errors.len(), 0);
 		assert!(store.entry_snapshot().is_none());
-		assert_eq!(*state.lock().expect("state lock"), "ephemeral");
+		assert_eq!(*state.lock(), "ephemeral");
 	}
 
 	#[tokio::test]
@@ -3252,8 +3250,8 @@ mod models_collection_tests {
 							if !context.allow_network {
 								return Ok(());
 							}
-							*effective_credential.lock().expect("credential lock") = context.credential.clone();
-							*force_refresh.lock().expect("force lock") = context.force;
+							*effective_credential.lock() = context.credential.clone();
+							*force_refresh.lock() = context.force;
 							Ok(())
 						})
 					}))
@@ -3280,10 +3278,10 @@ mod models_collection_tests {
 
 		models.refresh(Some(ModelsRefreshOptions { force: Some(true), ..Default::default() })).await;
 		assert_eq!(
-			effective_credential.lock().expect("credential lock").clone(),
+			effective_credential.lock().clone(),
 			Some(Credential::ApiKey(ApiKeyCredential { key: Some("ambient-key".to_string()), env: None }))
 		);
-		assert_eq!(*force_refresh.lock().expect("force lock"), Some(true));
+		assert_eq!(*force_refresh.lock(), Some(true));
 		assert_eq!(unconfigured_refreshes.load(Ordering::SeqCst), 0);
 	}
 
@@ -3314,7 +3312,7 @@ mod models_collection_tests {
 						let model_refresh_credential = model_refresh_credential.clone();
 						Box::pin(async move {
 							if context.allow_network {
-								*model_refresh_credential.lock().expect("credential lock") = context.credential.clone();
+								*model_refresh_credential.lock() = context.credential.clone();
 							}
 							Ok(())
 						})
@@ -3325,7 +3323,7 @@ mod models_collection_tests {
 
 		assert_eq!(models.refresh(None).await.errors.len(), 0);
 		assert!(matches!(
-			model_refresh_credential.lock().expect("credential lock").clone(),
+			model_refresh_credential.lock().clone(),
 			Some(Credential::OAuth(oauth)) if oauth.credentials.access == "fresh" && oauth.credentials.refresh == "rotated"
 		));
 		assert!(matches!(
@@ -3400,7 +3398,7 @@ mod models_collection_tests {
 					.with_refresh(Arc::new(move |context: RefreshModelsContext| {
 						let received = received.clone();
 						Box::pin(async move {
-							*received.lock().expect("signal lock") = Some(context.signal.clone());
+							*received.lock() = Some(context.signal.clone());
 							Ok(())
 						})
 					}))
@@ -3410,7 +3408,7 @@ mod models_collection_tests {
 
 		let result = models.refresh(None).await;
 		assert!(!result.aborted);
-		let signal = received.lock().expect("signal lock").clone().expect("provider received a signal");
+		let signal = received.lock().clone().expect("provider received a signal");
 		assert!(!signal.aborted());
 	}
 
@@ -3427,7 +3425,7 @@ mod models_collection_tests {
 				options: Option<ModelsStoreOperationOptions>,
 			) -> Result<Option<ModelsStoreEntry>, ThrownValue> {
 				if let Some(signal) = options.and_then(|options| options.signal) {
-					self.signals.lock().expect("signals lock").push(signal);
+					self.signals.lock().push(signal);
 				}
 				Ok(None)
 			}
@@ -3438,7 +3436,7 @@ mod models_collection_tests {
 				options: Option<ModelsStoreOperationOptions>,
 			) -> Result<(), ThrownValue> {
 				if let Some(signal) = options.and_then(|options| options.signal) {
-					self.signals.lock().expect("signals lock").push(signal);
+					self.signals.lock().push(signal);
 				}
 				Ok(())
 			}
@@ -3461,7 +3459,7 @@ mod models_collection_tests {
 					.with_refresh(Arc::new(move |context: RefreshModelsContext| {
 						let provider_signal = provider_signal.clone();
 						Box::pin(async move {
-							*provider_signal.lock().expect("signal lock") = Some(context.signal.clone());
+							*provider_signal.lock() = Some(context.signal.clone());
 							if !context.allow_network {
 								return Ok(());
 							}
@@ -3487,15 +3485,15 @@ mod models_collection_tests {
 			.await;
 
 		assert_eq!(result.errors.len(), 0);
-		let signals = store.signals.lock().expect("signals lock");
+		let signals = store.signals.lock();
 		assert_eq!(signals.len(), 3);
 		// Abort-state propagation stands in for `AbortSignal ===` identity
 		// (deviation D23): every store wait observes the provider's signal.
-		let provider_signal = provider_signal.lock().expect("signal lock").clone().expect("provider signal");
+		let provider_signal = provider_signal.lock().clone().expect("provider signal");
 		assert!(!signals.is_empty() && signals.iter().all(|signal| !signal.aborted()));
 		drop(signals);
 		crate::utils::abort::AbortSignal::abort(&provider_signal);
-		wait_for_condition(|| store.signals.lock().expect("signals lock").iter().all(|signal| signal.aborted())).await;
+		wait_for_condition(|| store.signals.lock().iter().all(|signal| signal.aborted())).await;
 	}
 
 	#[tokio::test]
@@ -3615,7 +3613,7 @@ mod models_collection_tests {
 										..Default::default()
 									})),
 									update: Some(Box::new(move || {
-										*state.lock().expect("state lock") = value.clone();
+										*state.lock() = value.clone();
 									})),
 								})
 								.await;
@@ -3639,7 +3637,7 @@ mod models_collection_tests {
 		release_first.notify_one();
 		tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
-		assert_eq!(*state.lock().expect("state lock"), "generation-2");
+		assert_eq!(*state.lock(), "generation-2");
 		let stored = models_store.read("dynamic", None).await.expect("stored read");
 		assert_eq!(stored.and_then(|entry| entry.models.first().map(|model| model.id().to_string())), Some("generation-2".to_string()));
 	}
@@ -3657,21 +3655,21 @@ mod models_collection_tests {
 			login: Some(Box::new(move |interaction: ProviderAuthInteraction| {
 				let login_received = login_received.clone();
 				Box::pin(async move {
-					login_received.lock().expect("received lock").push(interaction.signal.clone());
+					login_received.lock().push(interaction.signal.clone());
 					Ok(ApiKeyCredential { key: Some("saved".to_string()), env: None })
 				})
 			})),
 			check: Some(Box::new(move |input: ApiKeyAuthInput<'_>| {
 				let check_received = check_received.clone();
 				Box::pin(async move {
-					check_received.lock().expect("received lock").push(input.signal.clone());
+					check_received.lock().push(input.signal.clone());
 					Ok(Some(AuthCheck { source: None, check_type: AuthType::ApiKey }))
 				})
 			})),
 			resolve: Box::new(move |input: ApiKeyAuthInput<'_>| {
 				let resolve_received = resolve_received.clone();
 				Box::pin(async move {
-					resolve_received.lock().expect("received lock").push(input.signal.clone());
+					resolve_received.lock().push(input.signal.clone());
 					Ok(Some(AuthResult {
 						auth: ModelAuth { api_key: Some("resolved".to_string()), ..Default::default() },
 						..Default::default()
@@ -3699,7 +3697,7 @@ mod models_collection_tests {
 			)
 			.await;
 
-		let received = received.lock().expect("received lock");
+		let received = received.lock();
 		assert_eq!(received.len(), 3);
 		// Abort-state propagation stands in for signal identity (D23).
 		crate::utils::abort::AbortSignal::abort(&signal);
@@ -4384,7 +4382,7 @@ mod models_collection_tests {
 		let result = models.complete_simple(&model, &test_context(), Some(options)).await;
 		assert_eq!(result.stop_reason, StopReason::Stop);
 
-		let calls = calls.lock().expect("calls lock");
+		let calls = calls.lock();
 		assert_eq!(calls[0].model.base.base_url, "https://example.test/acct");
 		assert_eq!(calls[0].options.api_key.as_deref(), Some("explicit-key"));
 		assert_eq!(calls[0].options.env, Some(ProviderEnv::from([("ACCOUNT_ID".to_string(), "acct".to_string())])));
@@ -4428,7 +4426,7 @@ mod models_collection_tests {
 		let result = models.complete_simple(&model, &test_context(), Some(options)).await;
 		assert_eq!(result.stop_reason, StopReason::Stop);
 		{
-			let calls = calls.lock().expect("calls lock");
+			let calls = calls.lock();
 			assert_eq!(calls.len(), 1);
 			assert_eq!(calls[0].options.api_key.as_deref(), Some("explicit-key"));
 			assert_headers(calls[0].options.headers.as_ref(), &[
@@ -4442,7 +4440,7 @@ mod models_collection_tests {
 		// without explicit options, resolved auth applies
 		let result = models.complete_simple(&model, &test_context(), None).await;
 		assert_eq!(result.stop_reason, StopReason::Stop);
-		let calls = calls.lock().expect("calls lock");
+		let calls = calls.lock();
 		assert_eq!(calls[1].options.api_key.as_deref(), Some("resolved-key"));
 	}
 
@@ -4504,7 +4502,7 @@ mod models_collection_tests {
 		assert_eq!(result.stop_reason, StopReason::Stop);
 
 		assert_eq!(transforms.load(Ordering::SeqCst), 1);
-		let calls = calls.lock().expect("calls lock");
+		let calls = calls.lock();
 		assert_headers(calls[0].options.headers.as_ref(), &[
 			("x-model", "model"),
 			("x-explicit", "explicit"),

@@ -800,7 +800,8 @@ mod tests {
         };
         use crate::services::state::MutableReplicatedState;
         use crate::types::{RemoteServiceImpl, ServiceMember, ServiceMode};
-        use std::sync::{Arc, Mutex, PoisonError};
+        use std::sync::{Arc};
+        use {parking_lot::Mutex};
 
         fn ctx() -> &'static crate::context::Context {
             &BACKGROUND_CONTEXT
@@ -830,7 +831,7 @@ mod tests {
         let publish: ServiceUpdatePublisher = Arc::new(move |_subscription_id, update, _context| {
             updates_sink
                 .lock()
-                .unwrap_or_else(PoisonError::into_inner)
+                
                 .push(serde_json::to_value(update).expect("update serializes"));
             Box::pin(async {})
         });
@@ -857,14 +858,14 @@ mod tests {
             .change(ctx(), |draft| draft.set(&[], "value", json!(1)).map_err(AnyError::from))
             .expect("change succeeds");
         assert_eq!(
-            updates.lock().unwrap_or_else(PoisonError::into_inner).clone(),
+            updates.lock().clone(),
             vec![json!({ "type": "state", "member": "state", "sequence": 1, "ops": [["s", ["value"], 1]] })]
         );
         endpoint.dispose().await;
         state
             .change(ctx(), |draft| draft.set(&[], "value", json!(2)).map_err(AnyError::from))
             .expect("change after dispose succeeds");
-        assert_eq!(updates.lock().unwrap_or_else(PoisonError::into_inner).len(), 1);
+        assert_eq!(updates.lock().len(), 1);
         provider.dispose().expect("provider disposes");
     }
 }

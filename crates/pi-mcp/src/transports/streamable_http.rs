@@ -1,6 +1,7 @@
 //! Port of `packages/mcp/src/transports/streamable-http.ts`.
 
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc};
+use {parking_lot::Mutex};
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -299,7 +300,7 @@ impl StreamableHttpTransport {
 			me: Mutex::new(std::sync::Weak::new()),
 			options,
 		});
-		*transport.me.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Arc::downgrade(&transport);
+		*transport.me.lock() = Arc::downgrade(&transport);
 		transport
 	}
 
@@ -310,12 +311,12 @@ impl StreamableHttpTransport {
 	fn self_arc(&self) -> Option<Arc<StreamableHttpTransport>> {
 		self.me
 			.lock()
-			.unwrap_or_else(std::sync::PoisonError::into_inner)
+			
 			.upgrade()
 	}
 
-	fn lock(&self) -> std::sync::MutexGuard<'_, HttpState> {
-		self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+	fn lock(&self) -> parking_lot::MutexGuard<'_, HttpState> {
+		self.state.lock()
 	}
 
 	fn closed(&self) -> bool {
@@ -711,8 +712,8 @@ impl StreamableHttpTransport {
 	}
 }
 
-fn lock_cursor(cell: &Mutex<StreamCursor>) -> std::sync::MutexGuard<'_, StreamCursor> {
-	cell.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+fn lock_cursor(cell: &Mutex<StreamCursor>) -> parking_lot::MutexGuard<'_, StreamCursor> {
+	cell.lock()
 }
 
 /// `/?error="?insufficient_scope"?/`-style bearer challenge check

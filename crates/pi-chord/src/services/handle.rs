@@ -9,7 +9,8 @@
 
 use std::any::Any;
 use std::marker::PhantomData;
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc};
+use {parking_lot::Mutex, parking_lot::MutexGuard};
 
 use crate::services::errors::{error, type_error, AnyError};
 
@@ -23,7 +24,7 @@ struct SlotInner {
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    mutex.lock()
 }
 
 /// Host-owned mutable target with consumer-owned guarded views

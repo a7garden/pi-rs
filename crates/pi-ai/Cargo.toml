@@ -30,6 +30,7 @@ sha2 = "0.10"
 base64 = "0.22"
 url = "2"
 hex = "0.4"
+parking_lot = { workspace = true }
 # google-vertex service-account flow: RS256-signed JWT exchange (upstream google-auth-library).
 rsa = "0.9"
 

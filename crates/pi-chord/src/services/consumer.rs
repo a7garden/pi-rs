@@ -16,7 +16,8 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc};
+use {parking_lot::Mutex, parking_lot::MutexGuard};
 
 use async_trait::async_trait;
 use futures::future::try_join_all;
@@ -42,7 +43,7 @@ type MemberInvoke =
     Arc<dyn Fn(Vec<JsonValue>, Context) -> BoxFuture<Result<Option<JsonValue>, AnyError>> + Send + Sync>;
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    mutex.lock()
 }
 
 /// Error retained behind an `Arc` so one settled start outcome can be observed by
@@ -1380,7 +1381,7 @@ mod tests {
         let errors = Arc::new(Mutex::new(Vec::new()));
         let sink = Arc::clone(&errors);
         (
-            Arc::new(move |error: AnyError| sink.lock().unwrap().push(error.to_string())),
+            Arc::new(move |error: AnyError| sink.lock().push(error.to_string())),
             errors,
         )
     }
@@ -1421,7 +1422,7 @@ mod tests {
             let state = Arc::clone(&state);
             Box::new(move |mut args: Vec<JsonValue>, context: Context| {
                 let model = if args.is_empty() { JsonValue::Null } else { args.remove(0) };
-                sink.lock().unwrap().push((model.clone(), context.clone()));
+                sink.lock().push((model.clone(), context.clone()));
                 let next = revision.fetch_add(1, Ordering::SeqCst) + 1;
                 state.replace_with(json!({ "selected": model, "revision": next }), &context);
                 Box::pin(async move { Ok(None) })
@@ -1447,7 +1448,7 @@ mod tests {
         let method: crate::services::provider::tests::TestMethod =
             Box::new(move |mut args: Vec<JsonValue>, _context: Context| {
                 let payload = args.remove(0);
-                sink.lock().unwrap().push(payload.clone());
+                sink.lock().push(payload.clone());
                 Box::pin(async move { Ok(Some(json!({ "value": "response" }))) })
             });
         let state = FakeState::new(json!({}));
@@ -1502,7 +1503,7 @@ mod tests {
         let updates: Arc<Mutex<Vec<JsonValue>>> = Arc::new(Mutex::new(Vec::new()));
         let sink = Arc::clone(&updates);
         let unsubscribe = second_state_subscribes(&second, move |value: &JsonValue| {
-            sink.lock().unwrap().push(value.clone());
+            sink.lock().push(value.clone());
         });
         first
             .invoke(
@@ -1568,7 +1569,7 @@ mod tests {
             .subscribe(
                 "test.timeline",
                 ServiceMode::Singleton,
-                Arc::new(move |update: &ServiceProviderUpdate, _| sink.lock().unwrap().push(update.clone())),
+                Arc::new(move |update: &ServiceProviderUpdate, _| sink.lock().push(update.clone())),
             )
             .expect("subscribe");
         assert_eq!(
@@ -1659,7 +1660,7 @@ mod tests {
         let calls_for_replacement = Arc::clone(&replacement_calls);
         let replacement_method: crate::services::provider::tests::TestMethod =
             Box::new(move |_args: Vec<JsonValue>, _context: Context| {
-                *calls_for_replacement.lock().unwrap() += 1;
+                *calls_for_replacement.lock() += 1;
                 Box::pin(async { Ok(None) })
             });
         let replacement_state = FakeState::new(json!({ "selected": null, "revision": 2 }));
@@ -1770,7 +1771,7 @@ mod tests {
                     let gate = StdArc::clone(&handler_gate);
                     Box::pin(async move {
                         gate.notified().await;
-                        sink.lock().unwrap().push(handle.service_id().to_string());
+                        sink.lock().push(handle.service_id().to_string());
                     }) as BoxFuture<()>
                 }),
             )
@@ -1904,7 +1905,7 @@ mod tests {
             let revision = value["revision"].as_i64();
             Box::pin(async move {
                 if let Some(revision) = revision {
-                    sink.lock().unwrap().push(revision);
+                    sink.lock().push(revision);
                 }
             }) as BoxFuture<()>
         }));
@@ -2023,7 +2024,7 @@ mod tests {
             let revision = value["revision"].as_i64();
             Box::pin(async move {
                 if let Some(revision) = revision {
-                    sink.lock().unwrap().push(revision);
+                    sink.lock().push(revision);
                 }
             }) as BoxFuture<()>
         }));
@@ -2084,7 +2085,7 @@ mod tests {
                             .expect("request member")
                             .value()
                             .cloned();
-                        sink.lock().unwrap().push(Observed {
+                        sink.lock().push(Observed {
                             question,
                             handle,
                             context,
@@ -2102,7 +2103,7 @@ mod tests {
         let first_submit: crate::services::provider::tests::TestMethod =
             Box::new(move |mut args: Vec<JsonValue>, context: Context| {
                 let answer = if args.is_empty() { JsonValue::Null } else { args.remove(0) };
-                calls_sink.lock().unwrap().push((answer, context.clone()));
+                calls_sink.lock().push((answer, context.clone()));
                 Box::pin(async { Ok(Some(json!({ "accepted": true }))) })
             });
         let close_first = provider
@@ -2228,7 +2229,7 @@ mod tests {
                     service_id,
                     mode,
                     Arc::new(move |update: &ServiceProviderUpdate, context: &Context| {
-                        updates.lock().unwrap().push(update.clone());
+                        updates.lock().push(update.clone());
                         listener(update, context);
                     }),
                 )?;
@@ -2341,7 +2342,7 @@ mod tests {
                     service_id,
                     mode,
                     Arc::new(move |update: &ServiceProviderUpdate, context: &Context| {
-                        updates.lock().unwrap().push(update.clone());
+                        updates.lock().push(update.clone());
                         listener(update, context);
                     }),
                 )?;
@@ -2457,7 +2458,7 @@ mod tests {
                 let updates = Arc::clone(&self.updates);
                 let inner_listener: UpdateListener =
                     Arc::new(move |update: &ServiceProviderUpdate, context: &Context| {
-                        updates.lock().unwrap().push(update.clone());
+                        updates.lock().push(update.clone());
                         listener(update, context);
                     });
                 self.inner.subscribe(service_id, mode, inner_listener, context).await
@@ -2514,7 +2515,7 @@ mod tests {
                 Arc::new(move |handle: Arc<dyn ServiceClientHandle>, context: Context| {
                     let sink = Arc::clone(&sink);
                     Box::pin(async move {
-                        sink.lock().unwrap().push(Observed { handle, context });
+                        sink.lock().push(Observed { handle, context });
                     }) as BoxFuture<()>
                 }),
             )

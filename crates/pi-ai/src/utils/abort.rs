@@ -11,7 +11,8 @@
 use std::collections::HashMap;
 use std::fmt;
 use std::future::Future;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc};
+use {parking_lot::Mutex};
 
 /// Reason attached to an aborted [`AbortSignal`].
 #[derive(Clone)]
@@ -111,16 +112,16 @@ impl AbortSignal {
 	}
 
 	pub fn aborted(&self) -> bool {
-		self.state.inner.lock().expect("abort signal lock").aborted
+		self.state.inner.lock().aborted
 	}
 
 	pub fn reason(&self) -> Option<AbortReason> {
-		self.state.inner.lock().expect("abort signal lock").reason.clone()
+		self.state.inner.lock().reason.clone()
 	}
 
 	/// Upstream `signal.throwIfAborted()`: `Err(reason)` when aborted.
 	pub fn check(&self) -> Result<(), AbortReason> {
-		let inner = self.state.inner.lock().expect("abort signal lock");
+		let inner = self.state.inner.lock();
 		match (&inner.aborted, &inner.reason) {
 			(false, _) => Ok(()),
 			(true, Some(reason)) => Err(reason.clone()),
@@ -133,7 +134,7 @@ impl AbortSignal {
 	pub fn add_listener(&self, listener: impl Fn() + Send + Sync + 'static) -> Box<dyn FnOnce() + Send> {
 		let listener: AbortListener = Box::new(listener);
 		let id = {
-			let mut inner = self.state.inner.lock().expect("abort signal lock");
+			let mut inner = self.state.inner.lock();
 			if inner.aborted {
 				drop(inner);
 				listener();
@@ -147,7 +148,7 @@ impl AbortSignal {
 		let state = Arc::downgrade(&self.state);
 		Box::new(move || {
 			if let Some(state) = state.upgrade() {
-				let mut inner = state.inner.lock().expect("abort signal lock");
+				let mut inner = state.inner.lock();
 				inner.listeners.remove(&id);
 			}
 		})
@@ -189,7 +190,7 @@ impl AbortSignal {
 	/// Abort with a reason (upstream `controller.abort(reason)`).
 	pub fn abort_with(signal: &AbortSignal, reason: AbortReason) {
 		let wakers = {
-			let mut inner = signal.state.inner.lock().expect("abort signal lock");
+			let mut inner = signal.state.inner.lock();
 			if inner.aborted {
 				return;
 			}
@@ -277,7 +278,7 @@ impl Future for AbortedFuture {
 			.take()
 			.expect("AbortedFuture polled after completion");
 		let outcome = {
-			let mut inner = signal.state.inner.lock().expect("abort signal lock");
+			let mut inner = signal.state.inner.lock();
 			if inner.aborted {
 				Some(inner.reason.clone().unwrap_or(AbortReason::Aborted))
 			} else {

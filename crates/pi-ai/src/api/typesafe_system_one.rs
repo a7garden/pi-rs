@@ -77,7 +77,7 @@ pub fn typesafe_system_one_api() -> Arc<dyn ProviderClassifier> {
 pub(crate) mod tests {
 	// Port of test/typesafe-system-one.test.ts. `pub(crate)` so the shared
 	// client tests in `system_one_shared.rs` can reuse the fixtures.
-	use std::sync::Mutex;
+	use parking_lot::Mutex;
 
 	use super::*;
 	use crate::http::{FetchFn, HttpBody, HttpRequest, HttpResponse};
@@ -192,7 +192,7 @@ pub(crate) mod tests {
 	/// Fetch fake that records requests and always answers with `body`.
 	fn recording_json_fetch(recording: Recording, body: Value) -> FetchFn {
 		FetchFn::new(move |request| {
-			recording.lock().expect("recording lock").push(record(&request));
+			recording.lock().push(record(&request));
 			let response = json_response(&body);
 			Box::pin(async move { Ok(response) })
 		})
@@ -232,7 +232,7 @@ pub(crate) mod tests {
 		};
 		let result = classify_system_one(&TRANSPORT, &model, &context, Some(&options)).await;
 
-		let requests = recording.lock().expect("recording lock");
+		let requests = recording.lock();
 		assert_eq!(requests.len(), 1);
 		let request = &requests[0];
 		assert_eq!(request.url, "https://api.typesafe.ai/v1/systemone");
@@ -318,7 +318,7 @@ pub(crate) mod tests {
 		};
 		let result = classify_system_one(&TRANSPORT, &open_router_model, &context, Some(&options)).await;
 
-		let requests = recording.lock().expect("recording lock");
+		let requests = recording.lock();
 		assert_eq!(requests[0].url, "https://openrouter.ai/api/v1/systemone");
 		assert_eq!(requests[0].body.get("model").and_then(Value::as_str), Some("typesafe/jev-1.13"));
 		assert_eq!(requests[0].body.get("state"), Some(&context.state.clone().into()));
@@ -346,7 +346,7 @@ pub(crate) mod tests {
 
 		let result = classify_system_one(&TRANSPORT, &model, &make_context(), Some(&options)).await;
 
-		assert!(recording.lock().expect("recording lock").is_empty());
+		assert!(recording.lock().is_empty());
 		assert_eq!(result.stop_reason, ClassifierStopReason::Error);
 		let error_message = result.error_message.expect("error message");
 		assert!(
@@ -398,7 +398,7 @@ pub(crate) mod tests {
 		};
 		classify_system_one(&TRANSPORT, &model_with_headers, &make_context(), Some(&with_null_header)).await;
 
-		let requests = recording.lock().expect("recording lock");
+		let requests = recording.lock();
 		assert_eq!(requests.len(), 2);
 		let first = &requests[0].headers;
 		assert_eq!(
@@ -493,7 +493,7 @@ pub(crate) mod tests {
 		let signals_for_fetch = signals.clone();
 		let fetch = FetchFn::new(move |request| {
 			let attempt = attempts_for_fetch.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
-			signals_for_fetch.lock().expect("signals lock").push(request.signal.clone());
+			signals_for_fetch.lock().push(request.signal.clone());
 			let response = if attempt == 1 {
 				HttpResponse {
 					status: 500,
@@ -520,7 +520,7 @@ pub(crate) mod tests {
 
 		assert_eq!(result.stop_reason, ClassifierStopReason::Stop);
 		assert_eq!(attempts.load(std::sync::atomic::Ordering::SeqCst), 2);
-		let signals = signals.lock().expect("signals lock");
+		let signals = signals.lock();
 		assert_eq!(signals.len(), 2);
 		// A fresh per-attempt timeout signal backs each request (upstream asserts
 		// `signals[0] !== signals[1]`; signal identity is not observable in Rust,

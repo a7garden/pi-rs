@@ -11,7 +11,8 @@
 
 use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc};
+use {parking_lot::Mutex};
 
 use async_trait::async_trait;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -101,7 +102,7 @@ fn finish_once(state: &StdioState) {
 	}
 	#[cfg(unix)]
 	process_groups::untrack(state.pid());
-	let mut buffer = state.stdout_buffer.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+	let mut buffer = state.stdout_buffer.lock();
 	if !buffer.iter().all(u8::is_ascii_whitespace) {
 		state
 			.events
@@ -142,7 +143,7 @@ impl StdioTransport {
 
 	/// Everything captured from the server's stderr so far (upstream `get stderr()`).
 	pub fn stderr(&self) -> String {
-		let buffer = self.state.stderr_buffer.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+		let buffer = self.state.stderr_buffer.lock();
 		String::from_utf8_lossy(&buffer).into_owned()
 	}
 
@@ -151,7 +152,7 @@ impl StdioTransport {
 	}
 
 	fn handle_stdout_chunk(&self, state: &StdioState, chunk: &[u8]) {
-		let mut buffer = state.stdout_buffer.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+		let mut buffer = state.stdout_buffer.lock();
 		buffer.extend_from_slice(chunk);
 		loop {
 			let Some(newline) = buffer.iter().position(|b| *b == 0x0a) else {
@@ -192,7 +193,7 @@ impl StdioTransport {
 
 	fn handle_stderr_chunk(&self, state: &StdioState, chunk: &[u8]) {
 		{
-			let mut buffer = state.stderr_buffer.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+			let mut buffer = state.stderr_buffer.lock();
 			buffer.extend_from_slice(chunk);
 			if buffer.len() > state.max_stderr_bytes {
 				let overflow = buffer.len() - state.max_stderr_bytes;
@@ -396,14 +397,14 @@ fn kill_process_tree(pid: Option<u32>, signal: i32) {
 #[cfg(unix)]
 mod process_groups {
 	use std::collections::HashSet;
-	use std::sync::Mutex;
+	use parking_lot::Mutex;
 	use std::sync::Once;
 
 	static LIVE: Mutex<Option<HashSet<i32>>> = Mutex::new(None);
 	static HOOK: Once = Once::new();
 
 	extern "C" fn on_exit() {
-		if let Some(groups) = LIVE.lock().unwrap_or_else(std::sync::PoisonError::into_inner).as_ref() {
+		if let Some(groups) = LIVE.lock().as_ref() {
 			for pid in groups {
 				unsafe {
 					let _ = libc::kill(-*pid, libc::SIGTERM);
@@ -418,7 +419,7 @@ mod process_groups {
 		});
 		if let Ok(pid) = i32::try_from(pid) {
 			LIVE.lock()
-				.unwrap_or_else(std::sync::PoisonError::into_inner)
+				
 				.get_or_insert_with(HashSet::new)
 				.insert(pid);
 		}
@@ -426,7 +427,7 @@ mod process_groups {
 
 	pub fn untrack(pid: Option<u32>) {
 		if let Some(pid) = pid.and_then(|p| i32::try_from(p).ok()) {
-			if let Some(groups) = LIVE.lock().unwrap_or_else(std::sync::PoisonError::into_inner).as_mut() {
+			if let Some(groups) = LIVE.lock().as_mut() {
 				groups.remove(&pid);
 			}
 		}

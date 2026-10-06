@@ -18,7 +18,8 @@ use std::collections::{BTreeMap, HashMap};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc};
+use {parking_lot::Mutex};
 
 use futures_util::future::BoxFuture;
 
@@ -223,7 +224,7 @@ impl FauxProviderState {
 	}
 
 	pub fn cancelled_deferred(&self) -> Vec<DeferredHandle> {
-		self.cancelled_deferred.lock().expect("cancelled deferred lock").clone()
+		self.cancelled_deferred.lock().clone()
 	}
 }
 
@@ -414,7 +415,7 @@ fn with_usage_estimate(
 
 	if let Some(session_id) = session_id {
 		if !cache_retention_none {
-			let mut cache = prompt_cache.lock().expect("prompt cache lock");
+			let mut cache = prompt_cache.lock();
 			let previous_prompt = cache.get(&session_id).cloned();
 			match previous_prompt {
 				Some(previous_prompt) => {
@@ -834,15 +835,15 @@ impl FauxCore {
 	}
 
 	pub fn set_responses(&self, responses: Vec<FauxResponseStep>) {
-		*self.inner.pending_responses.lock().expect("pending responses lock") = responses;
+		*self.inner.pending_responses.lock() = responses;
 	}
 
 	pub fn append_responses(&self, responses: Vec<FauxResponseStep>) {
-		self.inner.pending_responses.lock().expect("pending responses lock").extend(responses);
+		self.inner.pending_responses.lock().extend(responses);
 	}
 
 	pub fn get_pending_response_count(&self) -> usize {
-		self.inner.pending_responses.lock().expect("pending responses lock").len()
+		self.inner.pending_responses.lock().len()
 	}
 
 	async fn resolve_response(
@@ -869,7 +870,7 @@ impl FauxCore {
 	) -> AssistantMessageEventStream {
 		let outer = AssistantMessageEventStream::new();
 		let step = {
-			let mut pending = self.inner.pending_responses.lock().expect("pending responses lock");
+			let mut pending = self.inner.pending_responses.lock();
 			if pending.is_empty() {
 				None
 			} else {
@@ -936,7 +937,7 @@ impl FauxCore {
 						cancelled: false,
 						final_message: None,
 					};
-					inner.deferred_responses.lock().expect("deferred responses lock").insert(handle.id.clone(), entry);
+					inner.deferred_responses.lock().insert(handle.id.clone(), entry);
 					let deferred_stream =
 						stream_with_deltas(&outer, create_deferred_message(&model, handle), inner.min_token_size, inner.max_token_size, inner.tokens_per_second, stream_options.as_ref().and_then(|options| options.base.base.signal.as_ref()));
 					let _ = deferred_stream.await;
@@ -991,7 +992,7 @@ impl FauxCore {
 				// the guard (upstream mutates the shared entry object but
 				// never holds anything across an await).
 				let action = {
-					let mut entries = inner.deferred_responses.lock().expect("deferred responses lock");
+					let mut entries = inner.deferred_responses.lock();
 					let entry = match entries.get_mut(&handle.id) {
 						Some(entry)
 							if entry.handle.provider == handle.provider
@@ -1051,7 +1052,6 @@ impl FauxCore {
 								inner
 									.deferred_responses
 									.lock()
-									.expect("deferred responses lock")
 									.get_mut(&handle.id)
 									.expect("entry still registered")
 									.final_message = Some(message.clone());
@@ -1107,8 +1107,8 @@ impl FauxCore {
 		handle: &DeferredHandle,
 		cancel_options: Option<&DeferredCancelOptions>,
 	) {
-		self.inner.state.cancelled_deferred.lock().expect("cancelled deferred lock").push(handle.clone());
-		if let Some(entry) = self.inner.deferred_responses.lock().expect("deferred responses lock").get_mut(&handle.id) {
+		self.inner.state.cancelled_deferred.lock().push(handle.clone());
+		if let Some(entry) = self.inner.deferred_responses.lock().get_mut(&handle.id) {
 			entry.cancelled = true;
 		}
 		if let Some(on_response) = cancel_options.and_then(|options| options.base.on_response.clone()) {

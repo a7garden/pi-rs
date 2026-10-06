@@ -317,7 +317,8 @@ mod tests {
 	use crate::auth::types::AuthEvent;
 	use crate::http::{FetchFn, ProviderHttpError};
 	use crate::utils::abort::AbortController;
-	use std::sync::{Arc, Mutex};
+	use std::sync::{Arc};
+	use {parking_lot::Mutex};
 
 	fn never_aborted_signal() -> AbortSignal {
 		AbortController::new().signal()
@@ -391,13 +392,13 @@ mod tests {
 		signal: AbortSignal,
 		on_device_code: impl FnMut(AuthEvent) + Send + 'static,
 	) -> Result<OAuthCredential, ThrownValue> {
-		let on_device_code = std::sync::Mutex::new(on_device_code);
+		let on_device_code = parking_lot::Mutex::new(on_device_code);
 		xai_oauth()
 			.login(
 				ProviderAuthInteraction {
 					signal,
 					prompt: Box::new(|_prompt| Box::pin(async { Err(ThrownValue::message("Unexpected prompt")) })),
-					notify: Box::new(move |event| (on_device_code.lock().unwrap())(event)),
+					notify: Box::new(move |event| (on_device_code.lock())(event)),
 				},
 				None,
 			)
@@ -449,7 +450,7 @@ mod tests {
 					return Ok(json_response(device_code_response(serde_json::Value::Null), 200));
 				}
 				if url == XAI_TOKEN_URL {
-					poll_times_for_fetch.lock().unwrap().push(crate::utils::diagnostics::now_ms());
+					poll_times_for_fetch.lock().push(crate::utils::diagnostics::now_ms());
 					let form = body_form(std::mem::replace(&mut request.body, HttpBody::Empty)).await;
 					assert_eq!(
 						form.get("grant_type").map(String::as_str),
@@ -457,7 +458,7 @@ mod tests {
 					);
 					assert_eq!(form.get("client_id").map(String::as_str), Some(XAI_CLIENT_ID));
 					assert_eq!(form.get("device_code").map(String::as_str), Some("device-code"));
-					return Ok(replies_for_fetch.lock().unwrap().remove(0));
+					return Ok(replies_for_fetch.lock().remove(0));
 				}
 				Err(ProviderHttpError::new(format!("Unexpected request: {url}")))
 			})
@@ -474,21 +475,21 @@ mod tests {
 
 		// waitBeforeFirstPoll: nothing before 5s.
 		tokio::time::advance(std::time::Duration::from_millis(0)).await;
-		assert_eq!(poll_times.lock().unwrap().len(), 0);
+		assert_eq!(poll_times.lock().len(), 0);
 		tokio::time::advance(std::time::Duration::from_secs(5)).await;
 		// Let the woken login task run its poll before asserting.
 		tokio::task::yield_now().await;
-		assert_eq!(poll_times.lock().unwrap().len(), 1);
+		assert_eq!(poll_times.lock().len(), 1);
 		// slow_down raised the interval to 10 seconds.
 		tokio::time::advance(std::time::Duration::from_secs(5)).await;
 		tokio::task::yield_now().await;
-		assert_eq!(poll_times.lock().unwrap().len(), 2);
+		assert_eq!(poll_times.lock().len(), 2);
 		tokio::time::advance(std::time::Duration::from_secs(10)).await;
 
 		let credential = credential.await.expect("task").expect("credentials");
 		assert_eq!(credential.credentials.access, "access-token");
 		assert_eq!(credential.credentials.refresh, "refresh-token");
-		assert_eq!(poll_times.lock().unwrap().len(), 3);
+		assert_eq!(poll_times.lock().len(), 3);
 		crate::auth::oauth::set_oauth_fetch(None);
 	}
 
@@ -509,7 +510,7 @@ mod tests {
 						200,
 					));
 				}
-				poll_times_for_fetch.lock().unwrap().push(crate::utils::diagnostics::now_ms());
+				poll_times_for_fetch.lock().push(crate::utils::diagnostics::now_ms());
 				Ok(json_response(token_response(serde_json::Value::Null), 200))
 			})
 		})));
@@ -519,7 +520,7 @@ mod tests {
 		// a wait.
 		tokio::time::advance(std::time::Duration::from_secs(5)).await;
 		credential.await.expect("task").expect("credentials");
-		assert_eq!(poll_times.lock().unwrap().len(), 1);
+		assert_eq!(poll_times.lock().len(), 1);
 		crate::auth::oauth::set_oauth_fetch(None);
 	}
 
@@ -546,13 +547,13 @@ mod tests {
 		let seen_for_notify = seen.clone();
 		let credential = tokio::spawn(login_xai_for_test(never_aborted_signal(), move |event| {
 			if let AuthEvent::DeviceCode { verification_uri, .. } = event {
-				*seen_for_notify.lock().unwrap() = Some(verification_uri);
+				*seen_for_notify.lock() = Some(verification_uri);
 			}
 		}));
 		tokio::time::advance(std::time::Duration::from_secs(5)).await;
 		credential.await.expect("task").expect("credentials");
 		assert_eq!(
-			seen.lock().unwrap().as_deref(),
+			seen.lock().as_deref(),
 			Some("https://accounts.x.ai/oauth2/device?user_code=ABCD-1234")
 		);
 		crate::auth::oauth::set_oauth_fetch(None);
@@ -603,7 +604,7 @@ mod tests {
 				let count = request_count_for_fetch.clone();
 				let error_code = error_code_for_fetch.clone();
 				Box::pin(async move {
-					let mut current = count.lock().unwrap();
+					let mut current = count.lock();
 					*current += 1;
 					if *current == 1 {
 						drop(current);
@@ -644,7 +645,7 @@ mod tests {
 			let count = fetch_count_for_stub.clone();
 			Box::pin(async move {
 				if url == XAI_DEVICE_CODE_URL {
-					*count.lock().unwrap() += 1;
+					*count.lock() += 1;
 					return Ok(json_response(device_code_response(serde_json::Value::Null), 200));
 				}
 				Err(ProviderHttpError::new(format!("Unexpected request: {url}")))
@@ -661,7 +662,7 @@ mod tests {
 		tokio::time::advance(std::time::Duration::from_secs(5)).await;
 		let error = credential.await.expect("task").expect_err("cancelled");
 		assert_eq!(crate::models::thrown_message(&error), "Login cancelled");
-		assert_eq!(*fetch_count.lock().unwrap(), 1);
+		assert_eq!(*fetch_count.lock(), 1);
 		crate::auth::oauth::set_oauth_fetch(None);
 	}
 
@@ -679,7 +680,7 @@ mod tests {
 				let form = body_form(std::mem::replace(&mut request.body, HttpBody::Empty)).await;
 				assert_eq!(form.get("grant_type").map(String::as_str), Some("refresh_token"));
 				assert_eq!(form.get("client_id").map(String::as_str), Some(XAI_CLIENT_ID));
-				let mut current = count.lock().unwrap();
+				let mut current = count.lock();
 				*current += 1;
 				if *current == 1 {
 					assert_eq!(form.get("refresh_token").map(String::as_str), Some("old-refresh"));

@@ -87,7 +87,8 @@ pub fn create_ai_binding_fetch(binding: &AiBinding) -> Result<FetchFn, String> {
 #[cfg(test)]
 mod tests {
 	// Port of test/cloudflare-ai-binding.test.ts.
-	use std::sync::{Arc, Mutex};
+	use std::sync::{Arc};
+	use {parking_lot::Mutex};
 
 	use super::*;
 	use crate::http::{HttpBody, HttpRequest, HttpResponse};
@@ -119,7 +120,7 @@ mod tests {
 		AiBinding {
 			ai_gateway_log_id: None,
 			fetch: Some(FetchFn::new(move |request: HttpRequest| {
-				requests.lock().expect("requests lock").push(request);
+				requests.lock().push(request);
 				let body = match &body {
 					PreparedBody::Bytes(bytes) => HttpBody::Bytes(bytes.clone()),
 					PreparedBody::Sse => HttpBody::stream(futures_util::stream::iter(vec![Ok(b"data: {}\n\n".to_vec())])),
@@ -174,7 +175,7 @@ mod tests {
 
 		let response = fetch_fn.send(request).await.expect("binding responds");
 
-		let captured = requests.lock().expect("requests lock");
+		let captured = requests.lock();
 		assert_eq!(captured.len(), 1);
 		assert_eq!(
 			captured[0].url,
@@ -272,7 +273,7 @@ mod tests {
 		let result = stream.result().await;
 
 		assert_eq!(result.stop_reason, crate::types::StopReason::Error);
-		let captured = requests.lock().expect("requests lock");
+		let captured = requests.lock();
 		assert_eq!(captured.len(), 1);
 		assert_eq!(captured[0].url, format!("{BINDING_PREFIX}/openai/chat/completions"));
 		let header_names: Vec<String> =

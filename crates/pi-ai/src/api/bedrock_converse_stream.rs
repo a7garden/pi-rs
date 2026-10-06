@@ -3144,7 +3144,7 @@ mod tests {
     };
     use crate::utils::abort::AbortController;
     use futures_util::StreamExt;
-    use std::sync::Mutex;
+    use parking_lot::Mutex;
 
     // -- environment guard ---------------------------------------------------
 
@@ -3167,7 +3167,7 @@ mod tests {
     /// Serializes AWS env mutation across tests (upstream `vi.stubEnv`).
     struct EnvGuard {
         saved: Vec<(String, Option<String>)>,
-        _lock: std::sync::MutexGuard<'static, ()>,
+        _lock: parking_lot::MutexGuard<'static, ()>,
     }
 
     impl EnvGuard {
@@ -3190,7 +3190,7 @@ mod tests {
     fn env_guard() -> EnvGuard {
         let lock = ENV_LOCK
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+            ;
         let mut saved = Vec::new();
         for name in GUARDED_VARS {
             saved.push((name.to_string(), std::env::var(name).ok()));
@@ -3413,7 +3413,7 @@ mod tests {
                     }
                     _ => Value::Null,
                 };
-                sink.lock().expect("recording lock").push(RecordedRequest {
+                sink.lock().push(RecordedRequest {
                     method: request.method,
                     url: request.url,
                     headers: request.headers,
@@ -3484,7 +3484,7 @@ mod tests {
                     }
                     _ => Value::Null,
                 };
-                sink.lock().expect("recording lock").push(RecordedRequest {
+                sink.lock().push(RecordedRequest {
                     method: request.method,
                     url: request.url,
                     headers: request.headers,
@@ -3534,7 +3534,7 @@ mod tests {
         options.base.on_payload = Some(Arc::new(move |payload: Value, _model: Model| {
             let sink = sink.clone();
             Box::pin(async move {
-                *sink.lock().expect("capture lock") = Some(payload);
+                *sink.lock() = Some(payload);
                 None
             })
         }));
@@ -3549,7 +3549,6 @@ mod tests {
         }
         let payload = captured
             .lock()
-            .expect("capture lock")
             .clone()
             .expect("payload captured before request abort");
         payload
@@ -3893,7 +3892,7 @@ mod tests {
         let result = drive_bedrock(&options, &BedrockOptions::default()).await;
         assert_eq!(result.stop_reason, StopReason::Error);
 
-        let requests = recorded.lock().expect("lock");
+        let requests = recorded.lock();
         assert_eq!(requests.len(), 1);
         assert_eq!(get_header(&requests[0], "x-custom"), Some("v"));
         assert_eq!(
@@ -3927,7 +3926,7 @@ mod tests {
 
         let _ = drive_bedrock(&options, &BedrockOptions::default()).await;
 
-        let requests = recorded.lock().expect("lock");
+        let requests = recorded.lock();
         assert_eq!(requests.len(), 1);
         let request = &requests[0];
         // Reserved SigV4/auth headers keep their real values.
@@ -3981,7 +3980,7 @@ mod tests {
 
         let _ = drive_bedrock(&options, &BedrockOptions::default()).await;
 
-        let requests = recorded.lock().expect("lock");
+        let requests = recorded.lock();
         assert_eq!(requests.len(), 1);
         assert_eq!(get_header(&requests[0], "x-custom"), None);
     }
@@ -3997,7 +3996,7 @@ mod tests {
 
         let _ = drive_bedrock(&options, &BedrockOptions::default()).await;
 
-        let requests = recorded.lock().expect("lock");
+        let requests = recorded.lock();
         assert_eq!(get_header(&requests[0], "x-custom"), None);
     }
 
@@ -4020,7 +4019,7 @@ mod tests {
             .into_result()
             .await;
 
-        let requests = recorded.lock().expect("lock");
+        let requests = recorded.lock();
         assert_eq!(requests.len(), 1);
         assert_eq!(get_header(&requests[0], "x-custom"), Some("v"));
     }
@@ -4309,8 +4308,8 @@ mod tests {
                 let received_hook = received_hook.clone();
                 let models_hook = models_hook.clone();
                 Box::pin(async move {
-                    received_hook.lock().expect("lock").push(item);
-                    models_hook.lock().expect("lock").push((
+                    received_hook.lock().push(item);
+                    models_hook.lock().push((
                         event_model.provider().to_string(),
                         event_model.id().to_string(),
                     ));
@@ -4327,7 +4326,7 @@ mod tests {
         )
         .await;
 
-        let received = received.lock().expect("lock");
+        let received = received.lock();
         assert_eq!(
             received.clone(),
             vec![
@@ -4337,7 +4336,7 @@ mod tests {
                 json!({"metadata": {"usage": {"inputTokens": 1, "outputTokens": 1, "totalTokens": 2}}}),
             ]
         );
-        let models = event_models.lock().expect("lock");
+        let models = event_models.lock();
         assert!(models
             .iter()
             .all(|(provider, id)| provider == "amazon-bedrock" && id.as_str() == model.base.id));
@@ -4369,7 +4368,7 @@ mod tests {
             Some(Arc::new(move |item: Value, _event_model: Model| {
                 let received_hook = received_hook.clone();
                 Box::pin(async move {
-                    received_hook.lock().expect("lock").push(item);
+                    received_hook.lock().push(item);
                 })
             }));
         let (fetch, _recording) = event_stream_fetch(&frames, &[]);
@@ -4383,7 +4382,7 @@ mod tests {
         )
         .await;
 
-        let received = received.lock().expect("lock");
+        let received = received.lock();
         assert_eq!(received[0], json!({"messageStart": {"role": "assistant"}}));
         assert_eq!(
             received[1]["internalServerException"]["message"],
@@ -4729,7 +4728,7 @@ mod tests {
             move |response: ProviderResponse, _model: Model| {
                 let responses_hook = responses_hook.clone();
                 Box::pin(async move {
-                    responses_hook.lock().expect("lock").push(response);
+                    responses_hook.lock().push(response);
                 })
             },
         ));
@@ -4758,7 +4757,7 @@ mod tests {
             result.error_message.as_deref(),
             Some("Bedrock stream ended without a stop reason")
         );
-        let responses = responses.lock().expect("lock");
+        let responses = responses.lock();
         assert_eq!(responses.len(), 1);
         assert_eq!(responses[0].status, 200);
         assert_eq!(
@@ -5534,7 +5533,7 @@ mod tests {
         )
         .await;
 
-        let requests = recorded.lock().expect("lock");
+        let requests = recorded.lock();
         assert_eq!(requests.len(), 1);
         assert_eq!(
             get_header(&requests[0], "authorization"),
@@ -5567,7 +5566,7 @@ mod tests {
         )
         .await;
 
-        let requests = recorded.lock().expect("lock");
+        let requests = recorded.lock();
         assert_eq!(requests.len(), 1);
         assert_eq!(
 			requests[0].url,

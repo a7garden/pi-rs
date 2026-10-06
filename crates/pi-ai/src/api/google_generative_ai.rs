@@ -769,7 +769,8 @@ mod tests {
 	use super::*;
 	use crate::types::{Context, ThinkingBudgets, UserContentField, UserMessage};
 	use serde_json::{json, Value};
-	use std::sync::{Arc, Mutex};
+	use std::sync::{Arc};
+	use {parking_lot::Mutex};
 
 	fn catalog_model(provider: &str, id: &str) -> Model {
 		crate::providers::google_models::google_models()
@@ -812,7 +813,7 @@ mod tests {
 				_ => String::new(),
 			};
 			if let Ok(parsed) = serde_json::from_str::<Value>(&request_body) {
-				recorded.lock().expect("lock").push(parsed);
+				recorded.lock().push(parsed);
 			}
 			let response = HttpResponse {
 				status: 200,
@@ -848,7 +849,7 @@ mod tests {
 		let result = stream_simple(model, &hello_context(), &options).into_result().await;
 		assert_eq!(result.stop_reason, StopReason::Stop, "error: {:?}", result.error_message);
 
-		let recorded = recorded.lock().expect("lock");
+		let recorded = recorded.lock();
 		let payload = recorded.first().expect("payload captured");
 		payload.clone()
 	}
@@ -1025,10 +1026,9 @@ mod tests {
 			let hook_received = hook_received.clone();
 			let hook_models = hook_models.clone();
 			Box::pin(async move {
-				hook_received.lock().expect("lock").push(chunk);
+				hook_received.lock().push(chunk);
 				hook_models
 					.lock()
-					.expect("lock")
 					.push((event_model.provider().to_string(), event_model.id().to_string()));
 			})
 		}));
@@ -1039,8 +1039,8 @@ mod tests {
 
 		// Upstream asserts chunk identity (`toBe`); Rust adapters re-serialize
 		// the parsed chunks, so structural equality is the observable.
-		assert_eq!(*received.lock().expect("lock"), chunks);
-		let models = event_models.lock().expect("lock").clone();
+		assert_eq!(*received.lock(), chunks);
+		let models = event_models.lock().clone();
 		assert!(
 			models.iter().all(|(provider, id)| provider == "google" && id == model.id()),
 			"unexpected event models: {models:?}"
@@ -1065,7 +1065,7 @@ mod tests {
 		let wrapped = {
 			let captured = captured.clone();
 			FetchFn::new(move |request: HttpRequest| {
-				captured.lock().expect("lock").push(request.headers.clone());
+				captured.lock().push(request.headers.clone());
 				let recording = recording.clone();
 				Box::pin(async move { recording.send(request).await })
 			})
@@ -1077,7 +1077,7 @@ mod tests {
 
 		let result = stream(&model, &hello_context(), &options).into_result().await;
 		assert_eq!(result.stop_reason, StopReason::Stop, "error: {:?}", result.error_message);
-		let headers = captured.lock().expect("lock").first().cloned().expect("request captured");
+		let headers = captured.lock().first().cloned().expect("request captured");
 		headers
 	}
 

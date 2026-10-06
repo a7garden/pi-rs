@@ -16,7 +16,8 @@ use std::collections::VecDeque;
 use std::collections::{HashMap, HashSet};
 use std::marker::PhantomData;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc};
+use {parking_lot::Mutex};
 
 use async_trait::async_trait;
 use futures::future::join_all;
@@ -47,7 +48,7 @@ pub type Disposal = Arc<dyn Fn() -> BoxFuture<Result<(), AnyError>> + Send + Syn
 pub fn disposal_from_unsubscribe(unsubscribe: Unsubscribe) -> Disposal {
     let cell = Arc::new(Mutex::new(Some(unsubscribe)));
     Arc::new(move || {
-        let pending = cell.lock().expect("disposal cell lock").take();
+        let pending = cell.lock().take();
         Box::pin(async move {
             if let Some(unsubscribe) = pending {
                 unsubscribe();
@@ -70,16 +71,6 @@ fn next_requirement_id() -> u64 {
 fn access_check(lifecycle: &Arc<FacetLifecycle>) -> AssertAccess {
     let lifecycle = lifecycle.clone();
     Arc::new(move || lifecycle.assert_service_access())
-}
-
-fn lock<T>(guard: std::sync::LockResult<T>, what: &str) -> T {
-    match guard {
-        Ok(value) => value,
-        Err(poisoned) => {
-            tracing::error!("poisoned {what}: {poisoned}");
-            poisoned.into_inner()
-        }
-    }
 }
 
 // ─── Lifecycle ───────────────────────────────────────────────────────────────
@@ -135,7 +126,7 @@ impl FacetLifecycle {
     }
 
     fn assert_setting_up(&self, operation: &str) -> Result<(), AnyError> {
-        let inner = lock(self.inner.lock(), "facet lifecycle");
+        let inner = self.inner.lock();
         if inner.state != LifecycleState::SettingUp {
             return Err(error(format!(
                 "Facet {} can {operation} only during setup",
@@ -146,7 +137,7 @@ impl FacetLifecycle {
     }
 
     fn assert_running(&self, operation: &str) -> Result<(), AnyError> {
-        let inner = lock(self.inner.lock(), "facet lifecycle");
+        let inner = self.inner.lock();
         if inner.state != LifecycleState::SettingUp && inner.state != LifecycleState::Active {
             return Err(error(format!(
                 "Facet {} cannot {operation} while {}",
@@ -158,7 +149,7 @@ impl FacetLifecycle {
     }
 
     fn assert_active(&self, operation: &str) -> Result<(), AnyError> {
-        let inner = lock(self.inner.lock(), "facet lifecycle");
+        let inner = self.inner.lock();
         if inner.state != LifecycleState::Active {
             return Err(error(format!(
                 "Facet {} can {operation} only while active",
@@ -169,7 +160,7 @@ impl FacetLifecycle {
     }
 
     fn assert_service_access(&self) -> Result<(), AnyError> {
-        let inner = lock(self.inner.lock(), "facet lifecycle");
+        let inner = self.inner.lock();
         if !inner.service_access {
             return Err(error(format!(
                 "Facet {} service handles cannot be used while {}",
@@ -181,13 +172,13 @@ impl FacetLifecycle {
     }
 
     fn revoke(&self) {
-        let mut inner = lock(self.inner.lock(), "facet lifecycle");
+        let mut inner = self.inner.lock();
         inner.service_access = false;
     }
 
     fn own(&self, disposal: Disposal) -> Result<(), AnyError> {
         self.assert_running("own resources")?;
-        lock(self.inner.lock(), "facet lifecycle")
+        (self.inner.lock())
             .effects
             .push(disposal);
         Ok(())
@@ -195,7 +186,7 @@ impl FacetLifecycle {
 
     fn observe(&self, start: ObserveStart) -> Result<(), AnyError> {
         self.assert_setting_up("observe services")?;
-        lock(self.inner.lock(), "facet lifecycle")
+        (self.inner.lock())
             .observations
             .push(start);
         Ok(())
@@ -203,7 +194,7 @@ impl FacetLifecycle {
 
     fn on_activate(&self, callback: Disposal) -> Result<(), AnyError> {
         self.assert_setting_up("register activation callbacks")?;
-        lock(self.inner.lock(), "facet lifecycle")
+        (self.inner.lock())
             .activation_callbacks
             .push(callback);
         Ok(())
@@ -211,29 +202,29 @@ impl FacetLifecycle {
 
     fn prepared(&self) -> Result<(), AnyError> {
         self.assert_setting_up("finish setup")?;
-        lock(self.inner.lock(), "facet lifecycle").state = LifecycleState::Prepared;
+        (self.inner.lock()).state = LifecycleState::Prepared;
         Ok(())
     }
 
     async fn activate(&self) -> Result<(), AnyError> {
         {
-            let mut inner = lock(self.inner.lock(), "facet lifecycle");
+            let mut inner = self.inner.lock();
             if inner.state != LifecycleState::Prepared {
                 return Err(error(format!("Facet {} is not prepared", self.id)));
             }
             inner.state = LifecycleState::Active;
             inner.service_access = true;
         }
-        let starts = lock(self.inner.lock(), "facet lifecycle")
+        let starts = (self.inner.lock())
             .observations
             .clone();
         for start in starts {
             let stop = start()?;
-            lock(self.inner.lock(), "facet lifecycle")
+            (self.inner.lock())
                 .effects
                 .push(stop);
         }
-        let callbacks = lock(self.inner.lock(), "facet lifecycle")
+        let callbacks = (self.inner.lock())
             .activation_callbacks
             .clone();
         for callback in callbacks {
@@ -244,13 +235,13 @@ impl FacetLifecycle {
 
     async fn dispose(&self) -> Result<(), AnyError> {
         {
-            let mut inner = lock(self.inner.lock(), "facet lifecycle");
+            let mut inner = self.inner.lock();
             if inner.state == LifecycleState::Dead {
                 return Ok(());
             }
             inner.state = LifecycleState::Disposing;
         }
-        let effects = std::mem::take(&mut lock(self.inner.lock(), "facet lifecycle").effects);
+        let effects = std::mem::take(&mut (self.inner.lock()).effects);
         let mut errors: Vec<AnyError> = Vec::new();
         for effect in effects.into_iter().rev() {
             if let Err(disposal_error) = effect().await {
@@ -258,7 +249,7 @@ impl FacetLifecycle {
             }
         }
         {
-            let mut inner = lock(self.inner.lock(), "facet lifecycle");
+            let mut inner = self.inner.lock();
             inner.observations.clear();
             inner.activation_callbacks.clear();
             inner.service_access = false;
@@ -364,7 +355,7 @@ impl LocalKeyedServiceRegistry {
             return Err(type_error("Local service instance key must not be empty"));
         }
         let (directory, generation) = {
-            let mut registrations = lock(self.registrations.lock(), "keyed service registry");
+            let mut registrations = self.registrations.lock();
             let registration = registrations.get_mut(service_id).ok_or_else(|| {
                 error(format!(
                     "Local keyed service {service_id} is not registered"
@@ -399,7 +390,7 @@ impl LocalKeyedServiceRegistry {
         &self,
         service_id: &str,
     ) -> Result<Arc<InstanceDirectory<RegistryEntry>>, AnyError> {
-        lock(self.registrations.lock(), "keyed service registry")
+        (self.registrations.lock())
             .get(service_id)
             .map(|registration| registration.directory.clone())
             .ok_or_else(|| {
@@ -420,7 +411,7 @@ impl LocalKeyedServiceRegistry {
         if self.disposed.swap(true, Ordering::SeqCst) {
             return;
         }
-        let registrations = lock(self.registrations.lock(), "keyed service registry");
+        let registrations = self.registrations.lock();
         for registration in registrations.values() {
             registration.directory.dispose();
         }
@@ -476,7 +467,7 @@ impl HostServiceSlots {
     }
 
     fn get_singleton(&self, service_id: &str, wrap_objects: bool) -> Arc<ServiceSlot> {
-        let mut singletons = lock(self.singletons.lock(), "host service slots");
+        let mut singletons = self.singletons.lock();
         singletons
             .entry(service_id.to_string())
             .or_insert_with(|| Arc::new(ServiceSlot::new(service_id, wrap_objects)))
@@ -484,7 +475,7 @@ impl HostServiceSlots {
     }
 
     fn has_singleton(&self, service_id: &str) -> bool {
-        lock(self.singletons.lock(), "host service slots").contains_key(service_id)
+        (self.singletons.lock()).contains_key(service_id)
     }
 
     /// Subscribe to a keyed service. The callback receives the raw target plus
@@ -495,7 +486,7 @@ impl HostServiceSlots {
         service_id: &str,
         on_instance: Arc<dyn Fn(KeyedTarget, ClosedFlag, Context) -> BoxFuture<()> + Send + Sync>,
     ) -> Result<Unsubscribe, AnyError> {
-        let source = lock(self.keyed_sources.lock(), "host service slots")
+        let source = (self.keyed_sources.lock())
             .get(service_id)
             .cloned()
             .ok_or_else(|| error(format!("Service {service_id} is disconnected")))?;
@@ -514,23 +505,23 @@ impl HostServiceSlots {
     }
 
     fn bind_singleton(&self, service_id: &str, target: Arc<dyn Any + Send + Sync>) {
-        if let Some(slot) = lock(self.singletons.lock(), "host service slots").get(service_id) {
+        if let Some(slot) = (self.singletons.lock()).get(service_id) {
             slot.bind(target);
         }
     }
 
     fn bind_keyed(&self, service_id: &str, source: Arc<dyn KeyedServiceSource>) {
-        lock(self.keyed_sources.lock(), "host service slots")
+        (self.keyed_sources.lock())
             .insert(service_id.to_string(), source);
     }
 
     fn dispose(&self) {
-        let mut singletons = lock(self.singletons.lock(), "host service slots");
+        let mut singletons = self.singletons.lock();
         for slot in singletons.values() {
             slot.unbind();
         }
         singletons.clear();
-        lock(self.keyed_sources.lock(), "host service slots").clear();
+        (self.keyed_sources.lock()).clear();
     }
 }
 
@@ -726,13 +717,13 @@ impl StagedServiceSpawner {
 
     fn connect(&self, installer: ServiceInstanceInstaller) -> Result<(), AnyError> {
         {
-            let mut connected = lock(self.installer.lock(), "staged service spawner");
+            let mut connected = self.installer.lock();
             if connected.is_some() {
                 return Err(error("Facet service provider is already connected"));
             }
             *connected = Some(installer.clone());
         }
-        let mut instances = lock(self.instances.lock(), "staged service spawner");
+        let mut instances = self.instances.lock();
         for instance in instances.iter_mut() {
             if instance.release.is_some() {
                 continue;
@@ -749,14 +740,14 @@ impl StagedServiceSpawner {
     ) -> Result<Unsubscribe, AnyError> {
         self.lifecycle.assert_active("spawn service instances")?;
         (self.validate)(key, &implementation)?;
-        let mut instances = lock(self.instances.lock(), "staged service spawner");
+        let mut instances = self.instances.lock();
         if instances.iter().any(|instance| instance.key == key) {
             return Err(error(format!(
                 "Facet service already has a live instance with key {key}"
             )));
         }
         let id = self.next_id.fetch_add(1, Ordering::SeqCst);
-        let installer = lock(self.installer.lock(), "staged service spawner").clone();
+        let installer = (self.installer.lock()).clone();
         let release = match &installer {
             Some(installer) => Some(installer(key, implementation.clone())?),
             None => None,
@@ -770,7 +761,7 @@ impl StagedServiceSpawner {
         let close: Arc<dyn Fn() + Send + Sync> = {
             let spawner = self.clone();
             Arc::new(move || {
-                let mut instances = lock(spawner.instances.lock(), "staged service spawner");
+                let mut instances = spawner.instances.lock();
                 if let Some(position) = instances.iter().position(|instance| instance.id == id) {
                     let mut instance = instances.remove(position);
                     if let Some(release) = instance.release.take() {
@@ -1123,7 +1114,7 @@ impl FacetEnvironment {
         &self,
         service: &Service<T>,
     ) -> Result<LocalRequirement<T>, AnyError> {
-        let mut runtime = lock(self.runtime.lock(), "facet runtime");
+        let mut runtime = self.runtime.lock();
         runtime.lifecycle.assert_setting_up("acquire services")?;
         if !service.local() {
             return Err(type_error(format!(
@@ -1152,7 +1143,7 @@ impl FacetEnvironment {
 
     /// Declare a hard dependency on one remote singleton service.
     pub fn use_remote(&self, service_id: &str) -> Result<RemoteRequirement, AnyError> {
-        let mut runtime = lock(self.runtime.lock(), "facet runtime");
+        let mut runtime = self.runtime.lock();
         runtime.lifecycle.assert_setting_up("acquire services")?;
         record_service_reference(&mut runtime.requires, service_id, ServiceMode::Singleton);
         let service_key = service_id.to_string();
@@ -1179,7 +1170,7 @@ impl FacetEnvironment {
         service: &Service<T>,
         handler: Arc<dyn Fn(LocalServiceView<T>, Context) -> BoxFuture<()> + Send + Sync>,
     ) -> Result<(), AnyError> {
-        let mut runtime = lock(self.runtime.lock(), "facet runtime");
+        let mut runtime = self.runtime.lock();
         runtime.lifecycle.assert_setting_up("observe services")?;
         record_service_reference(&mut runtime.requires, service.id(), ServiceMode::Keyed);
         let service_id: Arc<str> = Arc::from(service.id());
@@ -1222,7 +1213,7 @@ impl FacetEnvironment {
         service_id: &str,
         handler: Arc<dyn Fn(Arc<dyn ServiceClientHandle>, Context) -> BoxFuture<()> + Send + Sync>,
     ) -> Result<(), AnyError> {
-        let mut runtime = lock(self.runtime.lock(), "facet runtime");
+        let mut runtime = self.runtime.lock();
         runtime.lifecycle.assert_setting_up("observe services")?;
         record_service_reference(&mut runtime.requires, service_id, ServiceMode::Keyed);
         let service_id = service_id.to_string();
@@ -1262,7 +1253,7 @@ impl FacetEnvironment {
         service: &Service<T>,
         implementation: Arc<T>,
     ) -> Result<(), AnyError> {
-        let mut runtime = lock(self.runtime.lock(), "facet runtime");
+        let mut runtime = self.runtime.lock();
         runtime.lifecycle.assert_setting_up("provide services")?;
         if !service.local() {
             return Err(type_error(format!(
@@ -1290,7 +1281,7 @@ impl FacetEnvironment {
         mode: ServiceMode,
         implementation: Arc<dyn RemoteServiceImpl>,
     ) -> Result<(), AnyError> {
-        let mut runtime = lock(self.runtime.lock(), "facet runtime");
+        let mut runtime = self.runtime.lock();
         runtime.lifecycle.assert_setting_up("provide services")?;
         record_service_reference(&mut runtime.provides, service_id, mode);
         runtime
@@ -1310,7 +1301,7 @@ impl FacetEnvironment {
         &self,
         service: &Service<T>,
     ) -> Result<LocalServiceSpawner<T>, AnyError> {
-        let mut runtime = lock(self.runtime.lock(), "facet runtime");
+        let mut runtime = self.runtime.lock();
         runtime
             .lifecycle
             .assert_setting_up("provide service instances")?;
@@ -1352,7 +1343,7 @@ impl FacetEnvironment {
         service_id: &str,
         mode: ServiceMode,
     ) -> Result<RemoteServiceSpawner, AnyError> {
-        let mut runtime = lock(self.runtime.lock(), "facet runtime");
+        let mut runtime = self.runtime.lock();
         runtime
             .lifecycle
             .assert_setting_up("provide service instances")?;
@@ -1389,7 +1380,7 @@ impl FacetEnvironment {
         &self,
         initial: JsonValue,
     ) -> Result<Arc<MutableReplicatedState>, AnyError> {
-        let runtime = lock(self.runtime.lock(), "facet runtime");
+        let runtime = self.runtime.lock();
         runtime
             .lifecycle
             .assert_running("create replicated state")?;
@@ -1398,20 +1389,20 @@ impl FacetEnvironment {
 
     /// Give the facet ownership of a resource cleanup function.
     pub fn own(&self, disposal: Disposal) -> Result<(), AnyError> {
-        let runtime = lock(self.runtime.lock(), "facet runtime");
+        let runtime = self.runtime.lock();
         runtime.lifecycle.own(disposal)
     }
 
     /// Register asynchronous initialization after dependencies are bound and
     /// ready.
     pub fn on_activate(&self, callback: Disposal) -> Result<(), AnyError> {
-        let runtime = lock(self.runtime.lock(), "facet runtime");
+        let runtime = self.runtime.lock();
         runtime.lifecycle.on_activate(callback)
     }
 
     /// Register final facet teardown.
     pub fn on_deactivate(&self, callback: Disposal) -> Result<(), AnyError> {
-        let runtime = lock(self.runtime.lock(), "facet runtime");
+        let runtime = self.runtime.lock();
         runtime.lifecycle.own(callback)
     }
 }
@@ -1424,7 +1415,7 @@ fn validate_facets(
 ) -> Result<Vec<String>, AnyError> {
     let shapes: Vec<FacetShape> = records
         .iter()
-        .map(|record| lock(record.lock(), "facet runtime").shape())
+        .map(|record| (record.lock()).shape())
         .collect();
     let mut providers: HashMap<String, (Option<String>, Option<ServiceMode>)> = HashMap::new();
     for (service_id, external) in external_services {
@@ -1638,15 +1629,15 @@ impl FacetKernel {
     }
 
     fn phase(&self) -> GenerationPhase {
-        *lock(self.phase.lock(), "facet generation phase")
+        *(self.phase.lock())
     }
 
     fn set_phase(&self, phase: GenerationPhase) {
-        *lock(self.phase.lock(), "facet generation phase") = phase;
+        *(self.phase.lock()) = phase;
     }
 
     fn assert_service_target_access(phase: &Arc<Mutex<GenerationPhase>>) -> Result<(), AnyError> {
-        let current = *lock(phase.lock(), "facet generation phase");
+        let current = *(phase.lock());
         if !matches!(
             current,
             GenerationPhase::Activating
@@ -1702,7 +1693,7 @@ impl FacetKernel {
                 let record = self.create_facet_runtime(facet.id());
                 let mut environment = self.environment(&record);
                 facet.setup(&mut environment)?;
-                lock(record.lock(), "facet runtime").lifecycle.prepared()?;
+                (record.lock()).lifecycle.prepared()?;
             }
 
             self.set_phase(GenerationPhase::Assembling);
@@ -1715,7 +1706,7 @@ impl FacetKernel {
             let internal = self.internal_binding()?;
             let readiness: Vec<BoxFuture<Result<(), AnyError>>> = {
                 let bindings: Vec<Arc<dyn RemoteServices>> =
-                    lock(self.source_bindings.lock(), "source bindings")
+                    (self.source_bindings.lock())
                         .values()
                         .cloned()
                         .collect();
@@ -1741,7 +1732,7 @@ impl FacetKernel {
                 let record = self
                     .facet(&id)
                     .ok_or_else(|| error(format!("Facet {id} is not registered")))?;
-                let lifecycle = lock(record.lock(), "facet runtime").lifecycle.clone();
+                let lifecycle = (record.lock()).lifecycle.clone();
                 lifecycle.activate().await?;
             }
             self.set_phase(GenerationPhase::Active);
@@ -1795,12 +1786,12 @@ impl FacetKernel {
                 staged.push(record.clone());
                 let mut environment = self.environment(&record);
                 facet.setup(&mut environment)?;
-                lock(record.lock(), "facet runtime").lifecycle.prepared()?;
+                (record.lock()).lifecycle.prepared()?;
                 let previous = self
                     .facet(facet.id())
                     .ok_or_else(|| error(format!("Facet {} is not active", facet.id())))?;
-                let previous_shape = lock(previous.lock(), "facet runtime").shape();
-                let record_shape = lock(record.lock(), "facet runtime").shape();
+                let previous_shape = (previous.lock()).shape();
+                let record_shape = (record.lock()).shape();
                 if !same_facet_shape(&previous_shape, &record_shape) {
                     return Err(error(format!(
                         "Reloaded facet {} must preserve its service requirements and provisions",
@@ -1808,7 +1799,7 @@ impl FacetKernel {
                     )));
                 }
                 self.validate_replacement_provisions(
-                    &lock(record.lock(), "facet runtime").provisions,
+                    &(record.lock()).provisions,
                 )?;
                 candidates.push(record);
             }
@@ -1834,7 +1825,7 @@ impl FacetKernel {
 
         let replacements: HashSet<String> = candidates
             .iter()
-            .map(|record| lock(record.lock(), "facet runtime").facet_id.clone())
+            .map(|record| (record.lock()).facet_id.clone())
             .collect();
         let candidate_order: Vec<Arc<Mutex<FacetRuntime>>> = self
             .activation_order
@@ -1843,7 +1834,7 @@ impl FacetKernel {
                 if replacements.contains(id) {
                     candidates
                         .iter()
-                        .find(|record| lock(record.lock(), "facet runtime").facet_id == *id)
+                        .find(|record| (record.lock()).facet_id == *id)
                         .cloned()
                 } else {
                     None
@@ -1852,12 +1843,12 @@ impl FacetKernel {
             .collect();
         let activation: Result<(), AnyError> = async {
             for candidate in &candidate_order {
-                let lifecycle = lock(candidate.lock(), "facet runtime").lifecycle.clone();
+                let lifecycle = (candidate.lock()).lifecycle.clone();
                 lifecycle.activate().await?;
             }
             for candidate in &candidate_order {
                 self.validate_replacement_provisions(
-                    &lock(candidate.lock(), "facet runtime").provisions,
+                    &(candidate.lock()).provisions,
                 )?;
             }
             Ok(())
@@ -1884,17 +1875,17 @@ impl FacetKernel {
         let mut previous: Vec<Arc<Mutex<FacetRuntime>>> = candidate_order
             .iter()
             .filter_map(|candidate| {
-                let id = lock(candidate.lock(), "facet runtime").facet_id.clone();
+                let id = (candidate.lock()).facet_id.clone();
                 self.facet(&id)
             })
             .collect();
         for candidate in &candidate_order {
-            let id = lock(candidate.lock(), "facet runtime").facet_id.clone();
+            let id = (candidate.lock()).facet_id.clone();
             self.insert_facet(&id, candidate.clone());
         }
         let cutover: Result<(), AnyError> = async {
             for candidate in &candidate_order {
-                let provisions = lock(candidate.lock(), "facet runtime").provisions.clone();
+                let provisions = (candidate.lock()).provisions.clone();
                 for provision in provisions {
                     if let FacetProvision::Singleton(singleton) = &provision {
                         if singleton.local {
@@ -1922,7 +1913,7 @@ impl FacetKernel {
             }
             let registry = self.local_keyed_registry()?;
             for candidate in &candidate_order {
-                let provisions = lock(candidate.lock(), "facet runtime").provisions.clone();
+                let provisions = (candidate.lock()).provisions.clone();
                 for provision in provisions {
                     match &provision {
                         FacetProvision::Keyed(keyed) => {
@@ -2005,7 +1996,7 @@ impl FacetKernel {
     fn provisions(&self) -> Vec<FacetProvision> {
         self.facets
             .iter()
-            .flat_map(|(_, record)| lock(record.lock(), "facet runtime").provisions.clone())
+            .flat_map(|(_, record)| (record.lock()).provisions.clone())
             .collect()
     }
 
@@ -2045,12 +2036,12 @@ impl FacetKernel {
         let records = self.runtime_records();
         let local: HashSet<String> = records
             .iter()
-            .flat_map(|record| lock(record.lock(), "facet runtime").provides.clone())
+            .flat_map(|record| (record.lock()).provides.clone())
             .map(|reference| reference.service_id)
             .collect();
         let mut external: HashMap<String, ExternalService> = HashMap::new();
         for record in &records {
-            let requires = lock(record.lock(), "facet runtime").requires.clone();
+            let requires = (record.lock()).requires.clone();
             for requirement in requires {
                 if local.contains(&requirement.service_id)
                     || external.contains_key(&requirement.service_id)
@@ -2102,7 +2093,7 @@ impl FacetKernel {
                     on_error: self.on_error.clone(),
                 })
                 .await?;
-            lock(self.source_bindings.lock(), "source bindings")
+            (self.source_bindings.lock())
                 .insert(source_index, Arc::from(binding));
         }
         Ok(external)
@@ -2201,7 +2192,7 @@ impl FacetKernel {
             }
         }
         for (service_id, external_service) in external_services {
-            let services = lock(self.source_bindings.lock(), "source bindings")
+            let services = (self.source_bindings.lock())
                 .get(&external_service.source_index)
                 .cloned()
                 .ok_or_else(|| error(format!("Service source for {service_id} is not open")))?;
@@ -2219,7 +2210,7 @@ impl FacetKernel {
 
     async fn dispose_service_bindings(&mut self) -> Vec<AnyError> {
         let mut bindings: Vec<Arc<dyn RemoteServices>> =
-            std::mem::take(&mut *lock(self.source_bindings.lock(), "source bindings"))
+            std::mem::take(&mut *(self.source_bindings.lock()))
                 .into_values()
                 .collect();
         if let Some(internal) = self.internal_services.take() {
@@ -2238,10 +2229,10 @@ impl FacetKernel {
 
     async fn abort(&mut self, extra_records: Vec<Arc<Mutex<FacetRuntime>>>) -> Vec<AnyError> {
         for (_, record) in &self.facets {
-            lock(record.lock(), "facet runtime").lifecycle.revoke();
+            (record.lock()).lifecycle.revoke();
         }
         for record in &extra_records {
-            lock(record.lock(), "facet runtime").lifecycle.revoke();
+            (record.lock()).lifecycle.revoke();
         }
         self.terminate(extra_records).await
     }
@@ -2277,7 +2268,7 @@ impl FacetKernel {
             let Some(record) = self.take_facet(&id) else {
                 continue;
             };
-            let lifecycle = lock(record.lock(), "facet runtime").lifecycle.clone();
+            let lifecycle = (record.lock()).lifecycle.clone();
             if let Err(dispose_error) = lifecycle.dispose().await {
                 errors.push(dispose_error);
             }
@@ -2289,7 +2280,7 @@ impl FacetKernel {
 async fn dispose_facet_records(records: Vec<Arc<Mutex<FacetRuntime>>>) -> Vec<AnyError> {
     let mut errors: Vec<AnyError> = Vec::new();
     for record in records {
-        let lifecycle = lock(record.lock(), "facet runtime").lifecycle.clone();
+        let lifecycle = (record.lock()).lifecycle.clone();
         if let Err(dispose_error) = lifecycle.dispose().await {
             errors.push(dispose_error);
         }
@@ -2391,11 +2382,11 @@ mod tests {
     }
 
     fn push(trace: &Trace, entry: &str) {
-        trace.lock().expect("trace lock").push(entry.to_string());
+        trace.lock().push(entry.to_string());
     }
 
     fn snapshot(trace: &Trace) -> Vec<String> {
-        trace.lock().expect("trace lock").clone()
+        trace.lock().clone()
     }
 
     fn trace_disposal(trace: &Trace, entry: &str) -> Disposal {
@@ -2527,7 +2518,7 @@ mod tests {
                 setup_error.to_string(),
                 "Facet projection service handles cannot be used while setting_up"
             );
-            *projection_handle.lock().expect("source handle lock") = Some(handle.clone());
+            *projection_handle.lock() = Some(handle.clone());
             let source = projection_handle.clone();
             let implementation = method_object(vec![(
                 "read",
@@ -2536,7 +2527,6 @@ mod tests {
                     Box::pin(async move {
                         let requirement = source
                             .lock()
-                            .expect("source handle lock")
                             .clone()
                             .expect("source handle");
                         let client = requirement.client()?;
@@ -2574,7 +2564,6 @@ mod tests {
         );
         let requirement = source_handle
             .lock()
-            .expect("source handle lock")
             .clone()
             .expect("source handle");
         let client = requirement.client().expect("client after activation");
@@ -2680,7 +2669,6 @@ mod tests {
                     if let Ok(Some(value)) = client.invoke("read", Vec::new(), &context).await {
                         remote_values
                             .lock()
-                            .expect("remote values lock")
                             .push(value);
                     }
                 })
@@ -2693,9 +2681,9 @@ mod tests {
             .ready(&BACKGROUND_CONTEXT)
             .await
             .expect("binding ready");
-        wait_for(|| remote_values.lock().expect("remote values lock").len() == 1).await;
+        wait_for(|| remote_values.lock().len() == 1).await;
         assert_eq!(
-            *remote_values.lock().expect("remote values lock"),
+            *remote_values.lock(),
             vec![json!("one")]
         );
 
@@ -2726,7 +2714,6 @@ mod tests {
                             Box::pin(async move {
                                 observed
                                     .lock()
-                                    .expect("observed lock")
                                     .push((client, context));
                             })
                         },
@@ -2760,13 +2747,13 @@ mod tests {
         let host = create_facet_host(options(vec![consumer, provider("A")]))
             .await
             .expect("host activates");
-        wait_for(|| observed.lock().expect("observed lock").len() == 1).await;
-        let first = observed.lock().expect("observed lock")[0].clone();
+        wait_for(|| observed.lock().len() == 1).await;
+        let first = observed.lock()[0].clone();
         let value = invoke_read(&first.0, &first.1).await.expect("first read");
         assert_eq!(value, json!("A"));
 
         host.reload(vec![provider("B")]).await.expect("reload");
-        wait_for(|| observed.lock().expect("observed lock").len() == 2).await;
+        wait_for(|| observed.lock().len() == 2).await;
         assert!(first
             .1
             .abort_signal()
@@ -2780,7 +2767,7 @@ mod tests {
                 .contains("Keyed service test.experimental.keyed-value observation is closed"),
             "{error}"
         );
-        let second = observed.lock().expect("observed lock")[1].clone();
+        let second = observed.lock()[1].clone();
         let value = invoke_read(&second.0, &second.1)
             .await
             .expect("second read");
@@ -2811,7 +2798,6 @@ mod tests {
                         Box::pin(async move {
                             observed
                                 .lock()
-                                .expect("observed lock")
                                 .push((view, context));
                         })
                     },
@@ -2846,8 +2832,8 @@ mod tests {
         let host = create_facet_host(options(vec![consumer, provider("A")]))
             .await
             .expect("host activates");
-        wait_for(|| observed.lock().expect("observed lock").len() == 1).await;
-        let first = observed.lock().expect("observed lock")[0].clone();
+        wait_for(|| observed.lock().len() == 1).await;
+        let first = observed.lock()[0].clone();
         assert_eq!(
             first.0.with(|service| service.read().to_string()).unwrap(),
             "A"
@@ -2866,7 +2852,7 @@ mod tests {
             .is_err());
 
         host.reload(vec![provider("B")]).await.expect("reload");
-        wait_for(|| observed.lock().expect("observed lock").len() == 2).await;
+        wait_for(|| observed.lock().len() == 2).await;
         assert!(first
             .1
             .abort_signal()
@@ -2882,7 +2868,7 @@ mod tests {
                 LOCAL_KEYED_VALUE.id()
             )
         );
-        let second = observed.lock().expect("observed lock")[1].clone();
+        let second = observed.lock()[1].clone();
         assert_eq!(
             second.0.with(|service| service.read().to_string()).unwrap(),
             "B"
@@ -2906,7 +2892,7 @@ mod tests {
         let revisions_for_consumer = revisions.clone();
         let consumer = Facet::new("state-consumer", move |env: &mut FacetEnvironment| {
             let requirement = env.use_remote(WATCHED.id())?;
-            *watched_for_consumer.lock().expect("watched lock") = Some(requirement.clone());
+            *watched_for_consumer.lock() = Some(requirement.clone());
             let revisions = revisions_for_consumer.clone();
             let watched = requirement.clone();
             let environment = env.clone();
@@ -2923,7 +2909,6 @@ mod tests {
                         Box::pin(async move {
                             revisions
                                 .lock()
-                                .expect("revisions lock")
                                 .push(value["value"].as_i64().unwrap_or_default());
                         })
                     });
@@ -2938,7 +2923,7 @@ mod tests {
         let provider = |value: i64, sources: Arc<Mutex<Vec<Arc<MutableReplicatedState>>>>| {
             Facet::new("state-provider", move |env: &mut FacetEnvironment| {
                 let state = env.replicated_state(json!({ "value": value }))?;
-                sources.lock().expect("sources lock").push(state.clone());
+                sources.lock().push(state.clone());
                 let implementation = state_impl("state", state.internals());
                 env.provide_remote(WATCHED.id(), ServiceMode::Singleton, implementation)?;
                 Ok(())
@@ -2950,7 +2935,6 @@ mod tests {
             .expect("host activates");
         let retained_requirement = watched
             .lock()
-            .expect("watched lock")
             .clone()
             .expect("watched");
         let retained_value = || async {
@@ -2959,20 +2943,20 @@ mod tests {
             state.value().cloned().expect("hydrated value")
         };
         assert_eq!(retained_value().await, json!({ "value": 1 }));
-        assert_eq!(*revisions.lock().expect("revisions lock"), [1]);
+        assert_eq!(*revisions.lock(), [1]);
 
         host.reload(vec![provider(2, sources.clone())])
             .await
             .expect("reload");
         assert_eq!(retained_value().await, json!({ "value": 2 }));
-        assert_eq!(*revisions.lock().expect("revisions lock"), [1, 2]);
+        assert_eq!(*revisions.lock(), [1, 2]);
 
-        let retired_source = sources.lock().expect("sources lock")[0].clone();
+        let retired_source = sources.lock()[0].clone();
         retired_source
             .replace(&BACKGROUND_CONTEXT, json!({ "value": 3 }))
             .expect("retired change");
         assert_eq!(retained_value().await, json!({ "value": 2 }));
-        assert_eq!(*revisions.lock().expect("revisions lock"), [1, 2]);
+        assert_eq!(*revisions.lock(), [1, 2]);
 
         host.dispose().await.expect("dispose");
         let error = client_error(retained_requirement.client());
@@ -2998,7 +2982,6 @@ mod tests {
                 assert_eq!(source.identity, again.identity);
                 consumer_handles
                     .lock()
-                    .expect("consumer handles lock")
                     .push(source.clone());
                 assert_eq!(
                     client_error(source.client()).to_string(),
@@ -3017,7 +3000,6 @@ mod tests {
                             .unwrap_or(json!(null));
                         cleanup_values
                             .lock()
-                            .expect("cleanup values lock")
                             .push(format!(
                                 "{generation}:{}",
                                 value.as_str().unwrap_or_default()
@@ -3032,7 +3014,7 @@ mod tests {
         let peer_handle_for_setup = peer_handle.clone();
         let peer = Facet::new("peer-consumer", move |env: &mut FacetEnvironment| {
             let handle = env.use_remote(SOURCE.id())?;
-            *peer_handle_for_setup.lock().expect("peer handle lock") = Some(handle);
+            *peer_handle_for_setup.lock() = Some(handle);
             Ok(())
         });
 
@@ -3046,11 +3028,9 @@ mod tests {
             .expect("host activates");
         let handles = consumer_handles
             .lock()
-            .expect("consumer handles lock")
             .clone();
         let peer_requirement = peer_handle
             .lock()
-            .expect("peer handle lock")
             .clone()
             .unwrap();
         // Upstream: views are distinct objects across facets.
@@ -3058,12 +3038,11 @@ mod tests {
 
         host.reload(vec![consumer("B")]).await.expect("reload");
         assert_eq!(
-            *cleanup_values.lock().expect("cleanup values lock"),
+            *cleanup_values.lock(),
             ["A:value"]
         );
         let new_handles = consumer_handles
             .lock()
-            .expect("consumer handles lock")
             .clone();
         assert_ne!(new_handles[1].identity, handles[0].identity);
         assert_eq!(
@@ -3085,7 +3064,7 @@ mod tests {
 
         host.dispose().await.expect("dispose");
         assert_eq!(
-            *cleanup_values.lock().expect("cleanup values lock"),
+            *cleanup_values.lock(),
             ["A:value", "B:value"]
         );
         assert_eq!(
@@ -3107,7 +3086,7 @@ mod tests {
         let deliveries_for_consumer = deliveries.clone();
         let consumer = Facet::new("consumer", move |env: &mut FacetEnvironment| {
             let requirement = env.use_remote(WATCHED.id())?;
-            *watched_for_consumer.lock().expect("watched lock") = Some(requirement.clone());
+            *watched_for_consumer.lock() = Some(requirement.clone());
             let deliveries = deliveries_for_consumer.clone();
             let watched = requirement.clone();
             let environment = env.clone();
@@ -3122,7 +3101,7 @@ mod tests {
                         let deliveries = deliveries.clone();
                         let _ = _value;
                         Box::pin(async move {
-                            *deliveries.lock().expect("deliveries lock") += 1;
+                            *deliveries.lock() += 1;
                         })
                     });
                     let unsubscribe = state.subscribe(listener);
@@ -3138,7 +3117,7 @@ mod tests {
         let state_cell_for_provider = state_cell.clone();
         let provider = Facet::new("provider", move |env: &mut FacetEnvironment| {
             let state = env.replicated_state(json!({ "value": 0 }))?;
-            *state_cell_for_provider.lock().expect("state cell lock") = Some(state.clone());
+            *state_cell_for_provider.lock() = Some(state.clone());
             env.provide_remote(
                 WATCHED.id(),
                 ServiceMode::Singleton,
@@ -3150,18 +3129,18 @@ mod tests {
         let host = create_facet_host(options(vec![consumer, provider]))
             .await
             .expect("host activates");
-        assert_eq!(*deliveries.lock().expect("deliveries lock"), 1);
-        let state = state_cell.lock().expect("state cell lock").clone().unwrap();
+        assert_eq!(*deliveries.lock(), 1);
+        let state = state_cell.lock().clone().unwrap();
         state
             .replace(&BACKGROUND_CONTEXT, json!({ "value": 1 }))
             .expect("replace");
-        assert_eq!(*deliveries.lock().expect("deliveries lock"), 2);
+        assert_eq!(*deliveries.lock(), 2);
 
         host.dispose().await.expect("dispose");
         state
             .replace(&BACKGROUND_CONTEXT, json!({ "value": 2 }))
             .expect("replace after dispose");
-        assert_eq!(*deliveries.lock().expect("deliveries lock"), 2);
+        assert_eq!(*deliveries.lock(), 2);
     }
 
     #[tokio::test]
@@ -3398,7 +3377,7 @@ mod tests {
                             .invoke("read", Vec::new(), &BACKGROUND_CONTEXT)
                             .await?
                             .unwrap_or(json!(null));
-                        values.lock().expect("values lock").push(value);
+                        values.lock().push(value);
                         Ok(())
                     })
                 }))?;
@@ -3414,7 +3393,7 @@ mod tests {
         .expect("first host");
         first.dispose().await.expect("first dispose");
 
-        *state.current.lock().expect("current provider lock") = right_provider.clone();
+        *state.current.lock() = right_provider.clone();
         let right_consumer = {
             let values = values.clone();
             Facet::new("right-consumer", move |env: &mut FacetEnvironment| {
@@ -3429,7 +3408,7 @@ mod tests {
                             .invoke("read", Vec::new(), &BACKGROUND_CONTEXT)
                             .await?
                             .unwrap_or(json!(null));
-                        values.lock().expect("values lock").push(value);
+                        values.lock().push(value);
                         Ok(())
                     })
                 }))?;
@@ -3446,7 +3425,7 @@ mod tests {
         second.dispose().await.expect("second dispose");
 
         assert_eq!(
-            *values.lock().expect("values lock"),
+            *values.lock(),
             [json!("left"), json!("right")]
         );
         assert_eq!(state.opened.load(Ordering::SeqCst), 2);
@@ -3604,7 +3583,6 @@ mod tests {
                 .state
                 .current
                 .lock()
-                .expect("current provider lock")
                 .catalogue()
                 .to_vec())
         }
@@ -3618,7 +3596,6 @@ mod tests {
                 .state
                 .current
                 .lock()
-                .expect("current provider lock")
                 .clone();
             let binding = Arc::new(RemoteServiceBinding::new(RemoteServiceBindingOptions {
                 services: options.services,

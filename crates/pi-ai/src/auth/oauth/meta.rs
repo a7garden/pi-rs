@@ -323,7 +323,8 @@ mod tests {
 	use crate::auth::types::AuthEvent;
 	use crate::http::{FetchFn, HttpResponse, ProviderHttpError};
 	use crate::utils::abort::AbortController;
-	use std::sync::{Arc, Mutex};
+	use std::sync::{Arc};
+	use {parking_lot::Mutex};
 
 	fn never_aborted_signal() -> AbortSignal {
 		AbortController::new().signal()
@@ -396,7 +397,7 @@ mod tests {
 					);
 					assert_eq!(form.get("client_id").map(String::as_str), Some(CLIENT_ID));
 					assert_eq!(form.get("device_code").map(String::as_str), Some("device-code-123"));
-					return Ok(poll_for_fetch.lock().unwrap().remove(0));
+					return Ok(poll_for_fetch.lock().remove(0));
 				}
 				if url == API_KEY_MINT_URL {
 					assert_eq!(request.method, "POST");
@@ -415,14 +416,14 @@ mod tests {
 		let events: Arc<Mutex<Vec<AuthEvent>>> = Arc::new(Mutex::new(Vec::new()));
 		let events_for_notify = events.clone();
 		let credential = tokio::spawn(meta_oauth().login(
-			interaction(move |event| events_for_notify.lock().unwrap().push(event)),
+			interaction(move |event| events_for_notify.lock().push(event)),
 			None,
 		));
 
 		// The first poll happens after the 5s wait-before-first-poll.
 		tokio::time::advance(std::time::Duration::from_millis(0)).await;
 		{
-			let events = events.lock().unwrap();
+			let events = events.lock();
 			assert!(matches!(events.first(), Some(AuthEvent::DeviceCode { user_code, verification_uri, interval_seconds, expires_in_seconds })
 				if user_code == "ABCD-1234"
 					&& verification_uri == "https://auth.meta.com/oauth/device/?code=ABCD-1234"

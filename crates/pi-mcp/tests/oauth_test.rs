@@ -1,6 +1,7 @@
 //! Port of `test/oauth.test.ts`.
 
-use std::sync::{Arc, Mutex as StdMutex};
+use std::sync::{Arc};
+use {parking_lot::Mutex as StdMutex};
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
@@ -79,20 +80,20 @@ impl TestOAuthProvider {
 	fn authorization_url(&self) -> Url {
 		self.authorization_url
 			.lock()
-			.unwrap_or_else(std::sync::PoisonError::into_inner)
+			
 			.clone()
 			.expect("authorization url set")
 	}
 
 	fn set_tokens_access(&self, access_token: &str) {
-		let mut tokens = self.token_set.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+		let mut tokens = self.token_set.lock();
 		if let Some(tokens) = tokens.as_mut() {
 			tokens.access_token = access_token.to_string();
 		}
 	}
 
 	fn tokens_snapshot(&self) -> Option<OAuthTokens> {
-		self.token_set.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone()
+		self.token_set.lock().clone()
 	}
 }
 
@@ -111,67 +112,67 @@ impl OAuthClientProvider for TestOAuthProvider {
 	}
 
 	async fn client_information(&self) -> Result<Option<OAuthClientInformationMixed>, McpError> {
-		Ok(self.client.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone())
+		Ok(self.client.lock().clone())
 	}
 
 	async fn save_client_information(
 		&self,
 		information: &OAuthClientInformationMixed,
 	) -> Result<(), McpError> {
-		*self.client.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(information.clone());
+		*self.client.lock() = Some(information.clone());
 		Ok(())
 	}
 
 	async fn tokens(&self) -> Result<Option<OAuthTokens>, McpError> {
-		Ok(self.token_set.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone())
+		Ok(self.token_set.lock().clone())
 	}
 
 	async fn save_tokens(&self, tokens: &OAuthTokens) -> Result<(), McpError> {
-		*self.token_set.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(tokens.clone());
+		*self.token_set.lock() = Some(tokens.clone());
 		Ok(())
 	}
 
 	async fn redirect_to_authorization(&self, url: Url) -> Result<(), McpError> {
-		*self.authorization_url.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(url);
+		*self.authorization_url.lock() = Some(url);
 		Ok(())
 	}
 
 	async fn save_code_verifier(&self, verifier: &str) -> Result<(), McpError> {
-		*self.verifier.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(verifier.to_string());
+		*self.verifier.lock() = Some(verifier.to_string());
 		Ok(())
 	}
 
 	async fn code_verifier(&self) -> Result<String, McpError> {
 		self.verifier
 			.lock()
-			.unwrap_or_else(std::sync::PoisonError::into_inner)
+			
 			.clone()
 			.ok_or_else(|| McpError::other("Missing code verifier"))
 	}
 
 	async fn invalidate_credentials(&self, kind: InvalidationKind) -> Result<(), McpError> {
 		if matches!(kind, InvalidationKind::All | InvalidationKind::Client) {
-			*self.client.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+			*self.client.lock() = None;
 		}
 		if matches!(kind, InvalidationKind::All | InvalidationKind::Tokens) {
-			*self.token_set.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+			*self.token_set.lock() = None;
 		}
 		if matches!(kind, InvalidationKind::All | InvalidationKind::Verifier) {
-			*self.verifier.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+			*self.verifier.lock() = None;
 		}
 		if matches!(kind, InvalidationKind::All | InvalidationKind::Discovery) {
-			*self.discovery.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+			*self.discovery.lock() = None;
 		}
 		Ok(())
 	}
 
 	async fn save_discovery_state(&self, state: &OAuthDiscoveryState) -> Result<(), McpError> {
-		*self.discovery.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(state.clone());
+		*self.discovery.lock() = Some(state.clone());
 		Ok(())
 	}
 
 	async fn discovery_state(&self) -> Result<Option<OAuthDiscoveryState>, McpError> {
-		Ok(self.discovery.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone())
+		Ok(self.discovery.lock().clone())
 	}
 }
 
@@ -262,7 +263,7 @@ async fn discovers_registers_authorizes_with_pkce_and_refreshes_on_401() {
 				}
 				"/authorize" => {
 					let challenge = query_of(&request.url, "code_challenge").unwrap_or_default();
-					*challenge_sink.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(challenge);
+					*challenge_sink.lock() = Some(challenge);
 					let redirect = Url::parse(&query_of(&request.url, "redirect_uri").unwrap_or_default())
 						.expect("redirect uri");
 					let mut redirect = redirect;
@@ -288,7 +289,7 @@ async fn discovers_registers_authorizes_with_pkce_and_refreshes_on_401() {
 							.unwrap_or_default()
 					};
 					if param("grant_type") == "refresh_token" {
-						*refresh_sink.lock().unwrap_or_else(std::sync::PoisonError::into_inner) += 1;
+						*refresh_sink.lock() += 1;
 						return HttpResponse {
 							status: 200,
 							headers: vec![("content-type".to_string(), "application/json".to_string())],
@@ -309,7 +310,7 @@ async fn discovers_registers_authorizes_with_pkce_and_refreshes_on_401() {
 						|| Some(&challenge)
 							!= challenge_sink
 								.lock()
-								.unwrap_or_else(std::sync::PoisonError::into_inner)
+								
 								.as_ref()
 					{
 						return HttpResponse {
@@ -474,7 +475,7 @@ async fn discovers_registers_authorizes_with_pkce_and_refreshes_on_401() {
 			id_token: None,
 		})
 	);
-	assert_eq!(*refreshes.lock().unwrap_or_else(std::sync::PoisonError::into_inner), 1);
+	assert_eq!(*refreshes.lock(), 1);
 	refreshed_client.close().await.expect("close");
 	callback.close().await.expect("close callback server");
 	server.close().await;
@@ -537,7 +538,7 @@ async fn shares_one_refresh_between_concurrent_401s_when_refresh_tokens_rotate()
 					.unwrap_or_default();
 				grants
 					.lock()
-					.unwrap_or_else(std::sync::PoisonError::into_inner)
+					
 					.push(refresh_token.clone());
 				if refresh_token != "r1" {
 					return HttpResponse {
@@ -609,7 +610,7 @@ async fn shares_one_refresh_between_concurrent_401s_when_refresh_tokens_rotate()
 	// A late 401 for a request that still carried the old token must not refresh again.
 	auth.on_unauthorized(unauthorized()).await.expect("late 401");
 	assert_eq!(
-		grants.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone(),
+		grants.lock().clone(),
 		vec!["r1".to_string()]
 	);
 	assert_eq!(auth.token().await.expect("token").as_deref(), Some("a2"));
@@ -634,9 +635,9 @@ async fn shares_one_refresh_between_concurrent_401s_when_refresh_tokens_rotate()
 #[tokio::test]
 async fn asks_for_authorization_instead_of_refreshing_when_the_server_needs_more_scope() {
 	let provider = Arc::new(TestOAuthProvider::new("http://127.0.0.1/callback"));
-	*provider.client.lock().unwrap_or_else(std::sync::PoisonError::into_inner) =
+	*provider.client.lock() =
 		Some(client_information("client"));
-	*provider.token_set.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(OAuthTokens {
+	*provider.token_set.lock() = Some(OAuthTokens {
 		access_token: "a1".to_string(),
 		refresh_token: Some("r1".to_string()),
 		token_type: "Bearer".to_string(),
@@ -846,7 +847,7 @@ async fn uses_a_configured_authorization_server_metadata_document_as_is() {
 	}))
 	.await;
 	let provider = Arc::new(TestOAuthProvider::new("http://127.0.0.1/callback"));
-	*provider.client.lock().unwrap_or_else(std::sync::PoisonError::into_inner) =
+	*provider.client.lock() =
 		Some(client_information("client"));
 	let options = OAuthFlowOptions {
 		authorization_server_metadata_url: Some(Url::parse(&format!("{}/idp/metadata.json", server.origin)).expect("url")),
@@ -888,7 +889,7 @@ async fn exchanges_a_code_only_when_its_iss_parameter_names_the_authorization_se
 					.collect();
 			codes
 				.lock()
-				.unwrap_or_else(std::sync::PoisonError::into_inner)
+				
 				.push(
 					params
 						.iter()
@@ -910,11 +911,11 @@ async fn exchanges_a_code_only_when_its_iss_parameter_names_the_authorization_se
 		let server_origin = server.origin.clone();
 		async move {
 			let provider = Arc::new(TestOAuthProvider::new("http://127.0.0.1/callback"));
-			*provider.client.lock().unwrap_or_else(std::sync::PoisonError::into_inner) =
+			*provider.client.lock() =
 				Some(client_information("client"));
-			*provider.verifier.lock().unwrap_or_else(std::sync::PoisonError::into_inner) =
+			*provider.verifier.lock() =
 				Some("verifier".to_string());
-			*provider.discovery.lock().unwrap_or_else(std::sync::PoisonError::into_inner) =
+			*provider.discovery.lock() =
 				Some(OAuthDiscoveryState {
 					authorization_server_url: server_origin.clone(),
 					authorization_server_metadata: Some(
@@ -954,7 +955,7 @@ async fn exchanges_a_code_only_when_its_iss_parameter_names_the_authorization_se
 	let result = exchange("omitted".to_string(), None, false).await.expect("omitted");
 	assert_eq!(result, OAuthFlowResult::Authorized);
 	assert_eq!(
-		codes.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone(),
+		codes.lock().clone(),
 		vec!["matching".to_string(), "omitted".to_string()]
 	);
 	server.close().await;
@@ -1055,7 +1056,7 @@ async fn callback_renders_pages_through_render_page() {
 		render_page: Some(Arc::new(move |page| {
 			pages_sink
 				.lock()
-				.unwrap_or_else(std::sync::PoisonError::into_inner)
+				
 				.push(page.clone());
 			match page {
 				OAuthCallbackPage::Ok => "<p>ok</p>".to_string(),
@@ -1088,7 +1089,7 @@ async fn callback_renders_pages_through_render_page() {
 	let error = denied.await.expect("join").expect_err("denied");
 	assert_eq!(error.to_string(), "Denied");
 	assert_eq!(
-		pages.lock().unwrap_or_else(std::sync::PoisonError::into_inner).last(),
+		pages.lock().last(),
 		Some(&OAuthCallbackPage::Failure {
 			message: "Authorization failed. You may close this window.".to_string(),
 			details: Some("Denied".to_string()),

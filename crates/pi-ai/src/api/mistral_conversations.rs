@@ -1684,7 +1684,7 @@ mod tests {
 		ModelCost, ModelCostRates, StrictSchemaMode, ToolResultMessage, UserMessage,
 	};
 	use serde_json::json;
-	use std::sync::Mutex;
+	use parking_lot::Mutex;
 
 	/// Upstream `getModel("mistral", id)`: a real catalog entry.
 	fn catalog_model(id: &str) -> Model {
@@ -1787,7 +1787,7 @@ mod tests {
 				HttpBody::Bytes(bytes) => String::from_utf8_lossy(bytes).to_string(),
 				_ => String::new(),
 			};
-			*captured.lock().expect("lock") = Some(CapturedRequest { url: request.url, headers: request.headers, body });
+			*captured.lock() = Some(CapturedRequest { url: request.url, headers: request.headers, body });
 			let response = make_response();
 			Box::pin(async move { Ok(response) })
 		})
@@ -1830,7 +1830,7 @@ mod tests {
 		options.base.on_payload = Some(Arc::new(move |payload: Value, _model: Model| {
 			let hook_payload = hook_payload.clone();
 			Box::pin(async move {
-				*hook_payload.lock().expect("lock") = Some(payload.clone());
+				*hook_payload.lock() = Some(payload.clone());
 				let mut next = payload.as_object().cloned().expect("payload object");
 				next.insert("topP".to_string(), json!(0.9));
 				next.insert("randomSeed".to_string(), json!(42));
@@ -1858,7 +1858,7 @@ mod tests {
 		options.base.on_response = Some(Arc::new(move |response: ProviderResponse, _model: Model| {
 			let hook_response = hook_response.clone();
 			Box::pin(async move {
-				*hook_response.lock().expect("lock") = Some(response);
+				*hook_response.lock() = Some(response);
 			})
 		}));
 
@@ -1884,7 +1884,7 @@ mod tests {
 
 		assert_eq!(message.stop_reason, StopReason::Stop, "error: {:?}", message.error_message);
 
-		let request = captured.lock().expect("lock").clone().expect("request captured");
+		let request = captured.lock().clone().expect("request captured");
 		assert_eq!(request.url, "https://api.mistral.ai/v1/chat/completions");
 		assert_eq!(header(&request.headers, "authorization"), Some("Bearer secret"));
 		assert_eq!(header(&request.headers, "accept"), Some("text/event-stream"));
@@ -1892,12 +1892,12 @@ mod tests {
 		assert_eq!(header(&request.headers, "x-custom"), Some("value"));
 		assert_eq!(header(&request.headers, "user-agent"), Some(get_pi_user_agent().as_str()));
 
-		let payload = callback_payload.lock().expect("lock").clone().expect("onPayload ran");
+		let payload = callback_payload.lock().clone().expect("onPayload ran");
 		assert_eq!(payload.get("maxTokens"), Some(&json!(123)));
 		assert_eq!(payload.get("promptMode"), Some(&json!("reasoning")));
 		assert_eq!(payload.get("promptCacheKey"), Some(&json!("session-1")));
 		assert_eq!(
-			callback_response.lock().expect("lock").clone().expect("onResponse ran"),
+			callback_response.lock().clone().expect("onResponse ran"),
 			ProviderResponse {
 				status: 200,
 				headers: [
@@ -2013,7 +2013,7 @@ mod tests {
 		let message = stream(&model, &normalize(&context), &options).into_result().await;
 
 		assert_eq!(message.stop_reason, StopReason::Stop, "error: {:?}", message.error_message);
-		let request = captured.lock().expect("lock").clone().expect("request captured");
+		let request = captured.lock().clone().expect("request captured");
 		let wire_payload = serde_json::from_str::<Value>(&request.body).expect("request body is JSON");
 		assert_eq!(
 			wire_payload.get("messages"),
@@ -2216,8 +2216,8 @@ mod tests {
 			let hook_events = hook_events.clone();
 			let hook_models = hook_models.clone();
 			Box::pin(async move {
-				hook_events.lock().expect("lock").push(event);
-				hook_models.lock().expect("lock").push(event_model);
+				hook_events.lock().push(event);
+				hook_models.lock().push(event_model);
 			})
 		}));
 		let response_events = events.clone();
@@ -2228,8 +2228,8 @@ mod tests {
 
 		let result = stream(&model, &normalize(&user_context("hello")), &options).into_result().await;
 
-		assert_eq!(received.lock().expect("lock").clone(), events);
-		let models = event_models.lock().expect("lock").clone();
+		assert_eq!(received.lock().clone(), events);
+		let models = event_models.lock().clone();
 		assert_eq!(models, vec![model.clone(), model.clone()]);
 		assert_eq!(result.stop_reason, StopReason::Stop, "error: {:?}", result.error_message);
 		let content = serde_json::to_value(&result.content).expect("content serializes");
@@ -2285,7 +2285,7 @@ mod tests {
 
 		stream(&model, &normalize(&user_context("hello")), &options).into_result().await;
 
-		let request = captured.lock().expect("lock").clone().expect("request captured");
+		let request = captured.lock().clone().expect("request captured");
 		assert!(!has_header(&request.headers, "authorization"));
 		assert!(!has_header(&request.headers, "x-affinity"));
 		assert_eq!(header(&request.headers, "user-agent"), Some("custom-agent"));
@@ -2503,14 +2503,14 @@ mod tests {
 		options.base.base.on_payload = Some(Arc::new(move |payload: Value, _model: Model| {
 			let hook_captured = hook_captured.clone();
 			Box::pin(async move {
-				*hook_captured.lock().expect("lock") = Some(payload.clone());
+				*hook_captured.lock() = Some(payload.clone());
 				Some(payload)
 			})
 		}));
 
 		stream_simple(model, &normalize(&user_context("Hello")), &options).into_result().await;
 
-		let payload = captured.lock().expect("lock").clone();
+		let payload = captured.lock().clone();
 		payload.expect("payload captured before request failure")
 	}
 
@@ -2708,7 +2708,7 @@ mod tests {
 		options.base.on_payload = Some(Arc::new(move |payload: Value, _model: Model| {
 			let hook_captured = hook_captured.clone();
 			Box::pin(async move {
-				*hook_captured.lock().expect("lock") = Some(payload.clone());
+				*hook_captured.lock() = Some(payload.clone());
 				Some(payload)
 			})
 		}));
@@ -2716,7 +2716,7 @@ mod tests {
 		// Upstream `complete()` drives `stream` with plain stream options.
 		let response = stream(&model, &normalize(&context), &options).into_result().await;
 
-		let payload = captured.lock().expect("lock").clone().expect("payload captured");
+		let payload = captured.lock().clone().expect("payload captured");
 		let tools = payload.get("tools").and_then(Value::as_array).expect("tools present");
 		assert_eq!(tools.len(), 1);
 		let function = &tools[0]["function"];

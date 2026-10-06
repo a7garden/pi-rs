@@ -397,7 +397,8 @@ mod tests {
 	use crate::auth::types::{AuthEvent, AuthPromptKind};
 	use crate::http::{HttpResponse, ProviderHttpError};
 	use crate::utils::abort::AbortController;
-	use std::sync::{Arc, Mutex};
+	use std::sync::{Arc};
+	use {parking_lot::Mutex};
 
 	fn never_aborted_signal() -> AbortSignal {
 		AbortController::new().signal()
@@ -466,7 +467,7 @@ mod tests {
 			assert_eq!(body["grant_type"], "authorization_code");
 			assert_eq!(body["code"], "manual-code");
 			assert_eq!(body["redirect_uri"], "http://localhost:53692/callback");
-			seen_for_fetch.lock().unwrap().push(body);
+			seen_for_fetch.lock().push(body);
 			Ok(json_response(
 				serde_json::json!({
 					"access_token": "access-token",
@@ -490,7 +491,7 @@ mod tests {
 					Box::pin(async move { match &prompt.kind {
 						AuthPromptKind::Select { .. } => Ok("browser".to_string()),
 						AuthPromptKind::ManualCode { .. } => {
-							let current = auth_url_for_prompt.lock().unwrap().clone();
+							let current = auth_url_for_prompt.lock().clone();
 							Ok(format!(
 								"{}?code=manual-code&state={}",
 								auth_query(&current, "redirect_uri"),
@@ -502,7 +503,7 @@ mod tests {
 				},
 					move |event| {
 						if let AuthEvent::AuthUrl { url, .. } = event {
-							*auth_url_for_notify.lock().unwrap() = url;
+							*auth_url_for_notify.lock() = url;
 						}
 					},
 				),
@@ -513,7 +514,7 @@ mod tests {
 
 		assert_eq!(credentials.credentials.access, "access-token");
 		assert_eq!(credentials.credentials.refresh, "refresh-token");
-		assert_eq!(seen.lock().unwrap().len(), 1);
+		assert_eq!(seen.lock().len(), 1);
 		crate::auth::oauth::set_oauth_fetch(None);
 	}
 
@@ -557,7 +558,7 @@ mod tests {
 			assert!(body["client_id"].as_str().is_some_and(|id| !id.is_empty()));
 			assert_eq!(body["refresh_token"], "refresh-token");
 			assert!(body.get("scope").is_none(), "scope must be omitted");
-			seen_for_fetch.lock().unwrap().push(body);
+			seen_for_fetch.lock().push(body);
 			Ok(json_response(
 				serde_json::json!({
 					"access_token": "new-access-token",
@@ -576,7 +577,7 @@ mod tests {
 
 		assert_eq!(credentials.credentials.access, "new-access-token");
 		assert_eq!(credentials.credentials.refresh, "new-refresh-token");
-		assert_eq!(seen.lock().unwrap().len(), 1);
+		assert_eq!(seen.lock().len(), 1);
 		crate::auth::oauth::set_oauth_fetch(None);
 	}
 
@@ -602,7 +603,7 @@ mod tests {
 			assert_eq!(body["code"], "copied-code");
 			assert_eq!(
 				body["state"],
-				auth_query(&auth_url_for_fetch.lock().unwrap(), "state")
+				auth_query(&auth_url_for_fetch.lock(), "state")
 			);
 			assert_eq!(body["redirect_uri"], "https://platform.claude.com/oauth/code/callback");
 			Ok(json_response(
@@ -625,14 +626,14 @@ mod tests {
 					let auth_url_for_prompt = auth_url_for_prompt.clone();
 					Box::pin(async move { match &prompt.kind {
 						AuthPromptKind::Select { message, options } => {
-							select_for_prompt.lock().unwrap().push(crate::auth::types::AuthPrompt {
+							select_for_prompt.lock().push(crate::auth::types::AuthPrompt {
 								signal: prompt.signal.clone(),
 								kind: AuthPromptKind::Select { message: message.clone(), options: options.clone() },
 							});
 							Ok("copy_code".to_string())
 						}
 						AuthPromptKind::ManualCode { .. } => {
-							let state = auth_query(&auth_url_for_prompt.lock().unwrap(), "state");
+							let state = auth_query(&auth_url_for_prompt.lock(), "state");
 							Ok(format!("copied-code#{state}"))
 						}
 						_ => panic!("Unexpected prompt"),
@@ -640,7 +641,7 @@ mod tests {
 				},
 					move |event| {
 						if let AuthEvent::AuthUrl { url, .. } = event {
-							*auth_url_for_notify.lock().unwrap() = url;
+							*auth_url_for_notify.lock() = url;
 						}
 					},
 				),
@@ -651,11 +652,11 @@ mod tests {
 
 		assert_eq!(credentials.credentials.access, "access-token");
 		assert_eq!(
-			auth_query(&auth_url.lock().unwrap(), "redirect_uri"),
+			auth_query(&auth_url.lock(), "redirect_uri"),
 			"https://platform.claude.com/oauth/code/callback"
 		);
 		{
-			let prompts = select_prompts.lock().unwrap();
+			let prompts = select_prompts.lock();
 			assert_eq!(prompts.len(), 1);
 			match &prompts[0].kind {
 				AuthPromptKind::Select { message, options } => {
@@ -701,8 +702,8 @@ mod tests {
 					Box::pin(async move { match &prompt.kind {
 						AuthPromptKind::Select { .. } => Ok("browser".to_string()),
 						AuthPromptKind::ManualCode { .. } => {
-							*saw_manual_for_prompt.lock().unwrap() = true;
-							*signal_for_prompt.lock().unwrap() = prompt.signal.clone();
+							*saw_manual_for_prompt.lock() = true;
+							*signal_for_prompt.lock() = prompt.signal.clone();
 							Ok("the-code".to_string())
 						}
 						_ => panic!("Unexpected prompt"),
@@ -710,7 +711,7 @@ mod tests {
 				},
 					move |event| {
 						if let AuthEvent::AuthUrl { .. } = event {
-							*saw_auth_for_notify.lock().unwrap() = true;
+							*saw_auth_for_notify.lock() = true;
 						}
 					},
 				),
@@ -720,10 +721,10 @@ mod tests {
 			.expect("credential");
 
 		assert_eq!(credential.credentials.access, "access");
-		assert!(*saw_auth_url.lock().unwrap());
-		assert!(*saw_manual.lock().unwrap());
+		assert!(*saw_auth_url.lock());
+		assert!(*saw_manual.lock());
 		// the prompt's signal is aborted once login settles, so UIs can dismiss it
-		assert!(manual_signal.lock().unwrap().as_ref().expect("manual signal").aborted());
+		assert!(manual_signal.lock().as_ref().expect("manual signal").aborted());
 		crate::auth::oauth::set_oauth_fetch(None);
 	}
 
@@ -740,7 +741,7 @@ mod tests {
 				
 			assert_eq!(request.url, TOKEN_URL);
 			let body = body_json(std::mem::replace(&mut request.body, HttpBody::Empty)).await;
-			*exchanged_for_fetch.lock().unwrap() = Some(body["code"].as_str().expect("code").to_string());
+			*exchanged_for_fetch.lock() = Some(body["code"].as_str().expect("code").to_string());
 			Ok(json_response(
 				serde_json::json!({ "access_token": "access", "refresh_token": "refresh", "expires_in": 3600 }),
 				200,
@@ -750,7 +751,7 @@ mod tests {
 
 		// The browser hits the real loopback server when auth_url fires.
 		let (page_tx, page_rx) = tokio::sync::oneshot::channel::<u16>();
-		let page_tx = Arc::new(std::sync::Mutex::new(Some(page_tx)));
+		let page_tx = Arc::new(parking_lot::Mutex::new(Some(page_tx)));
 
 		let credential = anthropic_oauth()
 			.login(
@@ -778,7 +779,7 @@ mod tests {
 								if let Ok(response) = default_fetch().send(request).await {
 									// oneshot permits exactly one send; take the
 									// sender out so a repeat browser hit is a no-op.
-									if let Some(sender) = page_tx.lock().unwrap().take() {
+									if let Some(sender) = page_tx.lock().take() {
 										let _ = sender.send(response.status);
 									}
 								}
@@ -792,7 +793,7 @@ mod tests {
 			.expect("credential");
 
 		assert_eq!(credential.credentials.access, "access");
-		assert_eq!(exchanged.lock().unwrap().as_deref(), Some("browser-code"));
+		assert_eq!(exchanged.lock().as_deref(), Some("browser-code"));
 		let status = tokio::time::timeout(std::time::Duration::from_secs(5), page_rx)
 			.await
 			.expect("page response in time")

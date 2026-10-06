@@ -2513,7 +2513,7 @@ mod tests {
 	use crate::http::HttpResponse;
 	use crate::types::{Context, UserMessage};
 	use crate::utils::transcript::normalize_context;
-	use std::sync::Mutex;
+	use parking_lot::Mutex;
 
 	fn openrouter_model() -> Model {
 		Model {
@@ -2588,7 +2588,7 @@ mod tests {
 		options.base.base.fetch = Some(sse_fetch(vec![first_chunk.clone(), final_chunk.clone()]));
 		options.base.on_provider_stream_event = Some(Arc::new(move |data: Value, _model: Model| {
 			let events = events_hook.clone();
-			Box::pin(async move { events.lock().expect("events lock").push(data) })
+			Box::pin(async move { events.lock().push(data) })
 		}));
 
 		let context = normalize_context(&Context {
@@ -2606,7 +2606,7 @@ mod tests {
 			message.content,
 			vec![AssistantContent::Text(TextContent { text: "hello".to_string(), text_signature: None })]
 		);
-		assert_eq!(*events.lock().expect("events lock"), vec![first_chunk, final_chunk]);
+		assert_eq!(*events.lock(), vec![first_chunk, final_chunk]);
 	}
 
 	fn terminal_sse_body() -> String {
@@ -2623,7 +2623,7 @@ mod tests {
 			let sink = sink.clone();
 			let body = body.clone();
 			Box::pin(async move {
-				sink.lock().expect("capture lock").extend(request.headers);
+				sink.lock().extend(request.headers);
 				Ok(HttpResponse { status: 200, headers: vec![], body: HttpBody::Bytes(body.into_bytes()) })
 			})
 		});
@@ -2653,7 +2653,6 @@ mod tests {
 		stream_simple(&openrouter_model(), &context, &options).result().await;
 		let auth: Vec<String> = captured
 			.lock()
-			.expect("capture lock")
 			.iter()
 			.filter(|(name, _)| name.eq_ignore_ascii_case("authorization"))
 			.map(|(_, value)| value.clone())
@@ -2671,7 +2670,6 @@ mod tests {
 		stream_simple(&openrouter_model(), &context, &options).result().await;
 		let auth: Vec<String> = captured
 			.lock()
-			.expect("capture lock")
 			.iter()
 			.filter(|(name, _)| name.eq_ignore_ascii_case("authorization"))
 			.map(|(_, value)| value.clone())
@@ -2689,7 +2687,6 @@ mod tests {
 		stream_simple(&openrouter_model(), &context, &options).result().await;
 		let auth: Vec<String> = captured
 			.lock()
-			.expect("capture lock")
 			.iter()
 			.filter(|(name, _)| name.eq_ignore_ascii_case("authorization"))
 			.map(|(_, value)| value.clone())

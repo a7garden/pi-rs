@@ -20,7 +20,8 @@
 //!   EADDRINUSE fallback behavior.
 
 use std::future::Future;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc};
+use {parking_lot::Mutex};
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -130,17 +131,17 @@ impl<T: Clone + Send + Sync + 'static> ServerInner<T> {
 	/// Upstream `finish` — idempotent; wakes every waiter.
 	fn finish(&self, outcome: WaitOutcome<T>) {
 		{
-			let mut state = self.state.lock().unwrap();
+			let mut state = self.state.lock();
 			if state.settled {
 				return;
 			}
 			state.settled = true;
 			state.outcome = Some(outcome);
 		}
-		if let Some(task) = self.timeout_task.lock().unwrap().take() {
+		if let Some(task) = self.timeout_task.lock().take() {
 			task.abort();
 		}
-		if let Some(remove) = self.remove_abort_listener.lock().unwrap().take() {
+		if let Some(remove) = self.remove_abort_listener.lock().take() {
 			remove();
 		}
 		self.notify.notify_waiters();
@@ -148,14 +149,14 @@ impl<T: Clone + Send + Sync + 'static> ServerInner<T> {
 
 	/// `claimed || settled` probe for the 409 page.
 	fn claimed_or_settled(&self) -> bool {
-		let state = self.state.lock().unwrap();
+		let state = self.state.lock();
 		state.claimed || state.settled
 	}
 
 	/// Atomic check-and-set of `claimed` (upstream does the same within one
 	/// event-loop turn).
 	fn claim(&self) -> bool {
-		let mut state = self.state.lock().unwrap();
+		let mut state = self.state.lock();
 		if state.claimed || state.settled {
 			return false;
 		}
@@ -200,7 +201,7 @@ impl<T: Clone + Send + Sync + 'static> OAuthCallbackServer<T> {
 		loop {
 			let notified = self.inner.notify.notified();
 			{
-				let state = self.inner.state.lock().unwrap();
+				let state = self.inner.state.lock();
 				if let Some(outcome) = &state.outcome {
 					break outcome_result(outcome);
 				}
@@ -212,7 +213,7 @@ impl<T: Clone + Send + Sync + 'static> OAuthCallbackServer<T> {
 	/// Stop waiting for the browser unless a callback is already being
 	/// completed (upstream `cancel()`).
 	pub fn cancel(&self) {
-		if !self.inner.state.lock().unwrap().claimed {
+		if !self.inner.state.lock().claimed {
 			self.inner.finish(WaitOutcome::Completed(None));
 		}
 	}
@@ -223,8 +224,8 @@ impl<T: Clone + Send + Sync + 'static> OAuthCallbackServer<T> {
 		self.inner.finish(WaitOutcome::Failed(ThrownValue::message("OAuth callback server closed")));
 		// Drop the stored listener clone (closing the socket) and abort the
 		// accept loop, which drops its own clone.
-		*self.inner.listener.lock().unwrap() = None;
-		if let Some(task) = self.inner.accept_task.lock().unwrap().take() {
+		*self.inner.listener.lock() = None;
+		if let Some(task) = self.inner.accept_task.lock().take() {
 			task.abort();
 		}
 	}
@@ -369,7 +370,7 @@ where
 			});
 		}
 	});
-	*inner.accept_task.lock().unwrap() = Some(accept_task);
+	*inner.accept_task.lock() = Some(accept_task);
 
 	// signal?.addEventListener("abort", onAbort, { once: true })
 	if let Some(signal) = options.signal.clone() {
@@ -377,7 +378,7 @@ where
 		let remove = signal.add_listener(move || {
 			abort_inner.finish(WaitOutcome::Failed(ThrownValue::message("Login cancelled")));
 		});
-		*inner.remove_abort_listener.lock().unwrap() = Some(remove);
+		*inner.remove_abort_listener.lock() = Some(remove);
 	}
 
 	// timer = setTimeout(() => finish({ error: ... }), options.timeoutMs)
@@ -390,7 +391,7 @@ where
 				"{provider_name} sign-in timed out"
 			))));
 		});
-		*inner.timeout_task.lock().unwrap() = Some(task);
+		*inner.timeout_task.lock() = Some(task);
 	}
 
 	Ok(server)

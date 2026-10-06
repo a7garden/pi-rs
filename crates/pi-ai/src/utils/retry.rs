@@ -304,7 +304,7 @@ pub fn is_retryable_assistant_error(message: &AssistantMessage) -> bool {
 #[cfg(test)]
 mod tests {
 	use super::*;
-	use std::sync::Mutex;
+	use parking_lot::Mutex;
 	use std::sync::atomic::{AtomicUsize, Ordering};
 
 	use crate::types::{AssistantContent, TextContent, Usage, UsageCost};
@@ -470,7 +470,7 @@ mod tests {
 			let produce_calls = produce_calls.clone();
 			Box::pin(async move {
 				produce_calls.fetch_add(1, Ordering::SeqCst);
-				let mut queue = messages.lock().expect("produce queue");
+				let mut queue = messages.lock();
 				if queue.len() > 1 {
 					queue.remove(0)
 				} else {
@@ -517,7 +517,7 @@ mod tests {
 			Arc::new(move |attempt, _, _, _| {
 				let scheduled = scheduled.clone();
 				Box::pin(async move {
-					scheduled.lock().expect("events").push(format!("retry:{attempt}"));
+					scheduled.lock().push(format!("retry:{attempt}"));
 				})
 			})
 		};
@@ -530,7 +530,7 @@ mod tests {
 		.await;
 		assert_eq!(res.stop_reason, StopReason::Aborted);
 		assert_eq!(calls.load(Ordering::SeqCst), 1);
-		assert!(scheduled.lock().expect("events").is_empty());
+		assert!(scheduled.lock().is_empty());
 	}
 
 	#[tokio::test]
@@ -545,7 +545,7 @@ mod tests {
 				let finished = finished.clone();
 				let error = error.map(str::to_string);
 				Box::pin(async move {
-					finished.lock().expect("finished").push((success, attempt, error));
+					finished.lock().push((success, attempt, error));
 				})
 			})
 		};
@@ -558,7 +558,7 @@ mod tests {
 		.await;
 		assert_eq!(res.stop_reason, StopReason::Error);
 		assert_eq!(calls.load(Ordering::SeqCst), 1);
-		assert!(finished.lock().expect("finished").is_empty());
+		assert!(finished.lock().is_empty());
 	}
 
 	#[tokio::test]
@@ -573,7 +573,7 @@ mod tests {
 				let finished = finished.clone();
 				let error = error.map(str::to_string);
 				Box::pin(async move {
-					finished.lock().expect("finished").push((success, attempt, error));
+					finished.lock().push((success, attempt, error));
 				})
 			})
 		};
@@ -587,7 +587,7 @@ mod tests {
 		assert_eq!(res.stop_reason, StopReason::Error);
 		assert_eq!(calls.load(Ordering::SeqCst), 4); // 1 initial + 3 retries
 		assert_eq!(
-			finished.lock().expect("finished").as_slice(),
+			finished.lock().as_slice(),
 			[(false, 3, Some("terminated".to_string()))]
 		);
 	}
@@ -615,7 +615,7 @@ mod tests {
 			Arc::new(move |_, _, delay_ms, _| {
 				let delays = delays.clone();
 				Box::pin(async move {
-					delays.lock().expect("delays").push(delay_ms);
+					delays.lock().push(delay_ms);
 				})
 			})
 		};
@@ -623,7 +623,7 @@ mod tests {
 		retry_assistant_call(produce, Some(&policy), None, Some(&callbacks_with(Some(on_retry_scheduled), None, None)))
 			.await;
 
-		assert_eq!(*delays.lock().expect("delays"), vec![10, 15, 15, 15]);
+		assert_eq!(*delays.lock(), vec![10, 15, 15, 15]);
 	}
 
 	#[tokio::test]
@@ -648,7 +648,7 @@ mod tests {
 				let finished = finished.clone();
 				let error = error.map(str::to_string);
 				Box::pin(async move {
-					finished.lock().expect("finished").push((success, attempt, error));
+					finished.lock().push((success, attempt, error));
 				})
 			})
 		};
@@ -661,7 +661,7 @@ mod tests {
 		.await;
 		assert_eq!(res.content, vec![AssistantContent::Text(TextContent::new("recovered"))]);
 		assert_eq!(produce_calls.load(Ordering::SeqCst), 3);
-		assert_eq!(finished.lock().expect("finished").as_slice(), [(true, 2, None)]);
+		assert_eq!(finished.lock().as_slice(), [(true, 2, None)]);
 	}
 
 	#[tokio::test]
@@ -686,7 +686,7 @@ mod tests {
 				let finished = finished.clone();
 				let error = error.map(str::to_string);
 				Box::pin(async move {
-					finished.lock().expect("finished").push((success, attempt, error));
+					finished.lock().push((success, attempt, error));
 				})
 			})
 		};
@@ -699,7 +699,7 @@ mod tests {
 		.await;
 		assert_eq!(res.stop_reason, StopReason::Aborted);
 		assert_eq!(produce_calls.load(Ordering::SeqCst), 2);
-		assert_eq!(finished.lock().expect("finished").as_slice(), [(false, 1, None)]);
+		assert_eq!(finished.lock().as_slice(), [(false, 1, None)]);
 	}
 
 	#[tokio::test]
@@ -714,7 +714,7 @@ mod tests {
 			Arc::new(move |attempt, _, _, _| {
 				let scheduled = scheduled.clone();
 				Box::pin(async move {
-					scheduled.lock().expect("events").push(format!("retry:{attempt}"));
+					scheduled.lock().push(format!("retry:{attempt}"));
 				})
 			})
 		};
@@ -724,7 +724,7 @@ mod tests {
 				let finished = finished.clone();
 				let error = error.map(str::to_string);
 				Box::pin(async move {
-					finished.lock().expect("finished").push((success, attempt, error));
+					finished.lock().push((success, attempt, error));
 				})
 			})
 		};
@@ -737,8 +737,8 @@ mod tests {
 		.await;
 		assert_eq!(res.stop_reason, StopReason::Error);
 		assert_eq!(calls.load(Ordering::SeqCst), 1);
-		assert!(scheduled.lock().expect("events").is_empty());
-		assert!(finished.lock().expect("finished").is_empty());
+		assert!(scheduled.lock().is_empty());
+		assert!(finished.lock().is_empty());
 	}
 
 	#[tokio::test]
@@ -753,7 +753,7 @@ mod tests {
 				let events = events.clone();
 				Box::pin(async move {
 					let n = counter.fetch_add(1, Ordering::SeqCst);
-					events.lock().expect("events").push(format!("produce:{n}"));
+					events.lock().push(format!("produce:{n}"));
 					if n < 2 {
 						faux_assistant_message("", StopReason::Error, Some("terminated"))
 					} else {
@@ -767,7 +767,7 @@ mod tests {
 			Arc::new(move |attempt, _, _, _| {
 				let events = events.clone();
 				Box::pin(async move {
-					events.lock().expect("events").push(format!("retry:{attempt}"));
+					events.lock().push(format!("retry:{attempt}"));
 				})
 			})
 		};
@@ -776,7 +776,7 @@ mod tests {
 			Arc::new(move || {
 				let events = events.clone();
 				Box::pin(async move {
-					events.lock().expect("events").push("attempt-start".to_string());
+					events.lock().push("attempt-start".to_string());
 				})
 			})
 		};
@@ -789,7 +789,7 @@ mod tests {
 		.await;
 		assert_eq!(res.content, vec![AssistantContent::Text(TextContent::new("recovered"))]);
 		assert_eq!(
-			*events.lock().expect("events"),
+			*events.lock(),
 			vec![
 				"produce:0".to_string(),
 				"retry:1".to_string(),
@@ -819,7 +819,7 @@ mod tests {
 				let finished = finished.clone();
 				let error = error.map(str::to_string);
 				Box::pin(async move {
-					finished.lock().expect("finished").push((success, attempt, error));
+					finished.lock().push((success, attempt, error));
 				})
 			})
 		};
@@ -841,7 +841,7 @@ mod tests {
 		assert_eq!(res.error_message, None);
 		assert_eq!(calls.load(Ordering::SeqCst), 1);
 		assert_eq!(
-			finished.lock().expect("finished").as_slice(),
+			finished.lock().as_slice(),
 			[(false, 1, Some("terminated".to_string()))]
 		);
 	}

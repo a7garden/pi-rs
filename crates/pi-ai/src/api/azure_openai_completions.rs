@@ -236,7 +236,7 @@ mod tests {
 
 	/// Process-environment guard (shared with the azure config/responses test
 	/// modules so parallel tests cannot race env mutation).
-	fn env_lock() -> std::sync::MutexGuard<'static, ()> {
+	fn env_lock() -> parking_lot::MutexGuard<'static, ()> {
 		crate::api::azure_openai_config::AzureEndpointOptions::test_env_lock()
 	}
 
@@ -249,7 +249,7 @@ mod tests {
 
 	/// Recording FetchFn fake returning one chat-completions chunk with usage
 	/// and `[DONE]` (upstream `FakeOpenAI.chat.completions.create`).
-	fn completions_fetch(recorded: Arc<std::sync::Mutex<Vec<crate::http::HttpRequest>>>) -> crate::http::FetchFn {
+	fn completions_fetch(recorded: Arc<parking_lot::Mutex<Vec<crate::http::HttpRequest>>>) -> crate::http::FetchFn {
 		let mut body = String::new();
 		body.push_str(&format!(
 			"data: {}\n\n",
@@ -265,7 +265,7 @@ mod tests {
 		body.push_str("data: [DONE]\n\n");
 		let body = body.into_bytes();
 		crate::http::FetchFn::new(move |request: crate::http::HttpRequest| {
-			recorded.lock().expect("lock").push(request);
+			recorded.lock().push(request);
 			let response = crate::http::HttpResponse {
 				status: 200,
 				headers: vec![("content-type".to_string(), "text/event-stream".to_string())],
@@ -277,7 +277,7 @@ mod tests {
 
 	/// Recording FetchFn fake answering Responses-style SSE (for api-map
 	/// dispatch assertions on responses-routed models).
-	fn responses_fetch(recorded: Arc<std::sync::Mutex<Vec<crate::http::HttpRequest>>>) -> crate::http::FetchFn {
+	fn responses_fetch(recorded: Arc<parking_lot::Mutex<Vec<crate::http::HttpRequest>>>) -> crate::http::FetchFn {
 		let mut body = String::new();
 		body.push_str(&format!(
 			"data: {}\n\n",
@@ -289,7 +289,7 @@ mod tests {
 		));
 		let body = body.into_bytes();
 		crate::http::FetchFn::new(move |request: crate::http::HttpRequest| {
-			recorded.lock().expect("lock").push(request);
+			recorded.lock().push(request);
 			let response = crate::http::HttpResponse {
 				status: 200,
 				headers: vec![("content-type".to_string(), "text/event-stream".to_string())],
@@ -309,8 +309,8 @@ mod tests {
 	}
 
 	/// The last captured chat-completions payload (`mockState.lastParams`).
-	fn last_params(recorded: &Arc<std::sync::Mutex<Vec<crate::http::HttpRequest>>>) -> Value {
-		let requests = recorded.lock().expect("lock");
+	fn last_params(recorded: &Arc<parking_lot::Mutex<Vec<crate::http::HttpRequest>>>) -> Value {
+		let requests = recorded.lock();
 		let last = requests.last().expect("request captured");
 		captured_body(last)
 	}
@@ -320,7 +320,7 @@ mod tests {
 		let _guard = env_lock();
 		clear_relevant_env();
 		std::env::set_var("AZURE_OPENAI_BASE_URL", "https://my-resource.services.ai.azure.com");
-		let recorded = Arc::new(std::sync::Mutex::new(Vec::new()));
+		let recorded = Arc::new(parking_lot::Mutex::new(Vec::new()));
 		let mut options = crate::types::SimpleStreamOptions::default();
 		options.base.base.api_key = Some("test-key".to_string());
 		options.base.base.fetch = Some(completions_fetch(recorded.clone()));
@@ -342,7 +342,7 @@ mod tests {
 		let _guard = env_lock();
 		clear_relevant_env();
 		std::env::set_var("AZURE_OPENAI_BASE_URL", "https://my-resource.services.ai.azure.com");
-		let recorded = Arc::new(std::sync::Mutex::new(Vec::new()));
+		let recorded = Arc::new(parking_lot::Mutex::new(Vec::new()));
 		let mut options = crate::types::SimpleStreamOptions::default();
 		options.base.base.api_key = Some("test-key".to_string());
 		options.base.base.fetch = Some(completions_fetch(recorded.clone()));
@@ -362,7 +362,7 @@ mod tests {
 		let _guard = env_lock();
 		clear_relevant_env();
 		std::env::set_var("AZURE_OPENAI_BASE_URL", "https://my-resource.services.ai.azure.com");
-		let recorded = Arc::new(std::sync::Mutex::new(Vec::new()));
+		let recorded = Arc::new(parking_lot::Mutex::new(Vec::new()));
 		let mut options = crate::types::SimpleStreamOptions::default();
 		options.base.base.api_key = Some("test-key".to_string());
 		options.base.base.fetch = Some(completions_fetch(recorded.clone()));
@@ -384,7 +384,7 @@ mod tests {
 		clear_relevant_env();
 		std::env::set_var("AZURE_OPENAI_BASE_URL", "https://my-resource.services.ai.azure.com");
 		std::env::set_var("PI_CACHE_RETENTION", "long");
-		let recorded = Arc::new(std::sync::Mutex::new(Vec::new()));
+		let recorded = Arc::new(parking_lot::Mutex::new(Vec::new()));
 		let mut options = crate::types::StreamOptions::default();
 		options.base.api_key = Some("test-key".to_string());
 		options.base.fetch = Some(completions_fetch(recorded.clone()));
@@ -407,7 +407,7 @@ mod tests {
 		let _guard = env_lock();
 		clear_relevant_env();
 		std::env::set_var("AZURE_OPENAI_BASE_URL", "https://my-resource.services.ai.azure.com");
-		let recorded = Arc::new(std::sync::Mutex::new(Vec::new()));
+		let recorded = Arc::new(parking_lot::Mutex::new(Vec::new()));
 		let mut options = crate::types::StreamOptions::default();
 		options.base.api_key = Some("test-key".to_string());
 		options.base.fetch = Some(completions_fetch(recorded.clone()));
@@ -426,7 +426,7 @@ mod tests {
 		let _guard = env_lock();
 		clear_relevant_env();
 		std::env::set_var("AZURE_OPENAI_BASE_URL", "https://my-resource.services.ai.azure.com");
-		let recorded = Arc::new(std::sync::Mutex::new(Vec::new()));
+		let recorded = Arc::new(parking_lot::Mutex::new(Vec::new()));
 		let mut options = crate::types::StreamOptions::default();
 		options.base.api_key = Some("test-key".to_string());
 		options.base.fetch = Some(completions_fetch(recorded.clone()));
@@ -465,7 +465,7 @@ mod tests {
 		let _guard = env_lock();
 		clear_relevant_env();
 		std::env::set_var("AZURE_OPENAI_BASE_URL", "https://my-resource.services.ai.azure.com");
-		let recorded = Arc::new(std::sync::Mutex::new(Vec::new()));
+		let recorded = Arc::new(parking_lot::Mutex::new(Vec::new()));
 		let mut options = crate::types::StreamOptions::default();
 		options.base.api_key = Some("test-key".to_string());
 		options.base.fetch = Some(completions_fetch(recorded.clone()));
@@ -489,7 +489,7 @@ mod tests {
 		let _guard = env_lock();
 		clear_relevant_env();
 		std::env::set_var("AZURE_OPENAI_BASE_URL", "https://my-resource.services.ai.azure.com");
-		let recorded = Arc::new(std::sync::Mutex::new(Vec::new()));
+		let recorded = Arc::new(parking_lot::Mutex::new(Vec::new()));
 		let mut options = crate::types::StreamOptions::default();
 		options.base.api_key = Some("test-key".to_string());
 		options.base.fetch = Some(completions_fetch(recorded.clone()));
@@ -549,7 +549,7 @@ mod tests {
 		let _guard = env_lock();
 		clear_relevant_env();
 		std::env::set_var("AZURE_OPENAI_BASE_URL", "https://my-resource.services.ai.azure.com");
-		let recorded = Arc::new(std::sync::Mutex::new(Vec::new()));
+		let recorded = Arc::new(parking_lot::Mutex::new(Vec::new()));
 		let mut options = crate::types::StreamOptions::default();
 		options.base.api_key = Some("test-key".to_string());
 		options.base.fetch = Some(completions_fetch(recorded.clone()));
@@ -557,7 +557,7 @@ mod tests {
 		let result = azure().stream(&deepseek_model(), &context(), &options).into_result().await;
 		assert_eq!(result.stop_reason, StopReason::Stop, "error: {:?}", result.error_message);
 
-		let requests = recorded.lock().expect("lock");
+		let requests = recorded.lock();
 		// Upstream asserts the client's `baseURL`; the port asserts the wire
 		// URL the client builds from it.
 		assert_eq!(
@@ -570,7 +570,7 @@ mod tests {
 	async fn surfaces_an_unconfigured_endpoint_as_an_error_event() {
 		let _guard = env_lock();
 		clear_relevant_env();
-		let recorded = Arc::new(std::sync::Mutex::new(Vec::new()));
+		let recorded = Arc::new(parking_lot::Mutex::new(Vec::new()));
 		let mut options = crate::types::StreamOptions::default();
 		options.base.api_key = Some("test-key".to_string());
 		options.base.fetch = Some(completions_fetch(recorded));
@@ -587,7 +587,7 @@ mod tests {
 		let _guard = env_lock();
 		clear_relevant_env();
 		std::env::set_var("AZURE_OPENAI_BASE_URL", "https://my-resource.services.ai.azure.com");
-		let recorded = Arc::new(std::sync::Mutex::new(Vec::new()));
+		let recorded = Arc::new(parking_lot::Mutex::new(Vec::new()));
 		let mut options = crate::types::StreamOptions::default();
 		options.base.api_key = Some("test-key".to_string());
 		options.base.fetch = Some(completions_fetch(recorded.clone()));
@@ -605,7 +605,7 @@ mod tests {
 		clear_relevant_env();
 		std::env::set_var("AZURE_OPENAI_BASE_URL", "https://my-resource.services.ai.azure.com");
 		std::env::set_var("AZURE_OPENAI_DEPLOYMENT_NAME_MAP", "deepseek-v4-pro=my-deepseek");
-		let recorded = Arc::new(std::sync::Mutex::new(Vec::new()));
+		let recorded = Arc::new(parking_lot::Mutex::new(Vec::new()));
 		let mut options = crate::types::SimpleStreamOptions::default();
 		options.base.base.api_key = Some("test-key".to_string());
 		options.base.base.fetch = Some(completions_fetch(recorded.clone()));
@@ -627,8 +627,8 @@ mod tests {
 		std::env::set_var("AZURE_OPENAI_BASE_URL", "https://my-resource.services.ai.azure.com");
 		std::env::set_var("AZURE_OPENAI_DEPLOYMENT_NAME_MAP", "deepseek-v4-pro=my-deepseek");
 
-		let recorded = Arc::new(std::sync::Mutex::new(Vec::new()));
-		let seen_model = Arc::new(std::sync::Mutex::new(None::<String>));
+		let recorded = Arc::new(parking_lot::Mutex::new(Vec::new()));
+		let seen_model = Arc::new(parking_lot::Mutex::new(None::<String>));
 		let hook_seen = seen_model.clone();
 		let mut options = crate::types::StreamOptions::default();
 		options.base.api_key = Some("test-key".to_string());
@@ -636,7 +636,7 @@ mod tests {
 		options.base.on_payload = Some(Arc::new(move |payload: Value, _model: Model| {
 			let hook_seen = hook_seen.clone();
 			Box::pin(async move {
-				*hook_seen.lock().expect("lock") = payload.get("model").and_then(Value::as_str).map(str::to_string);
+				*hook_seen.lock() = payload.get("model").and_then(Value::as_str).map(str::to_string);
 				let mut modified = payload;
 				if let Value::Object(map) = &mut modified {
 					map.insert("temperature".to_string(), json!(0.1));
@@ -648,7 +648,7 @@ mod tests {
 		let result = azure().stream(&deepseek_model(), &context(), &options).into_result().await;
 		assert_eq!(result.stop_reason, StopReason::Stop, "error: {:?}", result.error_message);
 
-		assert_eq!(seen_model.lock().expect("lock").as_deref(), Some("my-deepseek"));
+		assert_eq!(seen_model.lock().as_deref(), Some("my-deepseek"));
 		let params = last_params(&recorded);
 		assert_eq!(params["model"], "my-deepseek");
 		assert_eq!(params["temperature"], 0.1);
@@ -661,7 +661,7 @@ mod tests {
 		let _guard = env_lock();
 		clear_relevant_env();
 		std::env::set_var("AZURE_OPENAI_BASE_URL", "https://my-resource.services.ai.azure.com");
-		let recorded = Arc::new(std::sync::Mutex::new(Vec::new()));
+		let recorded = Arc::new(parking_lot::Mutex::new(Vec::new()));
 		let mut options = crate::types::StreamOptions::default();
 		options.base.api_key = Some("test-key".to_string());
 		options.base.fetch = Some(responses_fetch(recorded.clone()));
@@ -674,7 +674,7 @@ mod tests {
 
 		// Upstream asserts `dispatchedTo === "responses"`.
 		assert!(
-			recorded.lock().expect("lock").last().expect("request").url.contains("/responses"),
+			recorded.lock().last().expect("request").url.contains("/responses"),
 			"expected a responses dispatch"
 		);
 	}
@@ -684,7 +684,7 @@ mod tests {
 		let _guard = env_lock();
 		clear_relevant_env();
 		std::env::set_var("AZURE_OPENAI_BASE_URL", "https://my-resource.services.ai.azure.com");
-		let recorded = Arc::new(std::sync::Mutex::new(Vec::new()));
+		let recorded = Arc::new(parking_lot::Mutex::new(Vec::new()));
 		let mut options = crate::types::StreamOptions::default();
 		options.base.api_key = Some("test-key".to_string());
 		options.base.fetch = Some(completions_fetch(recorded.clone()));
@@ -694,7 +694,7 @@ mod tests {
 
 		// Upstream asserts `dispatchedTo === "chat.completions"`.
 		assert!(
-			recorded.lock().expect("lock").last().expect("request").url.contains("/chat/completions"),
+			recorded.lock().last().expect("request").url.contains("/chat/completions"),
 			"expected a chat completions dispatch"
 		);
 	}

@@ -879,7 +879,7 @@ mod tests {
 		BaseModelFields, Context, ModelCost, ModelCostRates, StopReason, ToolChoice,
 		UserContentField, UserMessage,
 	};
-	use std::sync::Mutex;
+	use parking_lot::Mutex;
 
 	fn test_model(base_url: &str) -> Model {
 		Model {
@@ -955,7 +955,7 @@ mod tests {
 				HttpBody::Bytes(bytes) => String::from_utf8_lossy(bytes).to_string(),
 				_ => String::new(),
 			};
-			requests.lock().expect("lock").push(RecordedRequest {
+			requests.lock().push(RecordedRequest {
 				url: request.url.clone(),
 				headers: request.headers.clone(),
 				body: serde_json::from_str(&request_body).unwrap_or(Value::Null),
@@ -1035,7 +1035,7 @@ mod tests {
 			])
 		);
 
-		let recorded = requests.lock().expect("lock");
+		let recorded = requests.lock();
 		assert_eq!(recorded.len(), 1);
 		let request = &recorded[0];
 		assert_eq!(request.url, "http://127.0.0.1:9/v1/messages");
@@ -1091,10 +1091,9 @@ mod tests {
 			let hook_models = hook_models.clone();
 			let hook_model = hook_model.clone();
 			Box::pin(async move {
-				hook_received.lock().expect("lock").push(event);
+				hook_received.lock().push(event);
 				hook_models
 					.lock()
-					.expect("lock")
 					.push((event_model.provider().to_string(), event_model.id().to_string()));
 				let _ = &hook_model;
 			})
@@ -1104,8 +1103,8 @@ mod tests {
 			.into_result()
 			.await;
 
-		assert_eq!(*received.lock().expect("lock"), wire_events);
-		let models = event_models.lock().expect("lock").clone();
+		assert_eq!(*received.lock(), wire_events);
+		let models = event_models.lock().clone();
 		assert!(models.iter().all(|(provider, id)| provider == "radius" && id == "auto"));
 		assert_eq!(message.stop_reason, StopReason::Stop);
 		assert_eq!(message.response_id.as_deref(), Some("resp_1"));
@@ -1131,7 +1130,7 @@ mod tests {
 		base.base.base.on_response = Some(Arc::new(move |response: crate::types::ProviderResponse, _model: Model| {
 			let hook_headers = hook_headers.clone();
 			Box::pin(async move {
-				*hook_headers.lock().expect("lock") = Some(response.headers);
+				*hook_headers.lock() = Some(response.headers);
 			})
 		}));
 		let pi = PiMessagesApiOptions { debug: true, ..Default::default() };
@@ -1141,9 +1140,9 @@ mod tests {
 			.await;
 
 		assert_eq!(message.stop_reason, StopReason::Stop);
-		let recorded = requests.lock().expect("lock");
+		let recorded = requests.lock();
 		assert_eq!(recorded[0].url, "http://127.0.0.1:9/v1/messages?debug=1");
-		let headers = observed_headers.lock().expect("lock").clone().expect("onResponse ran");
+		let headers = observed_headers.lock().clone().expect("onResponse ran");
 		// The fake server sends only content-type; the hook observed it.
 		assert_eq!(headers.get("content-type").map(String::as_str), Some("text/event-stream"));
 	}

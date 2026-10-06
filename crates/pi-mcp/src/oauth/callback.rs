@@ -79,7 +79,7 @@ struct PendingCallback {
 }
 
 struct CallbackState {
-	pending: std::sync::Mutex<HashMap<String, PendingCallback>>,
+	pending: parking_lot::Mutex<HashMap<String, PendingCallback>>,
 	paths: Vec<String>,
 	render_page: Option<RenderPage>,
 	timeout_ms: u64,
@@ -116,7 +116,7 @@ impl OAuthCallbackServer {
 		};
 		let redirect_url = format!("http://{host_in_url}:{port}{path}");
 		let state = Arc::new(CallbackState {
-			pending: std::sync::Mutex::new(HashMap::new()),
+			pending: parking_lot::Mutex::new(HashMap::new()),
 			paths: [vec![path], options.extra_paths].concat(),
 			render_page: options.render_page,
 			timeout_ms: options.timeout_ms.unwrap_or(5 * 60_000),
@@ -155,7 +155,7 @@ impl OAuthCallbackServer {
 	) -> Result<OAuthCallback, McpError> {
 		let (tx, rx) = tokio::sync::oneshot::channel();
 		{
-			let mut pending = self.state.pending.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+			let mut pending = self.state.pending.lock();
 			if pending.contains_key(state) {
 				return Err(McpError::other("OAuth state is already pending"));
 			}
@@ -173,7 +173,7 @@ impl OAuthCallbackServer {
 			let mut pending = pending_state
 				.pending
 				.lock()
-				.unwrap_or_else(std::sync::PoisonError::into_inner);
+				;
 			if let Some(waiter) = pending.remove(&state_key) {
 				let _ = waiter.tx.send(Err(McpError::other("OAuth callback timed out")));
 			}
@@ -187,7 +187,7 @@ impl OAuthCallbackServer {
 
 	pub async fn close(self: Arc<Self>) -> Result<(), McpError> {
 		{
-			let mut pending = self.state.pending.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+			let mut pending = self.state.pending.lock();
 			for (_, waiter) in pending.drain() {
 				let _ = waiter.tx.send(Err(McpError::other("OAuth callback server closed")));
 			}
@@ -269,7 +269,7 @@ fn handle_request(state: Arc<CallbackState>, target: &str) -> (u16, &'static str
 		state
 			.pending
 			.lock()
-			.unwrap_or_else(std::sync::PoisonError::into_inner)
+			
 			.remove(state_key)
 	});
 	let (Some(query_state), Some(pending)) = (query_state, pending) else {

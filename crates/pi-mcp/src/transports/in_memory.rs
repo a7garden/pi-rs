@@ -1,7 +1,7 @@
 //! Port of `packages/mcp/src/transports/in-memory.ts`.
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Mutex;
+use parking_lot::Mutex;
 
 use async_trait::async_trait;
 
@@ -46,8 +46,8 @@ impl InMemoryTransport {
 		Ok(())
 	}
 
-	fn lock(&self) -> std::sync::MutexGuard<'_, PeerState> {
-		self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+	fn lock(&self) -> parking_lot::MutexGuard<'_, PeerState> {
+		self.state.lock()
 	}
 
 	fn closed(&self) -> bool {

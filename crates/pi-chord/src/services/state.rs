@@ -37,7 +37,8 @@ use std::any::Any;
 use std::cell::UnsafeCell;
 use std::collections::VecDeque;
 use std::panic::{catch_unwind, AssertUnwindSafe};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc};
+use {parking_lot::Mutex, parking_lot::MutexGuard};
 use std::task::{Context as TaskContext, Poll};
 
 use futures::FutureExt;
@@ -88,7 +89,7 @@ impl Committed {
     }
 
     fn write_lock(&self) -> MutexGuard<'_, ()> {
-        self.write.lock().unwrap_or_else(PoisonError::into_inner)
+        self.write.lock()
     }
 
     fn get(&self) -> Option<&JsonValue> {
@@ -104,7 +105,7 @@ impl Committed {
         // SAFETY: exclusive access under `write`.
         let old = std::mem::replace(unsafe { &mut *self.cell.get() }, value.map(Box::new));
         if let Some(old) = old {
-            self.retired.lock().unwrap_or_else(PoisonError::into_inner).push(old);
+            self.retired.lock().push(old);
         }
     }
 }
@@ -176,7 +177,7 @@ struct SubscriberState {
 type Subscriber = Arc<Mutex<SubscriberState>>;
 
 fn subscriber_lock(subscriber: &Subscriber) -> MutexGuard<'_, SubscriberState> {
-    subscriber.lock().unwrap_or_else(PoisonError::into_inner)
+    subscriber.lock()
 }
 
 fn subscriber_new(listener: StateListener, report_error: ReportError) -> Subscriber {
@@ -321,7 +322,7 @@ struct PublisherState {
 struct Publisher(Arc<Mutex<PublisherState>>);
 
 fn publisher_lock(state: &Arc<Mutex<PublisherState>>) -> MutexGuard<'_, PublisherState> {
-    state.lock().unwrap_or_else(PoisonError::into_inner)
+    state.lock()
 }
 
 impl Publisher {
@@ -508,7 +509,7 @@ impl MutableReplicatedState {
             return Err(error("Replicated state cannot be changed reentrantly from a change callback"));
         }
         let revision: Result<Option<(JsonValue, Vec<Op>)>, AnyError> = (|| {
-            let mut tracker = self.tracker.lock().unwrap_or_else(PoisonError::into_inner);
+            let mut tracker = self.tracker.lock();
             let mut change = tracker.begin_change();
             if let Err(err) = mutate(&mut change.state()) {
                 change.abort();
@@ -539,7 +540,7 @@ impl MutableReplicatedState {
             return Err(error("Replicated state cannot be replaced from a change callback"));
         }
         let revision = (|| -> Result<Option<(JsonValue, Vec<Op>)>, AnyError> {
-            let mut tracker = self.tracker.lock().unwrap_or_else(PoisonError::into_inner);
+            let mut tracker = self.tracker.lock();
             let mut prepared = tracker.prepare_replace(value).map_err(AnyError::from)?;
             let payload = if prepared.ops.is_empty() {
                 None
@@ -673,7 +674,7 @@ impl AttachedReplicatedState {
         let outcome = catch_unwind(AssertUnwindSafe(|| -> Result<(), AnyError> {
             assert_cursor(frame.cursor, "frame");
             let expected = {
-                let mut cursor = self.cursor.lock().unwrap_or_else(PoisonError::into_inner);
+                let mut cursor = self.cursor.lock();
                 let expected = *cursor + 1;
                 *cursor = frame.cursor;
                 expected
@@ -787,10 +788,10 @@ impl ReplicatedStateReplica {
 
     pub fn subscribe(&self, listener: StateListener) -> Unsubscribe {
         let subscriber = {
-            let mut listeners = self.listeners.lock().unwrap_or_else(PoisonError::into_inner);
+            let mut listeners = self.listeners.lock();
             let subscriber = subscriber_new(listener, self.report_error.clone());
             if let Some(value) = self.committed.get() {
-                let sequence = self.sequence.lock().unwrap_or_else(PoisonError::into_inner).expect("value implies sequence");
+                let sequence = self.sequence.lock().expect("value implies sequence");
                 subscriber_push(
                     &subscriber,
                     StateDeliveryFrame {
@@ -812,7 +813,7 @@ impl ReplicatedStateReplica {
             subscriber_close(&subscriber);
             listeners
                 .lock()
-                .unwrap_or_else(PoisonError::into_inner)
+                
                 .retain(|existing| !Arc::ptr_eq(existing, &subscriber));
         })
     }
@@ -829,7 +830,7 @@ impl ReplicatedStateReplica {
             Ok(self
                 .validator
                 .lock()
-                .unwrap_or_else(PoisonError::into_inner)
+                
                 .validate(applied))
         })();
         match next {
@@ -838,7 +839,7 @@ impl ReplicatedStateReplica {
                 Err(err)
             }
             Ok(next) => {
-                *self.sequence.lock().unwrap_or_else(PoisonError::into_inner) = Some(sequence);
+                *self.sequence.lock() = Some(sequence);
                 self.committed.set(Some(next));
                 self.deliver_all(
                     context,
@@ -854,7 +855,7 @@ impl ReplicatedStateReplica {
 
     /// Apply one sequenced update batch. Failures clear the replica.
     pub fn update(&self, sequence: u64, ops: &[Op], context: &Context) -> Result<(), AnyError> {
-        let current_sequence = *self.sequence.lock().unwrap_or_else(PoisonError::into_inner);
+        let current_sequence = *self.sequence.lock();
         let Some(current_sequence) = current_sequence else {
             return Err(error("Replicated state received an update before hydration"));
         };
@@ -871,7 +872,7 @@ impl ReplicatedStateReplica {
             Ok(self
                 .validator
                 .lock()
-                .unwrap_or_else(PoisonError::into_inner)
+                
                 .validate(applied))
         })();
         match applied {
@@ -880,7 +881,7 @@ impl ReplicatedStateReplica {
                 Err(err)
             }
             Ok(applied) => {
-                *self.sequence.lock().unwrap_or_else(PoisonError::into_inner) = Some(sequence);
+                *self.sequence.lock() = Some(sequence);
                 self.committed.set(Some(applied));
                 self.deliver_all(
                     context,
@@ -896,9 +897,9 @@ impl ReplicatedStateReplica {
 
     /// Drop the hydrated value and every queued delivery.
     pub fn clear(&self) {
-        *self.sequence.lock().unwrap_or_else(PoisonError::into_inner) = None;
+        *self.sequence.lock() = None;
         self.committed.set(None);
-        let listeners = self.listeners.lock().unwrap_or_else(PoisonError::into_inner).clone();
+        let listeners = self.listeners.lock().clone();
         for subscriber in listeners {
             subscriber_clear(&subscriber);
         }
@@ -906,7 +907,7 @@ impl ReplicatedStateReplica {
 
     fn deliver_all(&self, context: &Context, delivery: ReplicatedStateDelivery) {
         let Some(value) = self.committed.get() else { return };
-        let subscribers = self.listeners.lock().unwrap_or_else(PoisonError::into_inner).clone();
+        let subscribers = self.listeners.lock().clone();
         // Enqueue for everyone before user code can publish another revision
         // reentrantly.
         for subscriber in &subscribers {
@@ -1034,14 +1035,14 @@ mod tests {
     }
 
     fn snapshot_events<A: Clone>(events: &Events<A>) -> Vec<A> {
-        events.lock().unwrap_or_else(PoisonError::into_inner).clone()
+        events.lock().clone()
     }
 
     /// Error collectors snapshot as message strings (`AnyError` is not `Clone`).
     fn snapshot_errors(events: &Events<AnyError>) -> Vec<String> {
         events
             .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+            
             .iter()
             .map(ToString::to_string)
             .collect()
@@ -1054,7 +1055,7 @@ mod tests {
         Arc::new(move |value, _context, delivery| {
             received
                 .lock()
-                .unwrap_or_else(PoisonError::into_inner)
+                
                 .push((value.as_object().and_then(|o| o.get("value")).and_then(JsonValue::as_u64).unwrap_or(0), delivery.clone()));
             Box::pin(std::future::ready(()))
         })
@@ -1154,7 +1155,7 @@ mod tests {
                         .expect("listener-triggered change queues");
                     let late_sink = late_for_source.clone();
                     state_for_source.subscribe(Arc::new(move |_value, _context, delivery| {
-                        late_sink.lock().unwrap_or_else(PoisonError::into_inner).push(delivery.clone());
+                        late_sink.lock().push(delivery.clone());
                         Box::pin(std::future::ready(()))
                     }));
                 }
@@ -1163,14 +1164,14 @@ mod tests {
         state
             .internals()
             .subscribe(Arc::new(move |_operations, sequence, _context| {
-                source_sink.lock().unwrap_or_else(PoisonError::into_inner).push(sequence);
+                source_sink.lock().push(sequence);
             }));
         let update_sink = deliveries.clone();
         state.subscribe(Arc::new(move |value, _context, delivery| {
             if delivery.kind == ReplicatedStateDeliveryKind::Update {
                 update_sink
                     .lock()
-                    .unwrap_or_else(PoisonError::into_inner)
+                    
                     .push((value_of(value), delivery.sequence));
             }
             Box::pin(std::future::ready(()))
@@ -1198,7 +1199,7 @@ mod tests {
         state
             .internals()
             .subscribe(Arc::new(move |_operations, sequence, _context| {
-                received_sink.lock().unwrap_or_else(PoisonError::into_inner).push(sequence);
+                received_sink.lock().push(sequence);
             }));
         let error = state
             .change(ctx(), |draft| draft.set(&[], "value", json!(1)).map_err(AnyError::from))
@@ -1255,7 +1256,7 @@ mod tests {
             .subscribe(Arc::new(move |operations, _sequence, _context| {
                 batches_sink
                     .lock()
-                    .unwrap_or_else(PoisonError::into_inner)
+                    
                     .push(serde_json::to_value(operations).expect("ops serialize"));
             }));
         state
@@ -1324,7 +1325,7 @@ mod tests {
         let errors = events::<AnyError>();
         let error_sink = errors.clone();
         let replica = ReplicatedStateReplica::new(Arc::new(move |error| {
-            error_sink.lock().unwrap_or_else(PoisonError::into_inner).push(error);
+            error_sink.lock().push(error);
         }));
         replica.hydrate(0, &ops(json!([["r", { "value": 0 }]])), ctx()).expect("hydrate succeeds");
         let failure = replica
@@ -1339,7 +1340,7 @@ mod tests {
 
         let error_sink2 = errors.clone();
         let malformed = ReplicatedStateReplica::new(Arc::new(move |error| {
-            error_sink2.lock().unwrap_or_else(PoisonError::into_inner).push(error);
+            error_sink2.lock().push(error);
         }));
         malformed
             .hydrate(0, &ops(json!([["r", { "values": [1, 2] }]])), ctx())
@@ -1390,26 +1391,26 @@ mod tests {
         }
 
         fn set_on_attach(&self, hook: impl Fn(&TestSource) + Send + Sync + 'static) {
-            *self.on_attach.lock().unwrap_or_else(PoisonError::into_inner) = Some(Box::new(hook));
+            *self.on_attach.lock() = Some(Box::new(hook));
         }
 
         fn commit(&self, value: JsonValue, ops_json: JsonValue, cursor: u64) {
-            *self.value.lock().unwrap_or_else(PoisonError::into_inner) = value.clone();
-            *self.cursor.lock().unwrap_or_else(PoisonError::into_inner) = cursor;
+            *self.value.lock() = value.clone();
+            *self.cursor.lock() = cursor;
             let frame = ReplicatedStateSourceFrame {
                 cursor,
                 value,
                 ops: ops(ops_json),
                 context: ctx().clone(),
             };
-            let attachments = self.attachments.lock().unwrap_or_else(PoisonError::into_inner).clone();
+            let attachments = self.attachments.lock().clone();
             for attachment in attachments {
                 attachment.publish(frame.clone());
             }
         }
 
         fn attachment_count(&self) -> usize {
-            self.attachments.lock().unwrap_or_else(PoisonError::into_inner).len()
+            self.attachments.lock().len()
         }
     }
 
@@ -1421,8 +1422,8 @@ mod tests {
             let inner = Arc::new(TestAttachmentInner {
                 id,
                 snapshot: Mutex::new(ReplicatedStateSourceSnapshot {
-                    value: self.value.lock().unwrap_or_else(PoisonError::into_inner).clone(),
-                    cursor: *self.cursor.lock().unwrap_or_else(PoisonError::into_inner),
+                    value: self.value.lock().clone(),
+                    cursor: *self.cursor.lock(),
                 }),
                 buffer: Mutex::new(Vec::new()),
                 listener: Mutex::new(None),
@@ -1432,9 +1433,9 @@ mod tests {
             });
             self.attachments
                 .lock()
-                .unwrap_or_else(PoisonError::into_inner)
+                
                 .push(inner.clone());
-            if let Some(hook) = self.on_attach.lock().unwrap_or_else(PoisonError::into_inner).as_ref() {
+            if let Some(hook) = self.on_attach.lock().as_ref() {
                 hook(&self);
             }
             Box::new(TestSourceAttachment { inner })
@@ -1475,13 +1476,13 @@ mod tests {
             if self.disposed.load(Ordering::Acquire) {
                 return;
             }
-            let listener = self.listener.lock().unwrap_or_else(PoisonError::into_inner).clone();
+            let listener = self.listener.lock().clone();
             match listener {
                 Some(listener) => listener(frame),
                 None => self
                     .buffer
                     .lock()
-                    .unwrap_or_else(PoisonError::into_inner)
+                    
                     .push(frame),
             }
         }
@@ -1489,7 +1490,7 @@ mod tests {
         fn snapshot(&self) -> ReplicatedStateSourceSnapshot {
             self.snapshot
                 .lock()
-                .unwrap_or_else(PoisonError::into_inner)
+                
                 .clone()
         }
 
@@ -1498,10 +1499,10 @@ mod tests {
             if self.activated.swap(true, Ordering::SeqCst) {
                 panic!("attachment is already active");
             }
-            *self.listener.lock().unwrap_or_else(PoisonError::into_inner) = Some(listener);
-            let buffered = std::mem::take(&mut *self.buffer.lock().unwrap_or_else(PoisonError::into_inner));
+            *self.listener.lock() = Some(listener);
+            let buffered = std::mem::take(&mut *self.buffer.lock());
             for frame in buffered {
-                (self.listener.lock().unwrap_or_else(PoisonError::into_inner).as_ref().expect("just set"))(frame);
+                (self.listener.lock().as_ref().expect("just set"))(frame);
             }
         }
 
@@ -1510,12 +1511,12 @@ mod tests {
             if self.disposed.swap(true, Ordering::SeqCst) {
                 return;
             }
-            self.buffer.lock().unwrap_or_else(PoisonError::into_inner).clear();
+            self.buffer.lock().clear();
             if let Some(source) = self.source.upgrade() {
                 source
                     .attachments
                     .lock()
-                    .unwrap_or_else(PoisonError::into_inner)
+                    
                     .retain(|attachment| attachment.id != self.id);
             }
         }
@@ -1585,14 +1586,14 @@ mod tests {
             .subscribe(Arc::new(move |received, _sequence, _context| {
                 published_ops_sink
                     .lock()
-                    .unwrap_or_else(PoisonError::into_inner)
+                    
                     .push(serde_json::to_value(received).expect("ops serialize"));
             }));
         let published_value = events::<JsonValue>();
         let published_value_sink = published_value.clone();
         state.subscribe(Arc::new(move |value, _context, delivery| {
             if delivery.kind == ReplicatedStateDeliveryKind::Update {
-                published_value_sink.lock().unwrap_or_else(PoisonError::into_inner).push(value.clone());
+                published_value_sink.lock().push(value.clone());
             }
             Box::pin(std::future::ready(()))
         }));
@@ -1631,7 +1632,7 @@ mod tests {
                 state_for_source.subscribe(Arc::new(move |value, _context, delivery| {
                     late_sink
                         .lock()
-                        .unwrap_or_else(PoisonError::into_inner)
+                        
                         .push((value_of(value), delivery.clone()));
                     Box::pin(std::future::ready(()))
                 }));
@@ -1639,7 +1640,7 @@ mod tests {
         let state_sink = received_sink.clone();
         state.subscribe(Arc::new(move |value, _context, delivery| {
             if delivery.kind == ReplicatedStateDeliveryKind::Update {
-                state_sink.lock().unwrap_or_else(PoisonError::into_inner).push(value_of(value));
+                state_sink.lock().push(value_of(value));
             }
             Box::pin(std::future::ready(()))
         }));
@@ -1662,7 +1663,7 @@ mod tests {
             source.clone(),
             ReplicatedStateSourceOptions {
                 on_error: Some(Arc::new(move |error| {
-                    error_sink.lock().unwrap_or_else(PoisonError::into_inner).push(error);
+                    error_sink.lock().push(error);
                 })),
             },
         )
@@ -1681,7 +1682,7 @@ mod tests {
         let second_sink = second.clone();
         state.subscribe(Arc::new(move |value, _context, delivery| {
             if delivery.kind == ReplicatedStateDeliveryKind::Update {
-                second_sink.lock().unwrap_or_else(PoisonError::into_inner).push(value_of(value));
+                second_sink.lock().push(value_of(value));
             }
             Box::pin(std::future::ready(()))
         }));
@@ -1706,7 +1707,7 @@ mod tests {
             source.clone(),
             ReplicatedStateSourceOptions {
                 on_error: Some(Arc::new(move |error| {
-                    error_sink.lock().unwrap_or_else(PoisonError::into_inner).push(error);
+                    error_sink.lock().push(error);
                 })),
             },
         )
@@ -1770,13 +1771,13 @@ mod tests {
             if self.disposed.load(Ordering::Acquire) {
                 return;
             }
-            let listener = self.listener.lock().unwrap_or_else(PoisonError::into_inner).clone();
+            let listener = self.listener.lock().clone();
             match listener {
                 Some(listener) => listener(frame),
                 None => self
                     .buffer
                     .lock()
-                    .unwrap_or_else(PoisonError::into_inner)
+                    
                     .push(frame),
             }
         }
@@ -1814,15 +1815,15 @@ mod tests {
             }
             let drain_listener = listener.clone();
             let register_listener = listener.clone();
-            *self.listener.lock().unwrap_or_else(PoisonError::into_inner) = Some(listener);
-            let buffered = std::mem::take(&mut *self.buffer.lock().unwrap_or_else(PoisonError::into_inner));
+            *self.listener.lock() = Some(listener);
+            let buffered = std::mem::take(&mut *self.buffer.lock());
             for frame in buffered {
                 drain_listener(frame);
             }
             // Register with the live source so later commits are received.
             if let Some(source) = self.source.upgrade() {
-                let mut live = source.listener.lock().unwrap_or_else(PoisonError::into_inner);
-                let buffered = std::mem::take(&mut *source.buffer.lock().unwrap_or_else(PoisonError::into_inner));
+                let mut live = source.listener.lock();
+                let buffered = std::mem::take(&mut *source.buffer.lock());
                 *live = Some(register_listener.clone());
                 drop(live);
                 for frame in buffered {
@@ -1835,7 +1836,7 @@ mod tests {
             use std::sync::atomic::Ordering;
             if let Some(source) = self.source.upgrade() {
                 source.disposed.store(true, Ordering::Release);
-                source.listener.lock().unwrap_or_else(PoisonError::into_inner).take();
+                source.listener.lock().take();
             }
         }
     }
@@ -1922,7 +1923,7 @@ mod tests {
             if let Some(internals) = &fixture.internals {
                 let exact_sink = exact.clone();
                 internals.subscribe(Arc::new(move |_ops, sequence, _context| {
-                    exact_sink.lock().unwrap_or_else(PoisonError::into_inner).push(sequence);
+                    exact_sink.lock().push(sequence);
                 }));
             }
             let events_for_listener = delivery_events.clone();
@@ -1933,11 +1934,11 @@ mod tests {
                 let event_sink = events_for_listener.clone();
                 event_sink
                     .lock()
-                    .unwrap_or_else(PoisonError::into_inner)
+                    
                     .push(format!("start:{v}"));
                 let gate = match v {
-                    0 => hydration_rx.lock().unwrap_or_else(PoisonError::into_inner).take(),
-                    1 => update_rx.lock().unwrap_or_else(PoisonError::into_inner).take(),
+                    0 => hydration_rx.lock().take(),
+                    1 => update_rx.lock().take(),
                     _ => None,
                 };
                 match gate {
@@ -1945,13 +1946,13 @@ mod tests {
                         gate.await;
                         event_sink
                             .lock()
-                            .unwrap_or_else(PoisonError::into_inner)
+                            
                             .push(format!("end:{v}"));
                     }),
                     None => {
                         event_sink
                             .lock()
-                            .unwrap_or_else(PoisonError::into_inner)
+                            
                             .push(format!("end:{v}"));
                         Box::pin(std::future::ready(()))
                     }
@@ -1960,7 +1961,7 @@ mod tests {
             let fast = events::<u64>();
             let fast_sink = fast.clone();
             fixture.state.subscribe(Arc::new(move |value, _context, _delivery| {
-                fast_sink.lock().unwrap_or_else(PoisonError::into_inner).push(value_of(value));
+                fast_sink.lock().push(value_of(value));
                 Box::pin(std::future::ready(()))
             }));
             (fixture.publish)(1, ctx());
@@ -2005,17 +2006,17 @@ mod tests {
                 if let Some(internals) = &fixture.internals {
                     let exact_sink = exact.clone();
                     internals.subscribe(Arc::new(move |_ops, sequence, _context| {
-                        exact_sink.lock().unwrap_or_else(PoisonError::into_inner).push(sequence);
+                        exact_sink.lock().push(sequence);
                     }));
                 }
                 let received_sink = received.clone();
                 let hydration_rx = Mutex::new(Some(hydration.receiver("hydration rejected")));
                 fixture.state.subscribe(Arc::new(move |value, _context, _delivery| {
                     let v = value_of(value);
-                    received_sink.lock().unwrap_or_else(PoisonError::into_inner).push(v);
+                    received_sink.lock().push(v);
                     match v {
                         0 => {
-                            let gate = hydration_rx.lock().unwrap_or_else(PoisonError::into_inner).take();
+                            let gate = hydration_rx.lock().take();
                             match gate {
                                 Some(gate) => Box::pin(gate),
                                 None => Box::pin(std::future::ready(())),
@@ -2059,11 +2060,11 @@ mod tests {
                 let marker = context.value(&marker_key_for_listener);
                 received_sink
                     .lock()
-                    .unwrap_or_else(PoisonError::into_inner)
+                    
                     .push((v, marker, delivery.clone()));
                 match v {
                     1 => {
-                        let gate = gate_rx.lock().unwrap_or_else(PoisonError::into_inner).take();
+                        let gate = gate_rx.lock().take();
                         match gate {
                             Some(gate) => Box::pin(gate),
                             None => Box::pin(std::future::ready(())),
@@ -2113,14 +2114,14 @@ mod tests {
                 let events = events_for_listener.clone();
                 events
                     .lock()
-                    .unwrap_or_else(PoisonError::into_inner)
+                    
                     .push(format!("start:{v}"));
                 if v < 2 {
                     publisher(v + 1, context);
                 }
                 events
                     .lock()
-                    .unwrap_or_else(PoisonError::into_inner)
+                    
                     .push(format!("end:{v}"));
                 Box::pin(std::future::ready(()))
             }));
@@ -2150,10 +2151,10 @@ mod tests {
             let gate_rx = Mutex::new(Some(gate.receiver("gate rejected")));
             let listener: StateListener = Arc::new(move |value, _context, _delivery| {
                 let v = value_of(value);
-                received_sink.lock().unwrap_or_else(PoisonError::into_inner).push(v);
+                received_sink.lock().push(v);
                 match v {
                     0 => {
-                        let gate = gate_rx.lock().unwrap_or_else(PoisonError::into_inner).take();
+                        let gate = gate_rx.lock().take();
                         match gate {
                             Some(gate) => Box::pin(gate),
                             None => Box::pin(std::future::ready(())),
@@ -2188,10 +2189,10 @@ mod tests {
             let gate_rx = Mutex::new(Some(gate.receiver("gate rejected")));
             let stop = fixture.state.subscribe(Arc::new(move |value, _context, _delivery| {
                 let v = value_of(value);
-                received_sink.lock().unwrap_or_else(PoisonError::into_inner).push(v);
+                received_sink.lock().push(v);
                 match v {
                     1 => {
-                        let gate = gate_rx.lock().unwrap_or_else(PoisonError::into_inner).take();
+                        let gate = gate_rx.lock().take();
                         let completed_flag = completed_flag.clone();
                         Box::pin(async move {
                             gate.expect("gate present").await;
@@ -2221,13 +2222,13 @@ mod tests {
             let errors = events::<AnyError>();
             let error_sink = errors.clone();
             let fixture = fixture(kind, Arc::new(move |error| {
-                error_sink.lock().unwrap_or_else(PoisonError::into_inner).push(error);
+                error_sink.lock().push(error);
             }));
             let received = events::<u64>();
             let received_sink = received.clone();
             fixture.state.subscribe(Arc::new(move |value, _context, _delivery| {
                 let v = value_of(value);
-                received_sink.lock().unwrap_or_else(PoisonError::into_inner).push(v);
+                received_sink.lock().push(v);
                 if v == 0 {
                     panic!("sync hydration");
                 }
@@ -2248,7 +2249,7 @@ mod tests {
             let errors = events::<AnyError>();
             let error_sink = errors.clone();
             let fixture = fixture(kind, Arc::new(move |error| {
-                error_sink.lock().unwrap_or_else(PoisonError::into_inner).push(error);
+                error_sink.lock().push(error);
             }));
             let received = events::<u64>();
             let fast = events::<u64>();
@@ -2257,10 +2258,10 @@ mod tests {
             let update_rx = Mutex::new(Some(Deferred::new().receiver("async update")));
             fixture.state.subscribe(Arc::new(move |value, _context, _delivery| {
                 let v = value_of(value);
-                received_sink.lock().unwrap_or_else(PoisonError::into_inner).push(v);
+                received_sink.lock().push(v);
                 match v {
                     0 => {
-                        let gate = gate_rx.lock().unwrap_or_else(PoisonError::into_inner).take();
+                        let gate = gate_rx.lock().take();
                         match gate {
                             Some(gate) => Box::pin(gate),
                             None => Box::pin(std::future::ready(())),
@@ -2268,7 +2269,7 @@ mod tests {
                     }
                     1 => panic!("sync update"),
                     2 => {
-                        let update = update_rx.lock().unwrap_or_else(PoisonError::into_inner).take();
+                        let update = update_rx.lock().take();
                         match update {
                             Some(update) => Box::pin(update),
                             None => Box::pin(std::future::ready(())),
@@ -2279,7 +2280,7 @@ mod tests {
             }));
             let fast_sink = fast.clone();
             fixture.state.subscribe(Arc::new(move |value, _context, _delivery| {
-                fast_sink.lock().unwrap_or_else(PoisonError::into_inner).push(value_of(value));
+                fast_sink.lock().push(value_of(value));
                 Box::pin(std::future::ready(()))
             }));
             for value in 1..=3u64 {
@@ -2309,15 +2310,15 @@ mod tests {
             let errors = events::<AnyError>();
             let error_sink = errors.clone();
             let fixture = fixture(kind, Arc::new(move |error| {
-                error_sink.lock().unwrap_or_else(PoisonError::into_inner).push(error);
+                error_sink.lock().push(error);
             }));
             let received = events::<u64>();
             let received_sink = received.clone();
             let gate_rx = Mutex::new(Some(gate.receiver("stopped callback")));
             let stop = fixture.state.subscribe(Arc::new(move |value, _context, _delivery| {
                 let v = value_of(value);
-                received_sink.lock().unwrap_or_else(PoisonError::into_inner).push(v);
-                let gate = gate_rx.lock().unwrap_or_else(PoisonError::into_inner).take();
+                received_sink.lock().push(v);
+                let gate = gate_rx.lock().take();
                 match gate {
                     Some(gate) => Box::pin(gate),
                     None => Box::pin(std::future::ready(())),
@@ -2343,7 +2344,7 @@ mod tests {
         let received_sink = received.clone();
         state.subscribe(Arc::new(move |value, _context, _delivery| {
             let v = value_of(value);
-            received_sink.lock().unwrap_or_else(PoisonError::into_inner).push(v);
+            received_sink.lock().push(v);
             if v == 0 {
                 Box::pin(async { panic!("async mutable hydration") })
             } else {
@@ -2366,11 +2367,11 @@ mod tests {
         replica.subscribe(Arc::new(move |_value, _context, delivery| {
             received_sink
                 .lock()
-                .unwrap_or_else(PoisonError::into_inner)
+                
                 .push(delivery.clone());
             match delivery.sequence {
                 0 => {
-                    let gate = gate_rx.lock().unwrap_or_else(PoisonError::into_inner).take();
+                    let gate = gate_rx.lock().take();
                     match gate {
                         Some(gate) => Box::pin(gate),
                         None => Box::pin(std::future::ready(())),
@@ -2420,7 +2421,7 @@ mod tests {
         replica.subscribe(Arc::new(move |_value, _context, delivery| {
             second_sink
                 .lock()
-                .unwrap_or_else(PoisonError::into_inner)
+                
                 .push(delivery.clone());
             Box::pin(std::future::ready(()))
         }));

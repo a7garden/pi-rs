@@ -139,9 +139,9 @@ async fn start_callback_server(
 
 	let (result_tx, result_rx) =
 		tokio::sync::oneshot::channel::<Result<AuthorizationResult, ThrownValue>>();
-	let result_tx = std::sync::Arc::new(std::sync::Mutex::new(Some(result_tx)));
+	let result_tx = std::sync::Arc::new(parking_lot::Mutex::new(Some(result_tx)));
 	let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
-	let stop_tx = std::sync::Arc::new(std::sync::Mutex::new(Some(stop_tx)));
+	let stop_tx = std::sync::Arc::new(parking_lot::Mutex::new(Some(stop_tx)));
 
 	let accept_task = {
 		let listener = listener.clone();
@@ -175,7 +175,7 @@ async fn start_callback_server(
 							&oauth_error_html("ChatGPT was not connected.", Some(&format!("Error: {error}"))),
 						)
 						.await;
-						if let Some(sender) = result_tx.lock().unwrap().take() {
+						if let Some(sender) = result_tx.lock().take() {
 							let _ = sender.send(Err(ThrownValue::message(format!(
 								"ChatGPT authorization failed: {error}"
 							))));
@@ -192,7 +192,7 @@ async fn start_callback_server(
 								),
 							)
 							.await;
-							if let Some(sender) = result_tx.lock().unwrap().take() {
+							if let Some(sender) = result_tx.lock().take() {
 								let _ = sender.send(Ok(result));
 							}
 						}
@@ -214,14 +214,14 @@ struct CallbackServer {
 	accept_task: tokio::task::JoinHandle<()>,
 	result_rx: tokio::sync::oneshot::Receiver<Result<AuthorizationResult, ThrownValue>>,
 	/// Closing the server stops accepting (and drops the listener).
-	stop_tx: std::sync::Arc<std::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>>>>,
+	stop_tx: std::sync::Arc<parking_lot::Mutex<Option<tokio::sync::oneshot::Sender<()>>>>,
 }
 
 impl CallbackServer {
 	fn close(self) {
 		// Dropping the listener stops accepting; in-flight handler tasks end
 		// after their single response (deviation D27 — no spare connections).
-		if let Some(stop) = self.stop_tx.lock().unwrap().take() {
+		if let Some(stop) = self.stop_tx.lock().take() {
 			let _ = stop.send(());
 		}
 		self.accept_task.abort();

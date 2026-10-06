@@ -8,7 +8,8 @@
 
 use std::collections::BTreeMap;
 use std::future::Future;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc};
+use {parking_lot::RwLock};
 
 use crate::models::ProviderImages;
 use crate::types::{AssistantImages, ImageModel, ImagesContext, ImagesOptions};
@@ -80,7 +81,7 @@ fn wrap_generate_images(api: String, generate_images: ImagesApiFunction) -> Imag
 /// same api id.
 pub fn register_images_api_provider(provider: ImagesApiProvider, source_id: Option<String>) {
 	let api = provider.api.clone();
-	registry().write().unwrap().insert(
+	registry().write().insert(
 		api.clone(),
 		RegisteredImagesApiProvider {
 			provider: Arc::new(FunctionProviderImages {
@@ -94,7 +95,7 @@ pub fn register_images_api_provider(provider: ImagesApiProvider, source_id: Opti
 
 /// Upstream `getImagesApiProvider`.
 pub fn get_images_api_provider(api: &str) -> Option<Arc<dyn ProviderImages>> {
-	registry().read().unwrap().get(api).map(|entry| entry.provider.clone())
+	registry().read().get(api).map(|entry| entry.provider.clone())
 }
 
 /// Upstream's synchronous `model.api !== api` guard, exposed to

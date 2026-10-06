@@ -159,7 +159,7 @@ mod tests {
 	// Port of test/cloudflare-workers-ai-system-one.test.ts. Runs the full
 	// stack — provider factory, Cloudflare env resolution and the models
 	// collection — like upstream.
-	use std::sync::Mutex;
+	use parking_lot::Mutex;
 
 	use super::*;
 	use crate::http::{FetchFn, HttpBody, HttpRequest, HttpResponse};
@@ -266,7 +266,7 @@ mod tests {
 
 	fn recording_fetch(response: Value, requests: Arc<Mutex<Vec<HttpRequest>>>) -> FetchFn {
 		FetchFn::new(move |request: HttpRequest| {
-			requests.lock().expect("requests lock").push(request);
+			requests.lock().push(request);
 			let prepared = HttpResponse {
 				status: 200,
 				headers: vec![("content-type".to_string(), "application/json".to_string())],
@@ -319,7 +319,7 @@ mod tests {
 
 		let result = models.classify(&jev, &context(), Some(classify_options(&auth(), fetch))).await;
 
-		let captured = requests.lock().expect("requests lock");
+		let captured = requests.lock();
 		assert_eq!(captured.len(), 1);
 		assert_eq!(
 			captured[0].url,
@@ -377,7 +377,7 @@ mod tests {
 
 			let result = models.classify(&clef, &context(), Some(classify_options(&auth(), fetch))).await;
 
-			let captured = requests.lock().expect("requests lock");
+			let captured = requests.lock();
 			assert_eq!(captured.len(), 1);
 			assert_eq!(
 				captured[0].url,

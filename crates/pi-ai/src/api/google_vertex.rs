@@ -1070,7 +1070,8 @@ mod tests {
 	use crate::types::{Context, ThinkingBudgets, UserContentField, UserMessage};
 	use serde_json::{json, Value};
 	use std::sync::atomic::{AtomicU32, Ordering as AtomicOrdering};
-	use std::sync::{Arc, LazyLock, Mutex};
+	use std::sync::{Arc, LazyLock};
+	use {parking_lot::Mutex};
 
 	fn catalog_model(id: &str) -> Model {
 		crate::providers::google_vertex_models::google_vertex_models()
@@ -1205,7 +1206,7 @@ mod tests {
 				HttpBody::Bytes(bytes) => String::from_utf8_lossy(bytes).to_string(),
 				_ => String::new(),
 			};
-			recorded.lock().expect("lock").push(json!({
+			recorded.lock().push(json!({
 				"url": request.url,
 				"headers": request.headers.iter().cloned().collect::<Vec<_>>(),
 				"body": serde_json::from_str::<Value>(&request_body).ok(),
@@ -1283,7 +1284,7 @@ mod tests {
 			run_vertex_stream(&model, options, &vertex, Some("<authenticated>"), Some(adc_env(&credentials))).await;
 
 		assert_eq!(result.stop_reason, StopReason::Stop, "error: {:?}", result.error_message);
-		let requests = recorded.lock().expect("lock").clone();
+		let requests = recorded.lock().clone();
 		assert_eq!(requests.len(), 2, "token exchange + model request: {requests:?}");
 		let token_request = &requests[0];
 		assert!(token_request["url"].as_str().expect("url").contains("oauth2.googleapis.com/token"));
@@ -1312,7 +1313,7 @@ mod tests {
 		.await;
 
 		assert_eq!(result.stop_reason, StopReason::Stop, "error: {:?}", result.error_message);
-		let requests = recorded.lock().expect("lock").clone();
+		let requests = recorded.lock().clone();
 		assert_eq!(requests.len(), 2);
 		let model_request = &requests[1];
 		assert!(model_request["url"]
@@ -1334,7 +1335,7 @@ mod tests {
 		let (result, recorded) = run_vertex_stream(&model, options, &vertex, None, Some(env)).await;
 
 		assert_eq!(result.stop_reason, StopReason::Stop, "error: {:?}", result.error_message);
-		let requests = recorded.lock().expect("lock").clone();
+		let requests = recorded.lock().clone();
 		assert_eq!(requests.len(), 2);
 		let model_request = &requests[1];
 		assert!(model_request["url"]
@@ -1359,7 +1360,7 @@ mod tests {
 		.await;
 
 		assert_eq!(result.stop_reason, StopReason::Stop, "error: {:?}", result.error_message);
-		let requests = recorded.lock().expect("lock").clone();
+		let requests = recorded.lock().clone();
 		assert_eq!(requests.len(), 1, "no token exchange for API-key clients");
 		let request = &requests[0];
 		let url = request["url"].as_str().expect("url");
@@ -1381,7 +1382,7 @@ mod tests {
 			run_vertex_stream(&model, options, &vertex, None, Some(adc_env(&credentials))).await;
 
 		assert_eq!(result.stop_reason, StopReason::Stop, "error: {:?}", result.error_message);
-		let requests = recorded.lock().expect("lock").clone();
+		let requests = recorded.lock().clone();
 		let model_request = &requests[1];
 		let url = model_request["url"].as_str().expect("url");
 		assert!(url.starts_with("https://us-central1-aiplatform.googleapis.com/v1/"));
@@ -1401,7 +1402,7 @@ mod tests {
 			run_vertex_stream(&model, options, &vertex, None, Some(adc_env(&credentials))).await;
 
 		assert_eq!(result.stop_reason, StopReason::Stop, "error: {:?}", result.error_message);
-		let requests = recorded.lock().expect("lock").clone();
+		let requests = recorded.lock().clone();
 		let model_request = &requests[1];
 		assert_eq!(header_value(model_request, "User-Agent"), Some("custom-agent"));
 	}
@@ -1416,7 +1417,7 @@ mod tests {
 			run_vertex_stream(&model, options, &vertex, None, Some(adc_env(&credentials))).await;
 
 		assert_eq!(result.stop_reason, StopReason::Stop, "error: {:?}", result.error_message);
-		let requests = recorded.lock().expect("lock").clone();
+		let requests = recorded.lock().clone();
 		assert_eq!(requests.len(), 2);
 		let model_request = &requests[1];
 		let url = model_request["url"].as_str().expect("url");
@@ -1443,7 +1444,7 @@ mod tests {
 		.await;
 
 		assert_eq!(result.stop_reason, StopReason::Stop, "error: {:?}", result.error_message);
-		let requests = recorded.lock().expect("lock").clone();
+		let requests = recorded.lock().clone();
 		assert_eq!(requests.len(), 1);
 		let request = &requests[0];
 		assert_eq!(
@@ -1466,7 +1467,7 @@ mod tests {
 			run_vertex_stream(&model, options, &vertex, None, Some(adc_env(&credentials))).await;
 
 		assert_eq!(result.stop_reason, StopReason::Stop, "error: {:?}", result.error_message);
-		let requests = recorded.lock().expect("lock").clone();
+		let requests = recorded.lock().clone();
 		let model_request = &requests[1];
 		assert_eq!(
 			model_request["url"].as_str().expect("url"),
@@ -1574,10 +1575,9 @@ mod tests {
 			let hook_received = hook_received.clone();
 			let hook_models = hook_models.clone();
 			Box::pin(async move {
-				hook_received.lock().expect("lock").push(chunk);
+				hook_received.lock().push(chunk);
 				hook_models
 					.lock()
-					.expect("lock")
 					.push((event_model.provider().to_string(), event_model.id().to_string()));
 			})
 		}));
@@ -1588,8 +1588,8 @@ mod tests {
 		let result = stream_with_adc(&model, options, &vertex).into_result().await;
 
 		// Drop the token-exchange request; only stream chunks were hooked.
-		assert_eq!(*received.lock().expect("lock"), chunks);
-		let models = event_models.lock().expect("lock").clone();
+		assert_eq!(*received.lock(), chunks);
+		let models = event_models.lock().clone();
 		assert!(
 			models.iter().all(|(provider, id)| provider == "google-vertex" && id == model.id()),
 			"unexpected event models: {models:?}"
@@ -1628,7 +1628,7 @@ mod tests {
 		let result = stream_with_options(model, &hello_context(), &base, &vertex).into_result().await;
 		assert_eq!(result.stop_reason, StopReason::Stop, "error: {:?}", result.error_message);
 
-		let requests = recorded.lock().expect("lock").clone();
+		let requests = recorded.lock().clone();
 		let model_request = requests.iter().find(|request| !request["url"].as_str().expect("url").contains("oauth2")).expect("model request");
 		model_request.get("body").cloned().expect("payload captured")
 	}

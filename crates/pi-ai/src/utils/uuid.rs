@@ -1,6 +1,6 @@
 //! Port of `packages/ai/src/utils/uuid.ts`.
 
-use std::sync::Mutex;
+use parking_lot::Mutex;
 
 const MAX_UUID_V7_TIMESTAMP: u64 = 0xffff_ffff_ffff;
 
@@ -25,7 +25,7 @@ pub fn uuidv7(timestamp_ms: Option<u64>) -> Result<String, UuidError> {
 		return Err(UuidError::TimestampRange);
 	}
 
-	let mut state = GENERATOR.lock().expect("uuidv7 generator lock");
+	let mut state = GENERATOR.lock();
 	let effective_timestamp = match timestamp_ms {
 		Some(_) => requested_timestamp,
 		None => {

@@ -492,7 +492,7 @@ struct CodexEventMapping {
 /// to `response.completed` with a normalized `response.status`.
 fn decode_codex_events(
 	body: HttpBody,
-	mapping: Arc<std::sync::Mutex<CodexEventMapping>>,
+	mapping: Arc<parking_lot::Mutex<CodexEventMapping>>,
 ) -> Pin<Box<dyn futures_core::Stream<Item = Result<Value, ProviderHttpError>> + Send>> {
 	use futures_util::StreamExt;
 	let chunks: futures_core::stream::BoxStream<'static, Result<Vec<u8>, ProviderHttpError>> = match body {
@@ -560,7 +560,7 @@ fn decode_codex_events(
 }
 
 struct CodexEventMapper {
-	mapping: Arc<std::sync::Mutex<CodexEventMapping>>,
+	mapping: Arc<parking_lot::Mutex<CodexEventMapping>>,
 }
 
 impl CodexEventMapper {
@@ -588,7 +588,7 @@ impl CodexEventMapper {
 		if type_ == "response.done" || type_ == "response.completed" || type_ == "response.incomplete" {
 			let response = event.get("response").cloned();
 			if let Some(end_turn) = response.as_ref().and_then(|r| r.get("end_turn")).and_then(Value::as_bool) {
-				self.mapping.lock().unwrap_or_else(std::sync::PoisonError::into_inner).end_turn = Some(end_turn);
+				self.mapping.lock().end_turn = Some(end_turn);
 			}
 			let mut normalized = event.clone();
 			normalized["type"] = json!("response.completed");
@@ -945,7 +945,7 @@ async fn run_codex(
 
 	stream.push(AssistantMessageEvent::Start { partial: output.clone() });
 
-	let mapping = Arc::new(std::sync::Mutex::new(CodexEventMapping::default()));
+	let mapping = Arc::new(parking_lot::Mutex::new(CodexEventMapping::default()));
 	let mut event_stream = Box::pin(decode_codex_events(response.body, mapping.clone()));
 
 	let model_id = model.id().to_string();
@@ -963,7 +963,7 @@ async fn run_codex(
 
 	output.end_turn = mapping
 		.lock()
-		.unwrap_or_else(std::sync::PoisonError::into_inner)
+		
 		.end_turn;
 
 	if is_aborted() {
@@ -1108,7 +1108,7 @@ mod tests {
 
 	#[test]
 	fn normalizes_terminal_events_and_hoists_end_turn() {
-		let mapping = Arc::new(std::sync::Mutex::new(CodexEventMapping::default()));
+		let mapping = Arc::new(parking_lot::Mutex::new(CodexEventMapping::default()));
 		let mapper = CodexEventMapper { mapping: mapping.clone() };
 		let mapped = mapper
 			.map_event(serde_json::json!({
@@ -1124,7 +1124,7 @@ mod tests {
 			.unwrap();
 		assert_eq!(mapped["type"], "response.completed");
 		assert_eq!(mapped["response"]["status"], "incomplete");
-		assert_eq!(mapping.lock().unwrap_or_else(std::sync::PoisonError::into_inner).end_turn, Some(true));
+		assert_eq!(mapping.lock().end_turn, Some(true));
 	}
 
 	#[test]
@@ -1163,7 +1163,7 @@ mod tests {
 	async fn streams_sse_responses() {
 		use crate::types::{AssistantContent, AssistantMessageEvent, Context, Message, UserContentField, UserMessage};
 		use crate::utils::transcript::normalize_context;
-		use std::sync::Mutex;
+		use parking_lot::Mutex;
 
 		let payload = base64::engine::general_purpose::STANDARD
 			.encode(r#"{"https://api.openai.com/auth":{"chatgpt_account_id":"acc_test"}}"#);
@@ -1207,7 +1207,7 @@ mod tests {
 				"headers": request.headers,
 				"body": serde_json::from_str::<Value>(&request_body).ok(),
 			});
-			recorder.lock().unwrap_or_else(std::sync::PoisonError::into_inner).push(entry);
+			recorder.lock().push(entry);
 			let response = HttpResponse {
 				status: 200,
 				headers: vec![("content-type".to_string(), "text/event-stream".to_string())],
@@ -1256,7 +1256,7 @@ mod tests {
 		assert_eq!(message.usage.input, 5);
 		assert_eq!(message.usage.output, 3);
 
-		let calls = recorded.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+		let calls = recorded.lock();
 		assert_eq!(calls.len(), 1);
 		let call = &calls[0];
 		assert_eq!(call["url"], "https://chatgpt.com/backend-api/codex/responses");

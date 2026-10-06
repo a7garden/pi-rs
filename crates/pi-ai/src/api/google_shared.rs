@@ -1287,7 +1287,7 @@ mod tests {
 		StrictSchemaMode, ThinkingContent, ToolCall, UserContent, UserContentField, UserMessage,
 	};
 	use serde_json::json;
-	use std::sync::Mutex;
+	use parking_lot::Mutex;
 
 	fn make_tool(parameters: Value) -> Tool {
 		Tool {
@@ -2012,7 +2012,7 @@ mod tests {
 		let calls = Mutex::new(0u32);
 		let result = retry_google_request(
 			|| {
-				let mut calls = calls.lock().expect("lock");
+				let mut calls = calls.lock();
 				*calls += 1;
 				let first = *calls == 1;
 				async move {
@@ -2032,7 +2032,7 @@ mod tests {
 		.expect("retries");
 
 		assert_eq!(result, "ok");
-		assert_eq!(*calls.lock().expect("lock"), 2);
+		assert_eq!(*calls.lock(), 2);
 	}
 
 	#[tokio::test]
@@ -2040,7 +2040,7 @@ mod tests {
 		let calls = Mutex::new(0u32);
 		let result = retry_google_request(
 			|| {
-				let mut calls = calls.lock().expect("lock");
+				let mut calls = calls.lock();
 				*calls += 1;
 				async move { Err::<String, _>(google_api_error(429)) }
 			},
@@ -2050,7 +2050,7 @@ mod tests {
 		.expect_err("rejects");
 
 		assert_eq!(result.message, "got status: 429");
-		assert_eq!(*calls.lock().expect("lock"), 1);
+		assert_eq!(*calls.lock(), 1);
 	}
 
 	#[tokio::test]
@@ -2058,7 +2058,7 @@ mod tests {
 		let calls = Mutex::new(0u32);
 		let result = retry_google_request(
 			|| {
-				let mut calls = calls.lock().expect("lock");
+				let mut calls = calls.lock();
 				*calls += 1;
 				async move { Err::<String, _>(google_api_error(400)) }
 			},
@@ -2071,7 +2071,7 @@ mod tests {
 		.expect_err("rejects");
 
 		assert_eq!(result.message, "got status: 400");
-		assert_eq!(*calls.lock().expect("lock"), 1);
+		assert_eq!(*calls.lock(), 1);
 	}
 
 	// -- resolveGoogleThinkingLevel (shared exhaustive case) ------------------

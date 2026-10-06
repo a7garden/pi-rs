@@ -57,7 +57,7 @@ pub struct McpOAuthProviderOptions {
 /// Upstream `MemoryOAuthStateStore`.
 #[derive(Default)]
 pub struct MemoryOAuthStateStore {
-	value: std::sync::Mutex<Option<McpOAuthState>>,
+	value: parking_lot::Mutex<Option<McpOAuthState>>,
 }
 
 impl MemoryOAuthStateStore {
@@ -72,7 +72,7 @@ impl McpOAuthStateStore for MemoryOAuthStateStore {
 		Ok(self
 			.value
 			.lock()
-			.unwrap_or_else(std::sync::PoisonError::into_inner)
+			
 			.clone())
 	}
 
@@ -80,7 +80,7 @@ impl McpOAuthStateStore for MemoryOAuthStateStore {
 		*self
 			.value
 			.lock()
-			.unwrap_or_else(std::sync::PoisonError::into_inner) = Some(state.clone());
+			 = Some(state.clone());
 		Ok(())
 	}
 }

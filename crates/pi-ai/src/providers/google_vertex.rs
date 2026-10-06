@@ -250,7 +250,8 @@ mod tests {
 	use crate::models::{create_models, CreateModelsOptions, Models as ModelsTrait, MutableModels};
 	use crate::utils::abort::AbortController;
 	use std::collections::{BTreeMap, VecDeque};
-	use std::sync::{Arc, Mutex};
+	use std::sync::{Arc};
+	use {parking_lot::Mutex};
 
 	const NEVER_ABORTED_SIGNAL_CHECK: &str = "signal never aborts in these tests";
 
@@ -290,13 +291,12 @@ mod tests {
 				Box::pin(async move {
 					answers
 						.lock()
-						.expect("lock")
 						.pop_front()
 						.ok_or_else(|| ThrownValue::message(NEVER_ABORTED_SIGNAL_CHECK))
 				})
 			}),
 			notify: Box::new(move |event: AuthEvent| {
-				events.lock().expect("lock").push(event);
+				events.lock().push(event);
 			}),
 		}
 	}
@@ -328,7 +328,7 @@ mod tests {
 				])),
 			}
 		);
-		let events = adc_events.lock().expect("lock").clone();
+		let events = adc_events.lock().clone();
 		assert_eq!(events.len(), 1);
 		let AuthEvent::Info { links, .. } = &events[0] else {
 			panic!("expected info event, got {:?}", events[0]);

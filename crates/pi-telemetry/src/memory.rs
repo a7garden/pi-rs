@@ -2,7 +2,8 @@
 
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc};
+use {parking_lot::Mutex};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use serde::{Deserialize, Serialize};
@@ -96,7 +97,7 @@ fn automatic_error_status(error: &SharedError) -> SpanStatus {
 }
 
 fn settle_span(state: &InMemoryTelemetryState, span: &SharedSpan, failed: bool, error: Option<&SharedError>) {
-	let mut inner = span.lock().expect("in-memory span poisoned");
+	let mut inner = span.lock();
 	if inner.settled {
 		return;
 	}
@@ -116,7 +117,7 @@ fn create_span(state: &InMemoryTelemetryState, parent: Option<&SharedSpan>, opti
 	let name = options.name;
 	let attributes = copy_attributes(options.attributes.as_ref());
 	let id = state.next_span_id.fetch_add(1, Ordering::SeqCst);
-	let parent_id = parent.map(|p| p.lock().expect("in-memory span poisoned").id);
+	let parent_id = parent.map(|p| p.lock().id);
 	Arc::new(Mutex::new(MutableRecordedTelemetrySpan {
 		id,
 		parent_id,
@@ -138,7 +139,7 @@ fn start_in_memory_span<'a>(
 ) -> BoxSpanFuture<'a> {
 	let parent_settled = parent
 		.as_ref()
-		.map(|p| p.lock().expect("in-memory span poisoned").settled)
+		.map(|p| p.lock().settled)
 		.unwrap_or(false);
 	if parent_settled {
 		return NoopTelemetryContext.start_span_box(options, callback);
@@ -148,7 +149,6 @@ fn start_in_memory_span<'a>(
 	state
 		.spans
 		.lock()
-		.expect("in-memory span list poisoned")
 		.push(Arc::clone(&recorded_span));
 
 	let span: Arc<dyn TelemetrySpan> = Arc::new(MemoryTelemetrySpan {
@@ -175,7 +175,7 @@ impl TelemetrySpan for MemoryTelemetrySpan {
 	}
 
 	fn add_event(&self, name: &str, attributes: Option<SpanAttributes>) {
-		let mut inner = self.span.lock().expect("in-memory span poisoned");
+		let mut inner = self.span.lock();
 		if inner.settled {
 			return;
 		}
@@ -188,7 +188,7 @@ impl TelemetrySpan for MemoryTelemetrySpan {
 	}
 
 	fn set_attributes(&self, attributes: SpanAttributes) {
-		let mut inner = self.span.lock().expect("in-memory span poisoned");
+		let mut inner = self.span.lock();
 		if inner.settled {
 			return;
 		}
@@ -196,7 +196,7 @@ impl TelemetrySpan for MemoryTelemetrySpan {
 	}
 
 	fn set_status(&self, status: SpanStatus) {
-		let mut inner = self.span.lock().expect("in-memory span poisoned");
+		let mut inner = self.span.lock();
 		if inner.settled {
 			return;
 		}
@@ -228,10 +228,9 @@ impl InMemoryTelemetryContext {
 		self.state
 			.spans
 			.lock()
-			.expect("in-memory span list poisoned")
 			.iter()
 			.map(|span| {
-				let inner = span.lock().expect("in-memory span poisoned");
+				let inner = span.lock();
 				RecordedTelemetrySpan {
 					id: inner.id,
 					parent_id: inner.parent_id,

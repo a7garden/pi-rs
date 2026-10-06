@@ -2,7 +2,8 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc};
+use {parking_lot::Mutex};
 
 use async_trait::async_trait;
 
@@ -101,7 +102,7 @@ impl ModelsStore for InMemoryModelsStore {
 		options: Option<ModelsStoreOperationOptions>,
 	) -> Result<Option<ModelsStoreEntry>, ThrownValue> {
 		check_aborted(&options)?;
-		let entries = self.entries.lock().expect("models store lock");
+		let entries = self.entries.lock();
 		Ok(entries.get(provider_id).cloned())
 	}
 
@@ -112,14 +113,14 @@ impl ModelsStore for InMemoryModelsStore {
 		options: Option<ModelsStoreOperationOptions>,
 	) -> Result<(), ThrownValue> {
 		check_aborted(&options)?;
-		let mut entries = self.entries.lock().expect("models store lock");
+		let mut entries = self.entries.lock();
 		entries.insert(provider_id.to_string(), entry);
 		Ok(())
 	}
 
 	async fn delete(&self, provider_id: &str, options: Option<ModelsStoreOperationOptions>) -> Result<(), ThrownValue> {
 		check_aborted(&options)?;
-		let mut entries = self.entries.lock().expect("models store lock");
+		let mut entries = self.entries.lock();
 		entries.remove(provider_id);
 		Ok(())
 	}

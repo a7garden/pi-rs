@@ -6,7 +6,8 @@
 //! returns/throws the upstream message with all sub-errors joined (deviation
 //! D39).
 
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc};
+use {parking_lot::Mutex};
 
 /// Upstream `SessionResourceCleanup` — a fire-and-forget cleanup callback.
 pub type SessionResourceCleanup = Arc<dyn Fn(Option<&str>) + Send + Sync>;
@@ -18,11 +19,11 @@ fn cleanups() -> &'static Mutex<Vec<SessionResourceCleanup>> {
 
 /// Upstream `registerSessionResourceCleanup` — returns an unregister closure.
 pub fn register_session_resource_cleanup(cleanup: SessionResourceCleanup) -> impl FnOnce() + Send {
-	cleanups().lock().unwrap().push(cleanup);
+	cleanups().lock().push(cleanup);
 	let registry = cleanups();
 	let cleanup = registry_last(registry);
 	move || {
-		let mut guards = registry.lock().unwrap();
+		let mut guards = registry.lock();
 		if let Some(position) = guards.iter().position(|entry| Arc::ptr_eq(entry, &cleanup)) {
 			guards.remove(position);
 		}
@@ -30,14 +31,14 @@ pub fn register_session_resource_cleanup(cleanup: SessionResourceCleanup) -> imp
 }
 
 fn registry_last(registry: &'static Mutex<Vec<SessionResourceCleanup>>) -> Arc<dyn Fn(Option<&str>) + Send + Sync> {
-	registry.lock().unwrap().last().expect("just pushed").clone()
+	registry.lock().last().expect("just pushed").clone()
 }
 
 /// Upstream `cleanupSessionResources` — every registered cleanup runs even if
 /// one fails; all failures are reported together.
 pub fn cleanup_session_resources(session_id: Option<&str>) -> Result<(), crate::utils::thrown::ThrownValue> {
 	let mut errors: Vec<String> = Vec::new();
-	for cleanup in cleanups().lock().unwrap().clone() {
+	for cleanup in cleanups().lock().clone() {
 		let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| cleanup(session_id)));
 		if let Err(panic) = result {
 			let message = panic
@@ -69,27 +70,26 @@ mod tests {
 	// Port of test-derived registry behavior: register → run → unregister.
 	#[test]
 	fn registers_runs_and_unregisters_cleanups() {
-		let _guard = REGISTRY_LOCK.lock().unwrap();
+		let _guard = REGISTRY_LOCK.lock();
 		let seen: Arc<Mutex<Vec<Option<String>>>> = Arc::new(Mutex::new(Vec::new()));
 		let seen_for_cleanup = seen.clone();
 		let unregister = register_session_resource_cleanup(Arc::new(move |session_id| {
 			seen_for_cleanup
 				.lock()
-				.unwrap()
 				.push(session_id.map(str::to_string));
 		}));
 
 		cleanup_session_resources(Some("session-1")).expect("cleanups succeed");
-		assert_eq!(seen.lock().unwrap().clone(), vec![Some("session-1".to_string())]);
+		assert_eq!(seen.lock().clone(), vec![Some("session-1".to_string())]);
 
 		unregister();
 		cleanup_session_resources(None).expect("no cleanups left");
-		assert_eq!(seen.lock().unwrap().len(), 1);
+		assert_eq!(seen.lock().len(), 1);
 	}
 
 	#[test]
 	fn aggregates_cleanup_failures() {
-		let _guard = REGISTRY_LOCK.lock().unwrap();
+		let _guard = REGISTRY_LOCK.lock();
 		let unregister = register_session_resource_cleanup(Arc::new(|_| panic!("boom")));
 		// Run first so the failing cleanup is the only registered one.
 		let result = cleanup_session_resources(None);

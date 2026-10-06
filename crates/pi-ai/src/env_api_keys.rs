@@ -6,7 +6,7 @@
 //! plain memoized check (Rust always "has fs").
 
 use std::collections::BTreeMap;
-use std::sync::Mutex;
+use parking_lot::Mutex;
 
 use crate::types::ProviderEnv;
 use crate::utils::provider_env::get_provider_env_value;
@@ -45,7 +45,7 @@ fn has_vertex_adc_credentials(env: Option<&ProviderEnv>) -> bool {
 		return file_exists(explicit_credentials_path);
 	}
 
-	let mut cache = cached_vertex_adc_credentials_exists().lock().unwrap();
+	let mut cache = cached_vertex_adc_credentials_exists().lock();
 	if cache.is_none() {
 		// Check GOOGLE_APPLICATION_CREDENTIALS env var first (standard way)
 		if let Some(gac_path) = get_provider_env_value("GOOGLE_APPLICATION_CREDENTIALS", env) {

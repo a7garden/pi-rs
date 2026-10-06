@@ -149,7 +149,8 @@ where
 #[cfg(test)]
 mod tests {
 	use super::*;
-	use std::sync::{Arc, Mutex};
+	use std::sync::{Arc};
+	use {parking_lot::Mutex};
 
 	fn never_aborted_signal() -> AbortSignal {
 		crate::utils::abort::AbortController::new().signal()
@@ -165,11 +166,11 @@ mod tests {
 		}
 
 		fn push_now(&self) {
-			self.0.lock().unwrap().push(unix_now_ms());
+			self.0.lock().push(unix_now_ms());
 		}
 
 		fn len(&self) -> usize {
-			self.0.lock().unwrap().len()
+			self.0.lock().len()
 		}
 	}
 
@@ -191,7 +192,7 @@ mod tests {
 			move || {
 				times.push_now();
 				let is_first = {
-					let mut flag = poll_first.lock().unwrap();
+					let mut flag = poll_first.lock();
 					let was = *flag;
 					*flag = false;
 					was
@@ -262,7 +263,7 @@ mod tests {
 			},
 			move || {
 				times.push_now();
-				let next = results_for_poll.lock().unwrap().remove(0);
+				let next = results_for_poll.lock().remove(0);
 				async move { Ok(next) }
 			},
 		));
@@ -297,7 +298,7 @@ mod tests {
 			},
 			move || {
 				times.push_now();
-				let next = results_for_poll.lock().unwrap().remove(0);
+				let next = results_for_poll.lock().remove(0);
 				async move { Ok(next) }
 			},
 		));

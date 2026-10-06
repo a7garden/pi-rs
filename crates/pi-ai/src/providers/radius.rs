@@ -178,7 +178,7 @@ mod tests {
 	use crate::models::{create_models, CreateModelsOptions, Models, ModelsRefreshOptions, MutableModels};
 	use crate::models_store::{InMemoryModelsStore, ModelsStore};
 	use serde_json::json;
-	use std::sync::Mutex;
+	use parking_lot::Mutex;
 
 	fn radius_config_json() -> serde_json::Value {
 		json!({
@@ -209,7 +209,7 @@ mod tests {
 	fn config_fetch(body: serde_json::Value, requests: Arc<Mutex<Vec<String>>>) -> FetchFn {
 		let body = serde_json::to_vec(&body).expect("config serializes");
 		FetchFn::new(move |request: HttpRequest| {
-			requests.lock().expect("lock").push(request.url.clone());
+			requests.lock().push(request.url.clone());
 			let body = body.clone();
 			Box::pin(async move {
 				Ok(HttpResponse {

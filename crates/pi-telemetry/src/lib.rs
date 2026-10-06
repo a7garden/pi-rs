@@ -7,7 +7,8 @@ pub mod testing;
 use std::collections::BTreeMap;
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc};
+use {parking_lot::Mutex};
 
 use serde::{Deserialize, Serialize};
 
@@ -241,7 +242,7 @@ pub trait TelemetryContextExt: TelemetryContext {
 			Box::pin(async move {
 				match fut.await {
 					Ok(value) => {
-						*inner_cell.lock().expect("span value cell poisoned") = Some(value);
+						*inner_cell.lock() = Some(value);
 						Ok(())
 					}
 					Err(err) => Err(err),
@@ -251,7 +252,6 @@ pub trait TelemetryContextExt: TelemetryContext {
 		Box::pin(async move {
 			self.start_span_box(options, inner).await.map(|()| {
 				cell.lock()
-					.expect("span value cell poisoned")
 					.take()
 					.expect("span callback did not produce a value")
 			})
@@ -275,7 +275,7 @@ pub trait TelemetrySpanExt: TelemetrySpan {
 			Box::pin(async move {
 				match fut.await {
 					Ok(value) => {
-						*inner_cell.lock().expect("span value cell poisoned") = Some(value);
+						*inner_cell.lock() = Some(value);
 						Ok(())
 					}
 					Err(err) => Err(err),
@@ -285,7 +285,6 @@ pub trait TelemetrySpanExt: TelemetrySpan {
 		Box::pin(async move {
 			self.start_span_box(options, inner).await.map(|()| {
 				cell.lock()
-					.expect("span value cell poisoned")
 					.take()
 					.expect("span callback did not produce a value")
 			})

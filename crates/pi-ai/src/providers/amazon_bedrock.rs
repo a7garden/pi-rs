@@ -285,7 +285,7 @@ mod tests {
     use crate::auth::types::{AuthContext, BoxFuture};
     use crate::models::{Models, MutableModels};
     use std::collections::BTreeMap;
-    use std::sync::Mutex;
+    use parking_lot::Mutex;
 
     /// `fakeAuthContext` from `test/helpers.ts`: env lookups from a map.
     struct MapContext {
@@ -333,7 +333,7 @@ mod tests {
             signal: signal.clone(),
             prompt: Box::new(move |_prompt| {
                 let answers = prompt_answers.clone();
-                Box::pin(async move { Ok(answers.lock().expect("lock").remove(0)) })
+                Box::pin(async move { Ok(answers.lock().remove(0)) })
             }),
             notify: Box::new(|_event| {}),
         })
@@ -353,9 +353,9 @@ mod tests {
             signal: signal.clone(),
             prompt: Box::new(move |_prompt| {
                 let answers = answers.clone();
-                Box::pin(async move { Ok(answers.lock().expect("lock").remove(0)) })
+                Box::pin(async move { Ok(answers.lock().remove(0)) })
             }),
-            notify: Box::new(move |event| event_sink.lock().expect("lock").push(event)),
+            notify: Box::new(move |event| event_sink.lock().push(event)),
         })
         .await
         .expect("login succeeds");
@@ -365,7 +365,7 @@ mod tests {
             .expect("profile credential carries env");
         assert_eq!(env.get("AWS_PROFILE").map(String::as_str), Some("work"));
         assert!(credential.key.is_none());
-        let events = events.lock().expect("lock");
+        let events = events.lock();
         assert_eq!(events.len(), 1);
         match &events[0] {
             AuthEvent::Info { links, .. } => {

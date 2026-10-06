@@ -4,7 +4,8 @@ use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc};
+use {parking_lot::Mutex};
 use std::time::Duration;
 
 use serde_json::{json, Map, Value};
@@ -126,7 +127,7 @@ impl McpClientOptions {
 }
 
 pub struct PendingRequest {
-	resolve: std::sync::Mutex<Option<tokio::sync::oneshot::Sender<Result<Value, McpError>>>>,
+	resolve: parking_lot::Mutex<Option<tokio::sync::oneshot::Sender<Result<Value, McpError>>>>,
 	timeout_ms: u64,
 	cancellable: bool,
 	on_progress: Option<ProgressListener>,
@@ -413,8 +414,8 @@ impl McpClient {
 		}
 	}
 
-	fn state_lock(&self) -> std::sync::MutexGuard<'_, ClientStateInner> {
-		self.inner.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+	fn state_lock(&self) -> parking_lot::MutexGuard<'_, ClientStateInner> {
+		self.inner.state.lock()
 	}
 
 	pub fn connection_state(&self) -> ClientState {
@@ -455,7 +456,7 @@ impl McpClient {
 		}
 
 		let inner = Arc::clone(&self.inner);
-		*self.inner.disposers.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = vec![
+		*self.inner.disposers.lock() = vec![
 			transport.on_message(message_listener(Arc::downgrade(&inner))),
 			// Transport errors are reported only. Pending requests fail when the transport closes.
 			transport.on_error(error_listener(Arc::downgrade(&inner))),
@@ -552,7 +553,7 @@ impl McpClient {
 		self.inner
 			.request_handlers
 			.lock()
-			.unwrap_or_else(std::sync::PoisonError::into_inner)
+			
 			.insert(method.to_string(), handler.clone());
 		let inner = Arc::clone(&self.inner);
 		let method = method.to_string();
@@ -560,7 +561,7 @@ impl McpClient {
 			let mut handlers = inner
 				.request_handlers
 				.lock()
-				.unwrap_or_else(std::sync::PoisonError::into_inner);
+				;
 			if handlers
 				.get(&method)
 				.map(|current| Arc::ptr_eq(current, &handler))
@@ -574,7 +575,7 @@ impl McpClient {
 	pub fn on_notification(&self, method: &str, listener: NotificationListener) -> Unsubscribe {
 		let id = {
 			let mut listeners =
-				self.inner.listeners.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+				self.inner.listeners.lock();
 			let id = listeners.next_listener_id;
 			listeners.next_listener_id += 1;
 			listeners.notification.entry(method.to_string()).or_default().push((id, listener));
@@ -583,7 +584,7 @@ impl McpClient {
 		let inner = Arc::clone(&self.inner);
 		let method = method.to_string();
 		Box::new(move || {
-			let mut listeners = inner.listeners.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+			let mut listeners = inner.listeners.lock();
 			if let Some(entries) = listeners.notification.get_mut(&method) {
 				entries.retain(|(existing, _)| *existing != id);
 				if entries.is_empty() {
@@ -596,7 +597,7 @@ impl McpClient {
 	pub fn on_error(&self, listener: ErrorListener) -> Unsubscribe {
 		let id = {
 			let mut listeners =
-				self.inner.listeners.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+				self.inner.listeners.lock();
 			let id = listeners.next_listener_id;
 			listeners.next_listener_id += 1;
 			listeners.errors.push((id, listener));
@@ -607,7 +608,7 @@ impl McpClient {
 			inner
 				.listeners
 				.lock()
-				.unwrap_or_else(std::sync::PoisonError::into_inner)
+				
 				.errors
 				.retain(|(existing, _)| *existing != id);
 		})
@@ -617,7 +618,7 @@ impl McpClient {
 	pub fn on_close(&self, listener: CloseListener) -> Unsubscribe {
 		let id = {
 			let mut listeners =
-				self.inner.listeners.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+				self.inner.listeners.lock();
 			let id = listeners.next_listener_id;
 			listeners.next_listener_id += 1;
 			listeners.closes.push((id, listener));
@@ -628,7 +629,7 @@ impl McpClient {
 			inner
 				.listeners
 				.lock()
-				.unwrap_or_else(std::sync::PoisonError::into_inner)
+				
 				.closes
 				.retain(|(existing, _)| *existing != id);
 		})
@@ -828,7 +829,7 @@ impl McpClient {
 			.or(self.inner.options.request_timeout_ms)
 			.unwrap_or(DEFAULT_REQUEST_TIMEOUT_MS);
 		let entry = Arc::new(PendingRequest {
-			resolve: std::sync::Mutex::new(Some(resolve)),
+			resolve: parking_lot::Mutex::new(Some(resolve)),
 			timeout_ms,
 			cancellable: method != "initialize",
 			on_progress: options.on_progress.clone(),
@@ -838,13 +839,13 @@ impl McpClient {
 		self.inner
 			.pending
 			.lock()
-			.unwrap_or_else(std::sync::PoisonError::into_inner)
+			
 			.insert(id.clone(), entry.clone());
 		if let Some(progress_token) = &progress_token {
 			self.inner
 				.progress_requests
 				.lock()
-				.unwrap_or_else(std::sync::PoisonError::into_inner)
+				
 				.insert(progress_token.clone(), id.clone());
 		}
 		if entry.timeout_ms > 0 {
@@ -913,7 +914,7 @@ impl McpClient {
 
 	fn dispose_transport_listeners(&self) {
 		let disposers =
-			std::mem::take(&mut *self.inner.disposers.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
+			std::mem::take(&mut *self.inner.disposers.lock());
 		for dispose in disposers {
 			dispose();
 		}
@@ -958,7 +959,7 @@ impl ClientInner {
 		if let Some(progress_token) = &entry.progress_token {
 			self.progress_requests
 				.lock()
-				.unwrap_or_else(std::sync::PoisonError::into_inner)
+				
 				.remove(progress_token);
 		}
 	}
@@ -966,12 +967,12 @@ impl ClientInner {
 	/// Upstream `cancelPending`.
 	fn cancel_pending(self: &Arc<Self>, id: &JsonRpcId, error: McpError, notify_server: bool, reason: Option<String>) {
 		let entry = {
-			let mut pending = self.pending.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+			let mut pending = self.pending.lock();
 			pending.remove(id)
 		};
 		let Some(entry) = entry else { return };
 		self.remove_pending_side(&entry);
-		if let Some(resolve) = entry.resolve.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take() {
+		if let Some(resolve) = entry.resolve.lock().take() {
 			let _ = resolve.send(Err(error));
 		}
 		if notify_server {
@@ -1001,14 +1002,14 @@ impl ClientInner {
 	fn transport_snapshot(&self) -> Option<Arc<dyn McpTransport>> {
 		self.state
 			.lock()
-			.unwrap_or_else(std::sync::PoisonError::into_inner)
+			
 			.transport
 			.clone()
 	}
 
 	fn emit_error(&self, error: McpError) {
 		let listeners: Vec<crate::client::ErrorListener> = {
-			let listeners = self.listeners.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+			let listeners = self.listeners.lock();
 			listeners.errors.iter().map(|(_, listener)| listener.clone()).collect()
 		};
 		for listener in listeners {
@@ -1039,7 +1040,7 @@ impl ClientInner {
 	fn handle_response(&self, message: JsonRpcResponse) {
 		let id = message.id().clone();
 		let entry = {
-			let mut pending = self.pending.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+			let mut pending = self.pending.lock();
 			pending.remove(&id)
 		};
 		let Some(entry) = entry else {
@@ -1052,7 +1053,7 @@ impl ClientInner {
 		match message {
 			JsonRpcResponse::Success(success) => {
 				if let Some(resolve) =
-					entry.resolve.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take()
+					entry.resolve.lock().take()
 				{
 					let _ = resolve.send(Ok(success.result));
 				}
@@ -1064,7 +1065,7 @@ impl ClientInner {
 					data: error.error.data,
 				};
 				if let Some(resolve) =
-					entry.resolve.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take()
+					entry.resolve.lock().take()
 				{
 					let _ = resolve.send(Err(rejection));
 				}
@@ -1081,7 +1082,7 @@ impl ClientInner {
 		let handler = inner
 			.request_handlers
 			.lock()
-			.unwrap_or_else(std::sync::PoisonError::into_inner)
+			
 			.get(&message.method)
 			.cloned();
 		let Some(handler) = handler else {
@@ -1105,7 +1106,7 @@ impl ClientInner {
 		inner
 			.incoming
 			.lock()
-			.unwrap_or_else(std::sync::PoisonError::into_inner)
+			
 			.insert(message.id.clone(), controller.clone());
 		let context = RequestContext { signal: controller.signal() };
 		let params = message.params.clone().unwrap_or(Value::Null);
@@ -1149,7 +1150,7 @@ impl ClientInner {
 		inner
 			.incoming
 			.lock()
-			.unwrap_or_else(std::sync::PoisonError::into_inner)
+			
 			.remove(&message.id);
 		if let Err(send_error) = transport.send(response).await {
 			inner.emit_error(send_error);
@@ -1165,7 +1166,7 @@ impl ClientInner {
 			self.handle_cancelled(&params);
 		}
 		let listeners: Vec<NotificationListener> = {
-			let listeners = self.listeners.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+			let listeners = self.listeners.lock();
 			listeners
 				.notification
 				.get(method)
@@ -1190,12 +1191,12 @@ impl ClientInner {
 		let request_id = self
 			.progress_requests
 			.lock()
-			.unwrap_or_else(std::sync::PoisonError::into_inner)
+			
 			.get(&token)
 			.cloned();
 		let Some(request_id) = request_id else { return };
 		let entry = {
-			let pending = self.pending.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+			let pending = self.pending.lock();
 			pending.get(&request_id).cloned()
 		};
 		let Some(entry) = entry else { return };
@@ -1221,7 +1222,7 @@ impl ClientInner {
 		let controller = self
 			.incoming
 			.lock()
-			.unwrap_or_else(std::sync::PoisonError::into_inner)
+			
 			.get(&request_id)
 			.cloned();
 		if let Some(controller) = controller {
@@ -1237,14 +1238,14 @@ impl ClientInner {
 	/// and flips the state. Close listeners fire once (upstream `markClosed`).
 	fn mark_closed(&self, error: McpError) {
 		let was_closed = {
-			let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+			let mut state = self.state.lock();
 			let was_closed = state.state == ClientState::Closed;
 			state.state = ClientState::Closed;
 			was_closed
 		};
 		self.reject_pending(&error);
 		{
-			let mut incoming = self.incoming.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+			let mut incoming = self.incoming.lock();
 			for (_, controller) in incoming.drain() {
 				controller.abort(Some(error.to_string()));
 			}
@@ -1253,7 +1254,7 @@ impl ClientInner {
 			return;
 		}
 		let listeners: Vec<CloseListener> = {
-			let listeners = self.listeners.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+			let listeners = self.listeners.lock();
 			listeners.closes.iter().map(|(_, listener)| listener.clone()).collect()
 		};
 		for listener in listeners {
@@ -1263,12 +1264,12 @@ impl ClientInner {
 
 	fn reject_pending(&self, error: &McpError) {
 		let entries: Vec<Arc<PendingRequest>> = {
-			let mut pending = self.pending.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+			let mut pending = self.pending.lock();
 			pending.drain().map(|(_, entry)| entry).collect()
 		};
 		for entry in entries {
 			self.remove_pending_side(&entry);
-			if let Some(resolve) = entry.resolve.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take() {
+			if let Some(resolve) = entry.resolve.lock().take() {
 				let _ = resolve.send(Err(error.clone()));
 			}
 		}
@@ -1304,7 +1305,7 @@ mod tests {
 	use crate::transports::in_memory::InMemoryTransport;
 	use futures_util::future::BoxFuture;
 	use std::collections::HashMap;
-	use std::sync::Mutex as StdMutex;
+	use parking_lot::Mutex as StdMutex;
 	use std::task::{Context, Poll};
 
 	type TestHandler =
@@ -1323,14 +1324,14 @@ mod tests {
 		{
 			self.handlers
 				.lock()
-				.unwrap_or_else(std::sync::PoisonError::into_inner)
+				
 				.insert(method.to_string(), Arc::new(handler));
 		}
 
 		fn wire_messages(&self) -> Vec<Value> {
 			self.messages
 				.lock()
-				.unwrap_or_else(std::sync::PoisonError::into_inner)
+				
 				.iter()
 				.map(|message| serde_json::to_value(message).expect("serializable"))
 				.collect()
@@ -1339,7 +1340,7 @@ mod tests {
 		fn has_notification(&self, method: &str) -> bool {
 			self.messages
 				.lock()
-				.unwrap_or_else(std::sync::PoisonError::into_inner)
+				
 				.iter()
 				.any(|message| {
 					matches!(message, JsonRpcMessage::Notification(notification)
@@ -1377,7 +1378,7 @@ mod tests {
 		pair.server.on_message(Arc::new(move |message| {
 			message_log
 				.lock()
-				.unwrap_or_else(std::sync::PoisonError::into_inner)
+				
 				.push(message.clone());
 			let JsonRpcMessage::Request(request) = message else { return };
 			let handlers = Arc::clone(&handler_map);
@@ -1385,7 +1386,7 @@ mod tests {
 			tokio::spawn(async move {
 				let handler = handlers
 					.lock()
-					.unwrap_or_else(std::sync::PoisonError::into_inner)
+					
 					.get(&request.method)
 					.cloned();
 				let response = match handler {
@@ -1720,7 +1721,7 @@ mod tests {
 			.on_progress(Arc::new(move |progress: &ProgressNotification| {
 				progress_listener
 					.lock()
-					.unwrap_or_else(std::sync::PoisonError::into_inner)
+					
 					.push(progress.clone());
 			}));
 		let call = client.call_tool("slow", None, &options);
@@ -1729,7 +1730,7 @@ mod tests {
 			serde_json::to_value(&result).unwrap(),
 			json!({ "content": [{ "type": "text", "text": "done" }] })
 		);
-		let progress = progress.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone();
+		let progress = progress.lock().clone();
 		assert_eq!(progress.len(), 1);
 		assert_eq!(
 			serde_json::to_value(&progress[0]).unwrap(),
@@ -1783,7 +1784,7 @@ mod tests {
 		client.on_error(Arc::new(move |error: &McpError| {
 			error_listener
 				.lock()
-				.unwrap_or_else(std::sync::PoisonError::into_inner)
+				
 				.push(error.to_string());
 		}));
 		let release = Arc::new(tokio::sync::Notify::new());
@@ -1810,7 +1811,7 @@ mod tests {
 		let result = call.await.expect("call still resolves");
 		assert_eq!(serde_json::to_value(&result).unwrap(), json!({ "content": [] }));
 		assert_eq!(
-			errors.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone(),
+			errors.lock().clone(),
 			vec!["stray log line".to_string()]
 		);
 		client.close().await.expect("close");
@@ -1893,7 +1894,7 @@ mod tests {
 		let closes = Arc::new(StdMutex::new(0usize));
 		let close_listener = Arc::clone(&closes);
 		client.on_close(Arc::new(move || {
-			*close_listener.lock().unwrap_or_else(std::sync::PoisonError::into_inner) += 1;
+			*close_listener.lock() += 1;
 		}));
 		server.set_handler(
 			"tools/call",
@@ -1914,7 +1915,7 @@ mod tests {
 		assert_eq!(error.to_string(), "MCP connection closed");
 		assert_eq!(client.connection_state(), ClientState::Closed);
 		client.close().await.expect("close");
-		assert_eq!(*closes.lock().unwrap_or_else(std::sync::PoisonError::into_inner), 1);
+		assert_eq!(*closes.lock(), 1);
 	}
 
 	// Port of client.test.ts "answers roots/list and dispatches notifications".
@@ -1935,7 +1936,7 @@ mod tests {
 			Arc::new(move |params: &Value| {
 				change_listener
 					.lock()
-					.unwrap_or_else(std::sync::PoisonError::into_inner)
+					
 					.push(params.clone());
 			}),
 		);
@@ -1960,7 +1961,7 @@ mod tests {
 			"result": { "roots": [{ "uri": "file:///workspace", "name": "workspace" }] },
 		})));
 		assert_eq!(
-			changes.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone(),
+			changes.lock().clone(),
 			vec![Value::Null]
 		);
 		client.close().await.expect("close");

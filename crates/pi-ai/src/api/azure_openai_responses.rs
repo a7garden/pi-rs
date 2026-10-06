@@ -820,7 +820,7 @@ mod tests {
 
 	/// Process-environment guard (shared with the azure config/completions
 	/// test modules so parallel tests cannot race env mutation).
-	fn env_lock() -> std::sync::MutexGuard<'static, ()> {
+	fn env_lock() -> parking_lot::MutexGuard<'static, ()> {
 		AzureEndpointOptions::test_env_lock()
 	}
 
@@ -839,10 +839,10 @@ mod tests {
 
 	/// Recording FetchFn fake returning constructed Responses SSE events
 	/// (upstream `AzureOpenAI` mock's `responses.create` + `withResponse`).
-	fn responses_fetch(sse: String, requests: Arc<std::sync::Mutex<Vec<HttpRequest>>>) -> FetchFn {
+	fn responses_fetch(sse: String, requests: Arc<parking_lot::Mutex<Vec<HttpRequest>>>) -> FetchFn {
 		let body = Arc::new(sse.into_bytes());
 		FetchFn::new(move |request: HttpRequest| {
-			requests.lock().expect("lock").push(request);
+			requests.lock().push(request);
 			let response = HttpResponse {
 				status: 200,
 				headers: vec![("content-type".to_string(), "text/event-stream".to_string())],
@@ -888,12 +888,12 @@ mod tests {
 		clear_azure_env();
 		set_env("AZURE_OPENAI_BASE_URL", env_base_url);
 
-		let requests = Arc::new(std::sync::Mutex::new(Vec::new()));
+		let requests = Arc::new(parking_lot::Mutex::new(Vec::new()));
 		let model = catalog_model("gpt-4o-mini");
 		let options = base_options(responses_fetch(sse_body(&completion_events("resp_test")), requests.clone()));
 		let result = stream(&model, &normalize(&user_context("hello")), &options).into_result().await;
 		assert_eq!(result.stop_reason, StopReason::Stop, "error: {:?}", result.error_message);
-		let requests = requests.lock().expect("lock");
+		let requests = requests.lock();
 		assert_eq!(requests.len(), 1);
 		requests[0].url.clone()
 	}
@@ -903,7 +903,7 @@ mod tests {
 	async fn capture_request_headers(headers: Option<crate::types::ProviderHeaders>) -> Vec<(String, String)> {
 		let _guard = env_lock();
 		clear_azure_env();
-		let requests = Arc::new(std::sync::Mutex::new(Vec::new()));
+		let requests = Arc::new(parking_lot::Mutex::new(Vec::new()));
 		let model = catalog_model("gpt-4o-mini");
 		let mut options = base_options(responses_fetch(sse_body(&completion_events("resp_test")), requests.clone()));
 		options.base.headers = headers;
@@ -915,7 +915,7 @@ mod tests {
 			.into_result()
 			.await;
 		assert_eq!(result.stop_reason, StopReason::Stop, "error: {:?}", result.error_message);
-		let headers = requests.lock().expect("lock")[0].headers.clone();
+		let headers = requests.lock()[0].headers.clone();
 		headers
 	}
 
@@ -995,7 +995,7 @@ mod tests {
 	async fn clamps_prompt_cache_key_to_openai_64_character_limit() {
 		let _guard = env_lock();
 		clear_azure_env();
-		let requests = Arc::new(std::sync::Mutex::new(Vec::new()));
+		let requests = Arc::new(parking_lot::Mutex::new(Vec::new()));
 		let model = catalog_model("gpt-4o-mini");
 		let mut options = base_options(responses_fetch(sse_body(&completion_events("resp_test")), requests.clone()));
 		options.session_id = Some("x".repeat(67));
@@ -1007,7 +1007,7 @@ mod tests {
 			.into_result()
 			.await;
 		assert_eq!(result.stop_reason, StopReason::Stop, "error: {:?}", result.error_message);
-		let request = &requests.lock().expect("lock")[0];
+		let request = &requests.lock()[0];
 		let body = match &request.body {
 			HttpBody::Bytes(bytes) => String::from_utf8_lossy(bytes).to_string(),
 			_ => String::new(),
@@ -1020,7 +1020,7 @@ mod tests {
 	async fn disables_server_side_response_storage() {
 		let _guard = env_lock();
 		clear_azure_env();
-		let requests = Arc::new(std::sync::Mutex::new(Vec::new()));
+		let requests = Arc::new(parking_lot::Mutex::new(Vec::new()));
 		let model = catalog_model("gpt-4o-mini");
 		let options = base_options(responses_fetch(sse_body(&completion_events("resp_test")), requests.clone()));
 		let azure = AzureOpenAIResponsesOptions {
@@ -1031,7 +1031,7 @@ mod tests {
 			.into_result()
 			.await;
 		assert_eq!(result.stop_reason, StopReason::Stop, "error: {:?}", result.error_message);
-		let request = &requests.lock().expect("lock")[0];
+		let request = &requests.lock()[0];
 		let body = match &request.body {
 			HttpBody::Bytes(bytes) => String::from_utf8_lossy(bytes).to_string(),
 			_ => String::new(),
@@ -1049,7 +1049,7 @@ mod tests {
 		compat.supports_strict_mode = Some(false);
 		model.compat = Some(compat);
 
-		let requests = Arc::new(std::sync::Mutex::new(Vec::new()));
+		let requests = Arc::new(parking_lot::Mutex::new(Vec::new()));
 		let mut options = base_options(responses_fetch(sse_body(&completion_events("resp_test")), requests.clone()));
 		options.base.api_key = Some("test-api-key".to_string());
 		let azure = AzureOpenAIResponsesOptions {
@@ -1078,7 +1078,7 @@ mod tests {
 			.await;
 		assert_eq!(result.stop_reason, StopReason::Stop, "error: {:?}", result.error_message);
 
-		let request = &requests.lock().expect("lock")[0];
+		let request = &requests.lock()[0];
 		let body = match &request.body {
 			HttpBody::Bytes(bytes) => String::from_utf8_lossy(bytes).to_string(),
 			_ => String::new(),
@@ -1093,13 +1093,13 @@ mod tests {
 		let _guard = env_lock();
 		clear_azure_env();
 		set_env("AZURE_OPENAI_RESOURCE_NAME", "my-resource");
-		let requests = Arc::new(std::sync::Mutex::new(Vec::new()));
+		let requests = Arc::new(parking_lot::Mutex::new(Vec::new()));
 		let model = catalog_model("gpt-4o-mini");
 		let options = base_options(responses_fetch(sse_body(&completion_events("resp_test")), requests.clone()));
 		let result = stream(&model, &normalize(&user_context("hello")), &options).into_result().await;
 		assert_eq!(result.stop_reason, StopReason::Stop, "error: {:?}", result.error_message);
 		assert_eq!(
-			requests.lock().expect("lock")[0].url,
+			requests.lock()[0].url,
 			"https://my-resource.openai.azure.com/openai/v1/responses?api-version=v1"
 		);
 	}
@@ -1114,7 +1114,7 @@ mod tests {
 			json!({ "type": "response.created", "sequence_number": 0, "response": { "id": "resp_azure" } }),
 			json!({ "type": "response.completed", "sequence_number": 1, "response": { "id": "resp_azure", "status": "completed" } }),
 		];
-		let requests = Arc::new(std::sync::Mutex::new(Vec::new()));
+		let requests = Arc::new(parking_lot::Mutex::new(Vec::new()));
 		let model = catalog_model("gpt-4o-mini");
 		let mut options = base_options(responses_fetch(sse_body(&events), requests));
 		let azure = AzureOpenAIResponsesOptions {
@@ -1122,18 +1122,17 @@ mod tests {
 			..Default::default()
 		};
 
-		let received = Arc::new(std::sync::Mutex::new(Vec::<Value>::new()));
-		let event_models = Arc::new(std::sync::Mutex::new(Vec::<(String, String)>::new()));
+		let received = Arc::new(parking_lot::Mutex::new(Vec::<Value>::new()));
+		let event_models = Arc::new(parking_lot::Mutex::new(Vec::<(String, String)>::new()));
 		let hook_events = received.clone();
 		let hook_models = event_models.clone();
 		options.on_provider_stream_event = Some(Arc::new(move |event: Value, event_model: Model| {
 			let hook_events = hook_events.clone();
 			let hook_models = hook_models.clone();
 			Box::pin(async move {
-				hook_events.lock().expect("lock").push(event);
+				hook_events.lock().push(event);
 				hook_models
 					.lock()
-					.expect("lock")
 					.push((event_model.provider().to_string(), event_model.id().to_string()));
 			})
 		}));
@@ -1145,8 +1144,8 @@ mod tests {
 		// Upstream additionally asserts object identity (`toBe`) of each
 		// forwarded event; Rust hooks receive parsed clones, so equality is
 		// the observable equivalent.
-		assert_eq!(*received.lock().expect("lock"), events);
-		assert_eq!(*event_models.lock().expect("lock"), vec![("azure".to_string(), "gpt-4o-mini".to_string()); 2]);
+		assert_eq!(*received.lock(), events);
+		assert_eq!(*event_models.lock(), vec![("azure".to_string(), "gpt-4o-mini".to_string()); 2]);
 		assert_eq!(result.stop_reason, StopReason::Stop);
 		assert_eq!(result.response_id.as_deref(), Some("resp_azure"));
 	}
@@ -1223,7 +1222,7 @@ mod tests {
 	async fn forwards_provider_specific_tool_choice_while_preserving_tool_definitions() {
 		let _guard = env_lock();
 		clear_azure_env();
-		let captured = Arc::new(std::sync::Mutex::new(None::<Value>));
+		let captured = Arc::new(parking_lot::Mutex::new(None::<Value>));
 		let hook_capture = captured.clone();
 		let mut options = base_options(responses_fetch(sse_body(&completion_events("resp_test")), Default::default()));
 		options.base.on_payload = Some(Arc::new(move |payload: Value, _model: Model| {
@@ -1232,7 +1231,7 @@ mod tests {
 				// Upstream throws from the hook to end the request after the
 				// capture; the Rust hook keeps the payload and lets the fake
 				// fetch terminate the stream.
-				*hook_capture.lock().expect("lock") = Some(payload);
+				*hook_capture.lock() = Some(payload);
 				None
 			})
 		}));
@@ -1247,7 +1246,7 @@ mod tests {
 		.into_result()
 		.await;
 
-		let payload = captured.lock().expect("lock").clone().expect("payload captured");
+		let payload = captured.lock().clone().expect("payload captured");
 		assert_eq!(payload["tool_choice"], "required");
 		assert_eq!(payload["tools"].as_array().expect("tools").len(), 1);
 	}
@@ -1256,7 +1255,7 @@ mod tests {
 	async fn forwards_provider_neutral_tool_choice_from_simple_options() {
 		let _guard = env_lock();
 		clear_azure_env();
-		let captured = Arc::new(std::sync::Mutex::new(None::<Value>));
+		let captured = Arc::new(parking_lot::Mutex::new(None::<Value>));
 		let hook_capture = captured.clone();
 		let mut options = crate::types::SimpleStreamOptions::default();
 		options.base.base.api_key = Some("test-key".to_string());
@@ -1264,7 +1263,7 @@ mod tests {
 		options.base.base.on_payload = Some(Arc::new(move |payload: Value, _model: Model| {
 			let hook_capture = hook_capture.clone();
 			Box::pin(async move {
-				*hook_capture.lock().expect("lock") = Some(payload);
+				*hook_capture.lock() = Some(payload);
 				None
 			})
 		}));
@@ -1273,7 +1272,7 @@ mod tests {
 		let model = tool_choice_model();
 		stream_simple(&model, &normalize(&read_tool_context()), &options).into_result().await;
 
-		let payload = captured.lock().expect("lock").clone().expect("payload captured");
+		let payload = captured.lock().clone().expect("payload captured");
 		assert_eq!(payload["tool_choice"], "none");
 		assert_eq!(payload["tools"].as_array().expect("tools").len(), 1);
 	}

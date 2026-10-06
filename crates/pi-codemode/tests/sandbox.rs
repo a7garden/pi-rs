@@ -10,7 +10,8 @@
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicI32, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc};
+use {parking_lot::Mutex};
 
 use parking_lot::Mutex as ParkingMutex;
 use serde_json::{json, Value};
@@ -490,8 +491,8 @@ async fn exposes_tools_and_records_calls() {
             let sum = second.as_ref().and_then(|v| v.get("sum")).cloned().unwrap();
             drop(first);
             api.done_ok(Some(json!({ "sum": sum })), CodemodeStoreWrites::default()).await;
-            seen.lock().unwrap().push(json!({ "a": 1, "b": 2 }));
-            seen.lock().unwrap().push(json!({ "a": 3, "b": 10 }));
+            seen.lock().push(json!({ "a": 1, "b": 2 }));
+            seen.lock().push(json!({ "a": 3, "b": 10 }));
         })
     });
     sandbox
@@ -504,7 +505,7 @@ async fn exposes_tools_and_records_calls() {
     let result = result_of(sandbox.execute(String::new(), CodemodeExecuteOptions::default())).await;
     assert_eq!(result.value(), Some(&json!({ "sum": 13 })));
     assert_eq!(
-        seen.lock().unwrap().as_slice(),
+        seen.lock().as_slice(),
         &[json!({ "a": 1, "b": 2 }), json!({ "a": 3, "b": 10 })]
     );
     let calls = result.calls();
@@ -552,7 +553,7 @@ async fn rejects_calls_to_unknown_tools() {
             let outcome = api.call(CallTarget::Tool, "missing", None).await;
             match outcome {
                 Err(message) => {
-                    reply.lock().unwrap().push(message);
+                    reply.lock().push(message);
                     api.done_err(&script_error_json("TypeError", "tools.missing is not a function")).await;
                 }
                 Ok(_) => api.done_ok(Some(json!("imported")), CodemodeStoreWrites::default()).await,
@@ -560,7 +561,7 @@ async fn rejects_calls_to_unknown_tools() {
         })
     });
     let result = result_of(sandbox.execute(String::new(), CodemodeExecuteOptions::default())).await;
-    assert_eq!(*reply.lock().unwrap(), vec!["Unknown tool \"missing\"".to_string()]);
+    assert_eq!(*reply.lock(), vec!["Unknown tool \"missing\"".to_string()]);
     let error = result.error().unwrap();
     assert_eq!(error.kind, CodemodeErrorKind::Script);
     assert_eq!(error.name.as_deref(), Some("TypeError"));
@@ -672,7 +673,7 @@ async fn exposes_globals_without_recording_calls() {
             globals: vec![CodemodeTool::new("attach", move |args, _ctx| {
                 let seen = seen_attach.clone();
                 async move {
-                    seen.lock().unwrap().push(args.unwrap_or(Value::Null));
+                    seen.lock().push(args.unwrap_or(Value::Null));
                     Ok(None)
                 }
             })],
@@ -687,7 +688,7 @@ async fn exposes_globals_without_recording_calls() {
     let calls = result.calls();
     assert_eq!(calls.iter().map(|call| call.name.as_str()).collect::<Vec<_>>(), vec!["echo"]);
     assert_eq!(
-        seen.lock().unwrap().as_slice(),
+        seen.lock().as_slice(),
         &[json!({ "ref": 1 }), json!("not awaited")]
     );
 }
@@ -699,7 +700,7 @@ async fn reads_the_store_snapshot_and_reports_writes() {
     let sandbox = sandbox_with(move |api| {
         let snapshot = snapshot_clone.clone();
         Box::pin(async move {
-            snapshot.lock().unwrap().push(json!(api.data.store));
+            snapshot.lock().push(json!(api.data.store));
             let writes = CodemodeStoreWrites {
                 set: {
                     let mut set = serde_json::Map::new();
@@ -723,7 +724,7 @@ async fn reads_the_store_snapshot_and_reports_writes() {
     )
     .await;
     // The worker receives key -> JSON text.
-    assert_eq!(snapshot.lock().unwrap()[0], json!({ "counter": "41", "old": "\"x\"" }));
+    assert_eq!(snapshot.lock()[0], json!({ "counter": "41", "old": "\"x\"" }));
     assert_eq!(result.value(), Some(&json!([41, 42, null, null])), "result: {:?}", result);
     let writes = result.store_writes().unwrap();
     assert_eq!(writes.set.get("counter"), Some(&json!(42)));

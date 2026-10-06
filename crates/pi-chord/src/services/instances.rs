@@ -11,7 +11,8 @@
 use std::collections::HashMap;
 use std::panic::AssertUnwindSafe;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc};
+use {parking_lot::Mutex, parking_lot::MutexGuard};
 
 use futures::FutureExt;
 
@@ -56,7 +57,7 @@ struct DirectoryInner<T: InstanceDirectoryEntry> {
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    mutex.lock()
 }
 
 /// Owns keyed instance lifetime and the cancellable tasks observing those instances
@@ -342,7 +343,7 @@ mod tests {
     fn collect_errors() -> (ErrorHandler, Arc<Mutex<Vec<String>>>) {
         let errors = Arc::new(Mutex::new(Vec::new()));
         let sink = Arc::clone(&errors);
-        (Arc::new(move |error: AnyError| sink.lock().unwrap().push(error.to_string())), errors)
+        (Arc::new(move |error: AnyError| sink.lock().push(error.to_string())), errors)
     }
 
     #[test]
@@ -389,25 +390,25 @@ mod tests {
             .observe(Arc::new(move |entry: TestEntry, context: Context| {
                 let sink = Arc::clone(&sink);
                 Box::pin(async move {
-                    sink.lock().unwrap().push((entry.key().to_string(), context.abort_signal().is_some()));
+                    sink.lock().push((entry.key().to_string(), context.abort_signal().is_some()));
                 }) as BoxFuture<()>
             }))
             .expect("observe");
         directory.insert(TestEntry::new("a", 1)).expect("insert");
         for _ in 0..200 {
-            if started.lock().unwrap().len() == 1 {
+            if started.lock().len() == 1 {
                 break;
             }
             tokio::task::yield_now().await;
         }
         assert_eq!(
-            started.lock().unwrap().clone(),
+            started.lock().clone(),
             vec![("a".to_string(), true)],
             "handler runs with a cancellable child context"
         );
         stop();
         assert_eq!(directory.observer_count(), 0);
-        assert!(errors.lock().unwrap().is_empty());
+        assert!(errors.lock().is_empty());
     }
 
     #[tokio::test]

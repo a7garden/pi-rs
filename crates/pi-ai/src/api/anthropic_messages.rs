@@ -2644,7 +2644,7 @@ mod tests {
 
 	/// Recording FetchFn fake returning a constructed SSE body
 	/// (`createSseResponse` + `createFakeAnthropicClient`).
-	fn sse_fetch(body: String, recorded: Arc<std::sync::Mutex<Vec<Value>>>) -> FetchFn {
+	fn sse_fetch(body: String, recorded: Arc<parking_lot::Mutex<Vec<Value>>>) -> FetchFn {
 		let body = Arc::new(body.into_bytes());
 		FetchFn::new(move |request: HttpRequest| {
 			let request_body = match request.body {
@@ -2652,7 +2652,7 @@ mod tests {
 				_ => String::new(),
 			};
 			if let Ok(parsed) = serde_json::from_str::<Value>(&request_body) {
-				recorded.lock().expect("lock").push(parsed);
+				recorded.lock().push(parsed);
 			}
 			let response = HttpResponse {
 				status: 200,
@@ -2765,8 +2765,8 @@ mod tests {
 	#[tokio::test]
 	async fn forwards_parsed_provider_stream_events_in_order() {
 		let model = test_model("anthropic", "claude-haiku-4-5");
-		let provider_events = Arc::new(std::sync::Mutex::new(Vec::<Value>::new()));
-		let event_models = Arc::new(std::sync::Mutex::new(Vec::<(String, String)>::new()));
+		let provider_events = Arc::new(parking_lot::Mutex::new(Vec::<Value>::new()));
+		let event_models = Arc::new(parking_lot::Mutex::new(Vec::<(String, String)>::new()));
 
 		let mut options = base_options();
 		let hook_events = provider_events.clone();
@@ -2777,15 +2777,14 @@ mod tests {
 			let hook_models = hook_models.clone();
 			let hook_model = hook_model.clone();
 			Box::pin(async move {
-				hook_events.lock().expect("lock").push(event);
+				hook_events.lock().push(event);
 				hook_models
 					.lock()
-					.expect("lock")
 					.push((event_model.provider().to_string(), event_model.id().to_string()));
 				let _ = &hook_model;
 			})
 		}));
-		let recorded = Arc::new(std::sync::Mutex::new(Vec::<Value>::new()));
+		let recorded = Arc::new(parking_lot::Mutex::new(Vec::<Value>::new()));
 		options.base.fetch = Some(sse_fetch(sse_body(&minimal_anthropic_events()), recorded));
 
 		let result = stream(&model, &normalize(&hello_context()), &options)
@@ -2795,7 +2794,6 @@ mod tests {
 		assert_eq!(result.stop_reason, StopReason::Stop, "error: {:?}", result.error_message);
 		let types: Vec<String> = provider_events
 			.lock()
-			.expect("lock")
 			.iter()
 			.map(|event| event.get("type").and_then(Value::as_str).unwrap_or_default().to_string())
 			.collect();
@@ -2810,7 +2808,7 @@ mod tests {
 				"message_stop",
 			]
 		);
-		let models = event_models.lock().expect("lock").clone();
+		let models = event_models.lock().clone();
 		assert!(models.iter().all(|(provider, id)| provider == "anthropic" && id == model.id()));
 	}
 
@@ -2821,7 +2819,7 @@ mod tests {
 		let response_model = "kimi-for-coding";
 		let initial_context = normalize(&hello_context());
 		let mut options = base_options();
-		let recorded = Arc::new(std::sync::Mutex::new(Vec::<Value>::new()));
+		let recorded = Arc::new(parking_lot::Mutex::new(Vec::<Value>::new()));
 		options.base.fetch = Some(sse_fetch(
 			sse_body(&response_model_events(
 				response_model,
@@ -2874,7 +2872,7 @@ mod tests {
 		model.compat = Some(compat);
 
 		let mut options = base_options();
-		let recorded = Arc::new(std::sync::Mutex::new(Vec::<Value>::new()));
+		let recorded = Arc::new(parking_lot::Mutex::new(Vec::<Value>::new()));
 		options.base.fetch = Some(sse_fetch(
 			sse_body(&response_model_events(fallback_model, json!({ "type": "text", "text": "done" }))),
 			recorded,
@@ -2932,7 +2930,7 @@ mod tests {
 		];
 
 		let mut options = base_options();
-		let recorded = Arc::new(std::sync::Mutex::new(Vec::<Value>::new()));
+		let recorded = Arc::new(parking_lot::Mutex::new(Vec::<Value>::new()));
 		options.base.fetch = Some(sse_fetch(sse_body(&events), recorded));
 
 		let result = stream(&model, &normalize(&hello_context()), &options)
@@ -2947,7 +2945,7 @@ mod tests {
 	#[tokio::test]
 	async fn forces_streaming_after_an_on_payload_replacement() {
 		let model = test_model("anthropic", "claude-fable-5-1");
-		let recorded = Arc::new(std::sync::Mutex::new(Vec::<Value>::new()));
+		let recorded = Arc::new(parking_lot::Mutex::new(Vec::<Value>::new()));
 		let mut options = base_options();
 		options.base.fetch = Some(sse_fetch(sse_body(&minimal_anthropic_events()), recorded.clone()));
 		options.base.on_payload = Some(Arc::new(|mut payload: Value, _model: Model| {
@@ -2963,7 +2961,7 @@ mod tests {
 			.into_result()
 			.await;
 
-		let requests = recorded.lock().expect("lock");
+		let requests = recorded.lock();
 		assert_eq!(requests.len(), 1);
 		assert_eq!(requests[0].get("stream"), Some(&Value::Bool(true)));
 	}
@@ -2975,7 +2973,7 @@ mod tests {
 			model.base.base_url = "https://openrouter.ai/api/v1".to_string();
 			model
 		};
-		let recorded = Arc::new(std::sync::Mutex::new(Vec::<Value>::new()));
+		let recorded = Arc::new(parking_lot::Mutex::new(Vec::<Value>::new()));
 		let mut options = base_options();
 		options.base.fetch = Some(sse_fetch(sse_body(&minimal_anthropic_events()), recorded.clone()));
 		options.anthropic.thinking_enabled = Some(false);
@@ -2984,7 +2982,7 @@ mod tests {
 			.into_result()
 			.await;
 
-		let requests = recorded.lock().expect("lock");
+		let requests = recorded.lock();
 		assert_eq!(requests.len(), 1);
 		let betas = requests[0]
 			.get("betas")
@@ -3001,7 +2999,7 @@ mod tests {
 		compat.supports_mid_convo_effort = Some(true);
 		model.compat = Some(compat);
 
-		let recorded = Arc::new(std::sync::Mutex::new(Vec::<Value>::new()));
+		let recorded = Arc::new(parking_lot::Mutex::new(Vec::<Value>::new()));
 		let mut options = base_options();
 		options.base.fetch = Some(sse_fetch(sse_body(&minimal_anthropic_events()), recorded.clone()));
 
@@ -3010,7 +3008,7 @@ mod tests {
 			.await;
 
 		assert_eq!(result.stop_reason, StopReason::Stop);
-		let requests = recorded.lock().expect("lock");
+		let requests = recorded.lock();
 		assert_eq!(requests.len(), 1);
 		let betas = requests[0]
 			.get("betas")
@@ -3048,7 +3046,7 @@ mod tests {
 		events[4].1 = event_json(delta);
 
 		let mut options = base_options();
-		let recorded = Arc::new(std::sync::Mutex::new(Vec::<Value>::new()));
+		let recorded = Arc::new(parking_lot::Mutex::new(Vec::<Value>::new()));
 		options.base.fetch = Some(sse_fetch(sse_body(&events), recorded));
 
 		let result = stream(&model, &normalize(&hello_context()), &options)
@@ -3151,7 +3149,7 @@ mod tests {
 		];
 
 		let mut options = base_options();
-		let recorded = Arc::new(std::sync::Mutex::new(Vec::<Value>::new()));
+		let recorded = Arc::new(parking_lot::Mutex::new(Vec::<Value>::new()));
 		options.base.fetch = Some(sse_fetch(sse_body(&events), recorded));
 
 		let result = stream(&model, &normalize(&context), &options).into_result().await;
@@ -3264,7 +3262,7 @@ mod tests {
 		];
 
 		let mut options = base_options();
-		let recorded = Arc::new(std::sync::Mutex::new(Vec::<Value>::new()));
+		let recorded = Arc::new(parking_lot::Mutex::new(Vec::<Value>::new()));
 		options.base.fetch = Some(sse_fetch(sse_body(&events), recorded));
 
 		let result = stream(&model, &normalize(&hello_context()), &options)
@@ -3333,7 +3331,7 @@ mod tests {
 		];
 
 		let mut options = base_options();
-		let recorded = Arc::new(std::sync::Mutex::new(Vec::<Value>::new()));
+		let recorded = Arc::new(parking_lot::Mutex::new(Vec::<Value>::new()));
 		options.base.fetch = Some(sse_fetch(sse_body(&events), recorded));
 
 		let result = stream(&model, &context, &options).into_result().await;
@@ -3383,7 +3381,7 @@ mod tests {
 		];
 
 		let mut options = base_options();
-		let recorded = Arc::new(std::sync::Mutex::new(Vec::<Value>::new()));
+		let recorded = Arc::new(parking_lot::Mutex::new(Vec::<Value>::new()));
 		options.base.fetch = Some(sse_fetch(sse_body(&events), recorded));
 
 		let result = stream(&model, &context, &options).into_result().await;
@@ -3414,7 +3412,7 @@ mod tests {
 			.collect();
 
 		let mut options = base_options();
-		let recorded = Arc::new(std::sync::Mutex::new(Vec::<Value>::new()));
+		let recorded = Arc::new(parking_lot::Mutex::new(Vec::<Value>::new()));
 		options.base.fetch = Some(sse_fetch(sse_body(&events), recorded));
 
 		let result = stream(&model, &normalize(&hello_context()), &options)
@@ -3437,7 +3435,7 @@ mod tests {
 		events.push(("proxy.stats", "not json".to_string()));
 
 		let mut options = base_options();
-		let recorded = Arc::new(std::sync::Mutex::new(Vec::<Value>::new()));
+		let recorded = Arc::new(parking_lot::Mutex::new(Vec::<Value>::new()));
 		options.base.fetch = Some(sse_fetch(sse_body(&events), recorded));
 
 		let result = stream(&model, &normalize(&hello_context()), &options)

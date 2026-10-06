@@ -25,7 +25,8 @@
 pub mod extension_oauth_types;
 
 use std::collections::BTreeMap;
-use std::sync::{Arc, LazyLock, RwLock};
+use std::sync::{Arc, LazyLock};
+use {parking_lot::RwLock};
 
 use crate::models::{
 	Models, ModelsApiStreamOptions, ModelsSimpleStreamOptions, MutableModels, Provider, ProviderStreams,
@@ -149,7 +150,7 @@ fn mismatched_stream_simple(model: &Model, api: &str) -> AssistantMessageEventSt
 
 /// Upstream `registerApiProvider` — replaces any existing entry for the api.
 pub fn register_api_provider(provider: ApiProviderInternal, source_id: Option<String>) {
-	api_registry().write().unwrap().insert(
+	api_registry().write().insert(
 		provider.api.clone(),
 		RegisteredApiProvider { provider, source_id },
 	);
@@ -157,24 +158,23 @@ pub fn register_api_provider(provider: ApiProviderInternal, source_id: Option<St
 
 /// Upstream `getApiProvider`.
 pub fn get_api_provider(api: &str) -> Option<ApiProviderInternal> {
-	api_registry().read().unwrap().get(api).map(|entry| entry.provider.clone())
+	api_registry().read().get(api).map(|entry| entry.provider.clone())
 }
 
 /// Upstream `getApiProviders`.
 pub fn get_api_providers() -> Vec<ApiProviderInternal> {
-	api_registry().read().unwrap().values().map(|entry| entry.provider.clone()).collect()
+	api_registry().read().values().map(|entry| entry.provider.clone()).collect()
 }
 
 /// Upstream `unregisterApiProviders(sourceId)`.
 pub fn unregister_api_providers(source_id: &str) {
 	api_registry()
 		.write()
-		.unwrap()
 		.retain(|_, entry| entry.source_id.as_deref() != Some(source_id));
 }
 
 fn clear_api_providers() {
-	api_registry().write().unwrap().clear();
+	api_registry().write().clear();
 }
 
 /// Upstream `registerFauxProvider` — registers a faux API + returns the
@@ -266,7 +266,7 @@ fn builtin_api_provider_instances() -> &'static BTreeMap<String, ApiProviderInte
 /// clobbering existing entries.
 fn register_built_in_api_providers(registry: &RwLock<BTreeMap<String, RegisteredApiProvider>>) {
 	for (api, streams) in builtin_api_streams() {
-		let mut guard = registry.write().unwrap();
+		let mut guard = registry.write();
 		if !guard.contains_key(api) {
 			let provider = ApiProviderInternal {
 				api: api.to_string(),
@@ -380,7 +380,7 @@ fn has_resolved_cloudflare_auth(options: Option<&StreamOptions>) -> bool {
 fn is_builtin_api_provider(api: &str) -> bool {
 	fn entry_source_is_none(api: &str) -> Option<bool> {
 		let registry = api_registry();
-		let guard = registry.read().unwrap();
+		let guard = registry.read();
 		guard.get(api).map(|entry| entry.source_id.is_none())
 	}
 	entry_source_is_none(api).unwrap_or(false)
@@ -578,12 +578,12 @@ mod tests {
 	async fn dispatches_unknown_providers_through_the_legacy_api_registry() {
 		let _guard = test_registry_guard().lock().await;
 		reset_api_providers();
-		let captured: Arc<std::sync::Mutex<Option<Option<String>>>> = Arc::new(std::sync::Mutex::new(None));
+		let captured: Arc<parking_lot::Mutex<Option<Option<String>>>> = Arc::new(parking_lot::Mutex::new(None));
 		let captured_for_stream = captured.clone();
 		let provider = ApiProviderInternal {
 			api: "openai-responses".to_string(),
 			stream: Arc::new(move |_model, context, options| {
-				*captured_for_stream.lock().unwrap() = Some(options.base.api_key.clone());
+				*captured_for_stream.lock() = Some(options.base.api_key.clone());
 				ok_stream(context)
 			}),
 			stream_simple: Arc::new(move |_model, _context, _options| {
@@ -606,7 +606,7 @@ mod tests {
 		.await;
 		assert_eq!(message.stop_reason, crate::types::StopReason::Stop);
 		assert_eq!(
-			captured.lock().unwrap().clone().flatten().as_deref(),
+			captured.lock().clone().flatten().as_deref(),
 			Some("request-key")
 		);
 		reset_api_providers();

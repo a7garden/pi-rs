@@ -16,7 +16,8 @@
 //!   crate-wide abort convention — see `utils/abort.rs`).
 
 use std::collections::BTreeMap;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc};
+use {parking_lot::Mutex};
 
 use crate::auth::types::{
 	AuthOperationOptions, Credential, CredentialInfo, CredentialModifyFn, CredentialStore,
@@ -38,7 +39,7 @@ impl InMemoryCredentialStore {
 
 	/// Per-provider serialization chain (upstream `enqueue`'s chain map).
 	fn chain_for(&self, provider_id: &str) -> Arc<tokio::sync::Mutex<()>> {
-		let mut chains = self.chains.lock().expect("credential store chain lock");
+		let mut chains = self.chains.lock();
 		chains
 			.entry(provider_id.to_string())
 			.or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
@@ -56,7 +57,7 @@ impl CredentialStore for InMemoryCredentialStore {
 		if let Some(signal) = options.as_ref().and_then(|options| options.signal.as_ref()) {
 			signal.check().map_err(ThrownValue::error)?;
 		}
-		Ok(self.credentials.lock().expect("credential store lock").get(provider_id).cloned())
+		Ok(self.credentials.lock().get(provider_id).cloned())
 	}
 
 	async fn list(&self, options: Option<AuthOperationOptions>) -> Result<Vec<CredentialInfo>, ThrownValue> {
@@ -66,7 +67,6 @@ impl CredentialStore for InMemoryCredentialStore {
 		Ok(self
 			.credentials
 			.lock()
-			.expect("credential store lock")
 			.iter()
 			.map(|(provider_id, credential)| CredentialInfo {
 				provider_id: provider_id.clone(),
@@ -87,13 +87,12 @@ impl CredentialStore for InMemoryCredentialStore {
 		let _guard =
 			race_with_abort_signal(chain.lock(), signal.clone()).await.map_err(ThrownValue::error)?;
 		signal.check().map_err(ThrownValue::error)?;
-		let current = self.credentials.lock().expect("credential store lock").get(provider_id).cloned();
+		let current = self.credentials.lock().get(provider_id).cloned();
 		let next = modify_fn(current.as_ref()).await?;
 		signal.check().map_err(ThrownValue::error)?;
 		if let Some(next) = &next {
 			self.credentials
 				.lock()
-				.expect("credential store lock")
 				.insert(provider_id.to_string(), next.clone());
 		}
 		// Upstream: `return next ?? current`.
@@ -106,7 +105,7 @@ impl CredentialStore for InMemoryCredentialStore {
 		let _guard =
 			race_with_abort_signal(chain.lock(), signal.clone()).await.map_err(ThrownValue::error)?;
 		signal.check().map_err(ThrownValue::error)?;
-		self.credentials.lock().expect("credential store lock").remove(provider_id);
+		self.credentials.lock().remove(provider_id);
 		Ok(())
 	}
 }

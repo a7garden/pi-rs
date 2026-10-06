@@ -102,7 +102,8 @@ mod tests {
 	use crate::providers::faux::{faux_assistant_message, FauxMessageOptions};
 	use crate::types::{CacheRetention, Context, Message, SimpleStreamOptions, StreamOptions, UserContentField, UserMessage};
 	use crate::utils::transcript::normalize_context;
-	use std::sync::{Arc, Mutex};
+	use std::sync::{Arc};
+	use {parking_lot::Mutex};
 
 	fn test_model() -> Model {
 		serde_json::from_value(serde_json::json!({
@@ -145,7 +146,7 @@ mod tests {
 		) -> AssistantMessageEventStream {
 			self.captured
 				.lock()
-				.unwrap_or_else(std::sync::PoisonError::into_inner)
+				
 				.push(serde_json::to_string(&options.base.headers).unwrap());
 			let stream = AssistantMessageEventStream::new();
 			let message = faux_assistant_message("ok", FauxMessageOptions::default());
@@ -169,7 +170,7 @@ mod tests {
 		let raw = capture
 			.captured
 			.lock()
-			.unwrap_or_else(std::sync::PoisonError::into_inner)
+			
 			.pop()
 			.expect("captured call");
 		serde_json::from_str(&raw).expect("headers serialize")

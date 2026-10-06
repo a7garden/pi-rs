@@ -20,7 +20,8 @@ use std::any::Any;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc};
+use {parking_lot::Mutex, parking_lot::MutexGuard};
 
 use async_trait::async_trait;
 
@@ -41,7 +42,7 @@ use crate::types::{
 };
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    mutex.lock()
 }
 
 /// Publishes subscription payloads out of a remote service endpoint
@@ -1293,7 +1294,7 @@ pub(crate) mod tests {
     ) -> TestMethod {
         Box::new(move |mut args: Vec<JsonValue>, _context: Context| {
             let payload = if args.is_empty() { JsonValue::Null } else { args.remove(0) };
-            received.lock().unwrap().push(payload.clone());
+            received.lock().push(payload.clone());
             let response = response.clone();
             Box::pin(async move { Ok(Some(response)) })
         })
@@ -1489,7 +1490,7 @@ pub(crate) mod tests {
             let received = Arc::clone(&received);
             Box::new(move |mut args: Vec<JsonValue>, context: Context| {
                 let payload = args.remove(0);
-                received.lock().unwrap().push(json!({
+                received.lock().push(json!({
                     "payload": payload,
                     "context": context.to_string(),
                 }));
@@ -1611,7 +1612,7 @@ pub(crate) mod tests {
             .subscribe(
                 "test.timeline",
                 ServiceMode::Singleton,
-                Arc::new(move |update: &ServiceProviderUpdate, _| sink.lock().unwrap().push(update.clone())),
+                Arc::new(move |update: &ServiceProviderUpdate, _| sink.lock().push(update.clone())),
             )
             .expect("subscribe");
         assert_eq!(
@@ -1700,7 +1701,7 @@ pub(crate) mod tests {
             .subscribe(
                 "test.models",
                 ServiceMode::Singleton,
-                Arc::new(move |update: &ServiceProviderUpdate, _| sink.lock().unwrap().push(update.clone())),
+                Arc::new(move |update: &ServiceProviderUpdate, _| sink.lock().push(update.clone())),
             )
             .expect("subscribe");
         subscription.activate();
@@ -1768,7 +1769,7 @@ pub(crate) mod tests {
             .subscribe(
                 "test.models",
                 ServiceMode::Singleton,
-                Arc::new(move |_, _| *counter.lock().unwrap() += 1),
+                Arc::new(move |_, _| *counter.lock() += 1),
             )
             .expect("subscribe");
         failing.activate();
@@ -1809,7 +1810,7 @@ pub(crate) mod tests {
                 "test.models",
                 ServiceMode::Singleton,
                 Arc::new(move |_, _| {
-                    let mut count = counter.lock().unwrap();
+                    let mut count = counter.lock();
                     *count += 1;
                     if *count > 2 {
                         panic!("listener failed");
@@ -1869,7 +1870,7 @@ pub(crate) mod tests {
                             ServiceMode::Singleton,
                             Arc::new(move |update: &ServiceProviderUpdate, _| {
                                 if let ServiceProviderUpdate::State { sequence, .. } = update {
-                                    late_sink.lock().unwrap().push(*sequence);
+                                    late_sink.lock().push(*sequence);
                                 }
                             }),
                         )
@@ -1925,7 +1926,7 @@ pub(crate) mod tests {
                         ServiceProviderUpdate::State { sequence, .. } => *sequence,
                         _ => return,
                     };
-                    sink.lock().unwrap().push(sequence);
+                    sink.lock().push(sequence);
                     if sequence == 1 {
                         state_for_listener.replace_with(json!({ "value": 3 }), &BACKGROUND_CONTEXT);
                     }
@@ -1962,7 +1963,7 @@ pub(crate) mod tests {
                     "test.counter",
                     ServiceMode::Singleton,
                     Arc::new(move |update: &ServiceProviderUpdate, context: &Context| {
-                        sink.lock().unwrap().push((
+                        sink.lock().push((
                             update.clone(),
                             context.to_string().contains("WithValue"),
                         ));
@@ -2037,7 +2038,7 @@ pub(crate) mod tests {
                 Arc::new(move |update: &ServiceProviderUpdate, _| {
                     match update {
                         ServiceProviderUpdate::State { sequence, .. } => {
-                            sink.lock().unwrap().push(("state".into(), *sequence));
+                            sink.lock().push(("state".into(), *sequence));
                             if *sequence == 1 {
                                 for value in 3..=103 {
                                     state_for_listener.replace_with(json!({ "value": value }), &BACKGROUND_CONTEXT);
@@ -2049,7 +2050,7 @@ pub(crate) mod tests {
                                 crate::types::ServiceMemberSnapshot::State { sequence, .. } => Some(*sequence),
                                 _ => None,
                             });
-                            sink.lock().unwrap().push(("reset".into(), sequence.expect("state member")));
+                            sink.lock().push(("reset".into(), sequence.expect("state member")));
                         }
                         _ => {}
                     }
@@ -2100,14 +2101,14 @@ pub(crate) mod tests {
                 Arc::new(move |update: &ServiceProviderUpdate, _| {
                     match update {
                         ServiceProviderUpdate::State { sequence, .. } => {
-                            sink.lock().unwrap().push(("state".into(), *sequence));
+                            sink.lock().push(("state".into(), *sequence));
                         }
                         ServiceProviderUpdate::Reset { snapshot } => {
                             let sequence = snapshot.instances[0].members.iter().find_map(|member| match member {
                                 crate::types::ServiceMemberSnapshot::State { sequence, .. } => Some(*sequence),
                                 _ => None,
                             });
-                            sink.lock().unwrap().push(("reset".into(), sequence.expect("state member")));
+                            sink.lock().push(("reset".into(), sequence.expect("state member")));
                         }
                         _ => {}
                     }
@@ -2155,8 +2156,8 @@ pub(crate) mod tests {
                 "test.counter",
                 ServiceMode::Singleton,
                 Arc::new(move |update: &ServiceProviderUpdate, _| {
-                    first_sink.lock().unwrap().push(update_kind(update));
-                    let mut count = counter.lock().unwrap();
+                    first_sink.lock().push(update_kind(update));
+                    let mut count = counter.lock();
                     *count += 1;
                     if *count == 1 {
                         let replacement_state = FakeState::new(json!({ "value": 2 }));
@@ -2176,7 +2177,7 @@ pub(crate) mod tests {
                 "test.counter",
                 ServiceMode::Singleton,
                 Arc::new(move |update: &ServiceProviderUpdate, _| {
-                    second_sink.lock().unwrap().push(update_kind(update));
+                    second_sink.lock().push(update_kind(update));
                 }),
             )
             .expect("subscribe")
@@ -2228,7 +2229,7 @@ pub(crate) mod tests {
                 "test.counter",
                 ServiceMode::Singleton,
                 Arc::new(move |update: &ServiceProviderUpdate, _| {
-                    sink.lock().unwrap().push(update_kind(update));
+                    sink.lock().push(update_kind(update));
                     if let Some(subscription) = listener_subscription.get() {
                         futures::executor::block_on(subscription.close(None));
                     }
@@ -2267,7 +2268,7 @@ pub(crate) mod tests {
                 "test.counter",
                 ServiceMode::Singleton,
                 Arc::new(move |update: &ServiceProviderUpdate, _| {
-                    sink.lock().unwrap().push(update_kind(update));
+                    sink.lock().push(update_kind(update));
                     if matches!(update, ServiceProviderUpdate::State { .. }) {
                         provider_for_listener.dispose().expect("reentrant dispose");
                     }
@@ -2307,7 +2308,6 @@ pub(crate) mod tests {
                 Box::pin(async move {
                     published
                         .lock()
-                        .unwrap()
                         .push((subscription_id, serde_json::to_value(update).expect("update serializes")));
                 })
             })

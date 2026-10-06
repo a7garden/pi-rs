@@ -15,7 +15,8 @@ use std::any::Any;
 use std::fmt;
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::{Arc, LazyLock, Mutex};
+use std::sync::{Arc, LazyLock};
+use {parking_lot::Mutex};
 use std::task::{Context as TaskContext, Poll, Waker};
 
 use crate::services::errors::AnyError;
@@ -113,11 +114,11 @@ impl AbortSignal {
     }
 
     pub fn aborted(&self) -> bool {
-        self.state.inner.lock().expect("abort signal lock").aborted
+        self.state.inner.lock().aborted
     }
 
     pub fn reason(&self) -> Option<AbortReason> {
-        self.state.inner.lock().expect("abort signal lock").reason.clone()
+        self.state.inner.lock().reason.clone()
     }
 
     /// Register a listener invoked synchronously on abort (and immediately if
@@ -125,7 +126,7 @@ impl AbortSignal {
     pub fn add_listener(&self, listener: impl Fn() + Send + Sync + 'static) -> Box<dyn FnOnce() + Send> {
         let listener: AbortListener = Box::new(listener);
         let id = {
-            let mut inner = self.state.inner.lock().expect("abort signal lock");
+            let mut inner = self.state.inner.lock();
             if inner.aborted {
                 drop(inner);
                 listener();
@@ -139,7 +140,7 @@ impl AbortSignal {
         let state = Arc::downgrade(&self.state);
         Box::new(move || {
             if let Some(state) = state.upgrade() {
-                let mut inner = state.inner.lock().expect("abort signal lock");
+                let mut inner = state.inner.lock();
                 inner.listeners.retain(|(registered, _)| *registered != id);
             }
         })
@@ -176,7 +177,7 @@ impl AbortSignal {
 
     pub(crate) fn abort_with(&self, reason: AbortReason) {
         let listeners = {
-            let mut inner = self.state.inner.lock().expect("abort signal lock");
+            let mut inner = self.state.inner.lock();
             if inner.aborted {
                 return;
             }
@@ -184,7 +185,7 @@ impl AbortSignal {
             inner.reason = Some(reason);
             std::mem::take(&mut inner.listeners)
         };
-        for waker in self.state.inner.lock().expect("abort signal lock").wakers.drain(..) {
+        for waker in self.state.inner.lock().wakers.drain(..) {
             waker.wake();
         }
         for listener in listeners {
@@ -201,7 +202,7 @@ impl Default for AbortSignal {
 
 impl fmt::Debug for AbortSignal {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let inner = self.state.inner.lock().expect("abort signal lock");
+        let inner = self.state.inner.lock();
         f.debug_struct("AbortSignal")
             .field("aborted", &inner.aborted)
             .field("reason", &inner.reason)
@@ -218,7 +219,7 @@ impl Future for AbortedFuture {
     type Output = AbortReason;
 
     fn poll(self: Pin<&mut Self>, cx: &mut TaskContext<'_>) -> Poll<Self::Output> {
-        let mut inner = self.signal.state.inner.lock().expect("abort signal lock");
+        let mut inner = self.signal.state.inner.lock();
         if inner.aborted {
             return Poll::Ready(inner.reason.clone().unwrap_or(AbortReason::Aborted));
         }

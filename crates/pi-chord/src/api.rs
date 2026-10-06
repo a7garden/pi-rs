@@ -213,7 +213,8 @@ mod tests {
     };
     use serde_json::json;
     use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-    use std::sync::{Arc, LazyLock, Mutex};
+    use std::sync::{Arc, LazyLock};
+    use {parking_lot::Mutex};
 
     type Trace = Arc<Mutex<Vec<String>>>;
 
@@ -245,11 +246,11 @@ mod tests {
     }
 
     fn push(trace: &Trace, entry: &str) {
-        trace.lock().expect("trace lock").push(entry.to_string());
+        trace.lock().push(entry.to_string());
     }
 
     fn snapshot(trace: &Trace) -> Vec<String> {
-        trace.lock().expect("trace lock").clone()
+        trace.lock().clone()
     }
 
     fn trace() -> Trace {
@@ -428,7 +429,7 @@ mod tests {
         let consumer = Facet::new("consumer", move |env: &mut FacetEnvironment| {
             push(&consumer_trace, "setup consumer");
             let requirement = env.use_local(&*LOCAL_GENERATION_VALUE)?;
-            *consumer_local.lock().expect("local value lock") = Some(requirement.clone());
+            *consumer_local.lock() = Some(requirement.clone());
             let activation_trace = consumer_trace.clone();
             let activation_local = requirement.clone();
             env.on_activate(Arc::new(move || {
@@ -466,7 +467,6 @@ mod tests {
         let provider = kernel.lock().await.provider().expect("provider");
         let original_local = local_value
             .lock()
-            .expect("local value lock")
             .clone()
             .unwrap();
 
@@ -632,13 +632,13 @@ mod tests {
                             push(&activation_trace, &format!("activate provider {name}"));
                             if name == "B" {
                                 if let Some(started) =
-                                    started_tx.lock().expect("started lock").take()
+                                    started_tx.lock().take()
                                 {
                                     let _ = started.send(());
                                 }
                                 let continue_signal = {
                                     // The std guard must drop before the await.
-                                    continue_rx.lock().expect("continue lock").take()
+                                    continue_rx.lock().take()
                                 };
                                 if let Some(continue_signal) = continue_signal {
                                     let _ = continue_signal.await;
@@ -681,7 +681,7 @@ mod tests {
         let retained_for_consumer = retained.clone();
         let consumer = Facet::new("shape-consumer", move |env: &mut FacetEnvironment| {
             let requirement = env.use_remote(REMOTE_GENERATION_VALUE.id())?;
-            *retained_for_consumer.lock().expect("retained lock") = Some(requirement);
+            *retained_for_consumer.lock() = Some(requirement);
             Ok(())
         });
         let provider = {
@@ -735,7 +735,7 @@ mod tests {
             "{error}"
         );
         assert!(!provider_disposed.load(Ordering::SeqCst));
-        let retained_requirement = retained.lock().expect("retained lock").clone().unwrap();
+        let retained_requirement = retained.lock().clone().unwrap();
         let client = retained_requirement.client().expect("retained client");
         let value = client
             .invoke("read", Vec::new(), &BACKGROUND_CONTEXT)
@@ -842,7 +842,7 @@ mod tests {
         .await
         .expect("host activates");
         // Clear the activation trace for the replacement generation.
-        trace.lock().expect("trace lock").clear();
+        trace.lock().clear();
 
         let error = host
             .reload(vec![consumer("B", true), provider("B")])
@@ -872,7 +872,7 @@ mod tests {
             let retained = retained_for_consumer.clone();
             Facet::new("terminal-consumer", move |env: &mut FacetEnvironment| {
                 let requirement = env.use_remote(REMOTE_GENERATION_VALUE.id())?;
-                *retained.lock().expect("retained lock") = Some(requirement);
+                *retained.lock() = Some(requirement);
                 env.on_deactivate(trace_disposal(&trace, "deactivate consumer"))?;
                 Ok(())
             })
@@ -908,7 +908,7 @@ mod tests {
         })
         .await
         .expect("host activates");
-        let retained_requirement = retained.lock().expect("retained lock").clone().unwrap();
+        let retained_requirement = retained.lock().clone().unwrap();
         let client = retained_requirement.client().expect("retained client");
         let value = client
             .invoke("read", Vec::new(), &BACKGROUND_CONTEXT)

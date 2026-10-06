@@ -44,7 +44,8 @@
 use std::collections::{BTreeMap, HashMap};
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc};
+use {parking_lot::Mutex};
 use std::time::Duration;
 
 use serde_json::{json, Value};
@@ -507,11 +508,11 @@ async fn tokenize(request: &RequestContext<'_>, content: &str) -> Result<Vec<u32
 static LABEL_TOKEN_CACHE: Mutex<Option<HashMap<String, Option<u32>>>> = Mutex::new(None);
 
 fn cache_get(key: &str) -> Option<Option<u32>> {
-	LABEL_TOKEN_CACHE.lock().expect("label token cache lock").as_ref().and_then(|map| map.get(key).copied())
+	LABEL_TOKEN_CACHE.lock().as_ref().and_then(|map| map.get(key).copied())
 }
 
 fn cache_put(key: String, value: Option<u32>) {
-	let mut guard = LABEL_TOKEN_CACHE.lock().expect("label token cache lock");
+	let mut guard = LABEL_TOKEN_CACHE.lock();
 	guard.get_or_insert_with(HashMap::new).insert(key, value);
 }
 
@@ -870,12 +871,12 @@ mod tests {
 	}
 
 	struct FakeServer {
-		requests: Arc<std::sync::Mutex<Vec<RecordedRequest>>>,
+		requests: Arc<parking_lot::Mutex<Vec<RecordedRequest>>>,
 		fetch: FetchFn,
 	}
 
 	fn fake_server(options: FakeServerOptions) -> FakeServer {
-		let requests: Arc<std::sync::Mutex<Vec<RecordedRequest>>> = Arc::default();
+		let requests: Arc<parking_lot::Mutex<Vec<RecordedRequest>>> = Arc::default();
 		let options = Arc::new(options);
 		let recorded = requests.clone();
 		let fetch = FetchFn::new(move |request: HttpRequest| {
@@ -890,7 +891,6 @@ mod tests {
 				let path = request.url.rsplit('/').next().unwrap_or_default().to_string();
 				recorded
 					.lock()
-					.expect("lock")
 					.push(RecordedRequest { url: request.url.clone(), body: body.clone(), headers: request.headers.clone() });
 				if path == "tokenize" {
 					let content = body.get("content").and_then(Value::as_str).unwrap_or_default().to_string();
@@ -1065,7 +1065,7 @@ mod tests {
 		);
 
 		let root = llama_server_root(&classifier_model.base.base_url);
-		let requests = server.requests.lock().expect("lock");
+		let requests = server.requests.lock();
 		for request in requests.iter() {
 			assert!(request.url.starts_with(&format!("{root}/")), "{}", request.url);
 			assert_eq!(request.body.get("model").and_then(Value::as_str), Some("qwen"));
@@ -1195,7 +1195,7 @@ mod tests {
 		assert_eq!(result.stop_reason, ClassifierStopReason::Error);
 		let message = result.error_message.clone().expect("message");
 		assert!(message.contains("Temperature must be a positive number, got 0"), "{message}");
-		assert!(server.requests.lock().expect("lock").is_empty());
+		assert!(server.requests.lock().is_empty());
 	}
 
 	#[tokio::test]
@@ -1217,7 +1217,7 @@ mod tests {
 		});
 		let recovered = classify(&model(), &questions, Some(&options(deep.fetch.clone()))).await;
 		assert_eq!(recovered.stop_reason, ClassifierStopReason::Stop);
-		assert_eq!(completion_depths(&deep.requests.lock().expect("lock")), vec![256, 4096]);
+		assert_eq!(completion_depths(&deep.requests.lock()), vec![256, 4096]);
 
 		let never = fake_server(FakeServerOptions {
 			next: Some(Box::new(|_prompt, _depth| BTreeMap::from([("A".to_string(), -0.1)]))),
@@ -1228,7 +1228,7 @@ mod tests {
 		assert!(failed.answers.is_empty());
 		let message = failed.error_message.clone().expect("message");
 		assert!(message.contains("did not rank labels B for pick within the top 32768 tokens"), "{message}");
-		assert_eq!(completion_depths(&never.requests.lock().expect("lock")), vec![256, 4096, 32768]);
+		assert_eq!(completion_depths(&never.requests.lock()), vec![256, 4096, 32768]);
 	}
 
 	#[tokio::test]
@@ -1244,7 +1244,7 @@ mod tests {
 		.expect("parses");
 		classify(&model(), &questions, Some(&options(server.fetch.clone()))).await;
 
-		let requests = server.requests.lock().expect("lock");
+		let requests = server.requests.lock();
 		let completion = requests.iter().find(|request| request.url.ends_with("/completion")).expect("completion");
 		assert_eq!(completion.body.get("prompt"), Some(&json!("<|assistant|>\n<think></think>")));
 	}
@@ -1297,7 +1297,6 @@ mod tests {
 		let first_tokenizations = server
 			.requests
 			.lock()
-			.expect("lock")
 			.iter()
 			.filter(|request| request.url.ends_with("/tokenize"))
 			.count();
@@ -1307,7 +1306,6 @@ mod tests {
 		let second_tokenizations = server
 			.requests
 			.lock()
-			.expect("lock")
 			.iter()
 			.filter(|request| request.url.ends_with("/tokenize"))
 			.count();
@@ -1338,20 +1336,20 @@ mod tests {
 		assert!(too_many_message.contains("A choice question needs 2 to 62 options, got 63"), "{too_many_message}");
 		let too_few_message = too_few.error_message.clone().expect("message");
 		assert!(too_few_message.contains("A score question needs 2 to 10 levels, got 1"), "{too_few_message}");
-		assert!(server.requests.lock().expect("lock").is_empty());
+		assert!(server.requests.lock().is_empty());
 	}
 
 	#[tokio::test]
 	async fn passes_completion_payloads_and_responses_through_the_request_hooks() {
 		let server = fake_server(FakeServerOptions::default());
-		let payloads = Arc::new(std::sync::Mutex::new(Vec::<Value>::new()));
-		let statuses = Arc::new(std::sync::Mutex::new(Vec::<u16>::new()));
+		let payloads = Arc::new(parking_lot::Mutex::new(Vec::<Value>::new()));
+		let statuses = Arc::new(parking_lot::Mutex::new(Vec::<u16>::new()));
 		let mut classify_options = options(server.fetch.clone());
 		let hook_payloads = payloads.clone();
 		classify_options.base.on_payload = Some(Arc::new(move |payload: Value, _model: Model| {
 			let hook_payloads = hook_payloads.clone();
 			Box::pin(async move {
-				hook_payloads.lock().expect("lock").push(payload.clone());
+				hook_payloads.lock().push(payload.clone());
 				let mut transformed = payload;
 				if let Value::Object(object) = &mut transformed {
 					object.insert("id_slot".to_string(), json!(1));
@@ -1363,7 +1361,7 @@ mod tests {
 		classify_options.base.on_response = Some(Arc::new(move |response: crate::types::ProviderResponse, _model: Model| {
 			let hook_statuses = hook_statuses.clone();
 			Box::pin(async move {
-				hook_statuses.lock().expect("lock").push(response.status);
+				hook_statuses.lock().push(response.status);
 			})
 		}));
 
@@ -1374,10 +1372,10 @@ mod tests {
 		.expect("parses");
 		classify(&model(), &questions, Some(&classify_options)).await;
 
-		assert_eq!(payloads.lock().expect("lock").len(), 1);
-		assert_eq!(payloads.lock().expect("lock")[0].get("n_predict"), Some(&json!(1)));
-		assert_eq!(*statuses.lock().expect("lock"), vec![200]);
-		let requests = server.requests.lock().expect("lock");
+		assert_eq!(payloads.lock().len(), 1);
+		assert_eq!(payloads.lock()[0].get("n_predict"), Some(&json!(1)));
+		assert_eq!(*statuses.lock(), vec![200]);
+		let requests = server.requests.lock();
 		let completion = requests.iter().find(|request| request.url.ends_with("/completion")).expect("completion");
 		assert_eq!(completion.body.get("id_slot"), Some(&json!(1)));
 	}
@@ -1426,7 +1424,7 @@ mod tests {
 
 		let message = result.error_message.clone().expect("message");
 		assert!(message.contains("Unsupported classifier API: typesafe-system-one"), "{message}");
-		assert!(server.requests.lock().expect("lock").is_empty());
+		assert!(server.requests.lock().is_empty());
 	}
 
 	#[test]

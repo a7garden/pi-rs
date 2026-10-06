@@ -568,7 +568,8 @@ mod tests {
 	use crate::http::{FetchFn, HttpResponse, ProviderHttpError};
 	use crate::utils::abort::AbortController;
 	use base64::Engine as _;
-	use std::sync::{Arc, Mutex};
+	use std::sync::{Arc};
+	use {parking_lot::Mutex};
 
 	type Shared<T> = Arc<Mutex<T>>;
 
@@ -707,14 +708,14 @@ mod tests {
 					));
 				}
 				if url == DEVICE_TOKEN_URL {
-					poll_times_for_fetch.lock().unwrap().push(crate::utils::diagnostics::now_ms());
+					poll_times_for_fetch.lock().push(crate::utils::diagnostics::now_ms());
 					assert_eq!(request.method, "POST");
 					let body = body_json(std::mem::replace(&mut request.body, HttpBody::Empty)).await;
 					assert_eq!(
 						body,
 						serde_json::json!({ "device_auth_id": "device-auth-id", "user_code": "ABCD-1234" })
 					);
-					return Ok(poll_responses_for_fetch.lock().unwrap().remove(0));
+					return Ok(poll_responses_for_fetch.lock().remove(0));
 				}
 				if url == TOKEN_URL {
 					assert_eq!(request.method, "POST");
@@ -745,24 +746,24 @@ mod tests {
 		let device_infos_for_notify = device_infos.clone();
 		let credential = tokio::spawn(login_device_code_for_test(never_aborted_signal(), move |event| {
 			if let AuthEvent::DeviceCode { user_code, verification_uri, interval_seconds, expires_in_seconds } = event {
-				device_infos_for_notify.lock().unwrap().push((user_code, verification_uri, interval_seconds, expires_in_seconds));
+				device_infos_for_notify.lock().push((user_code, verification_uri, interval_seconds, expires_in_seconds));
 			}
 		}));
 
 		// First poll happens immediately (interval "5" from the string field).
 		tokio::time::advance(std::time::Duration::from_millis(0)).await;
 		{
-			let infos = device_infos.lock().unwrap();
+			let infos = device_infos.lock();
 			assert_eq!(infos.len(), 1);
 			assert_eq!(infos[0].0, "ABCD-1234");
 			assert_eq!(infos[0].1, "https://auth.openai.com/codex/device");
 			assert_eq!(infos[0].2, Some(5));
 			assert_eq!(infos[0].3, Some(900));
 		}
-		assert_eq!(poll_times.lock().unwrap().len(), 1);
+		assert_eq!(poll_times.lock().len(), 1);
 
 		tokio::time::advance(std::time::Duration::from_millis(4999)).await;
-		assert_eq!(poll_times.lock().unwrap().len(), 1);
+		assert_eq!(poll_times.lock().len(), 1);
 
 		tokio::time::advance(std::time::Duration::from_millis(1)).await;
 		let credential = credential.await.expect("task").expect("credentials");
@@ -772,7 +773,7 @@ mod tests {
 			credential.credentials.extra.get("accountId").and_then(serde_json::Value::as_str),
 			Some("account-123")
 		);
-		assert_eq!(poll_times.lock().unwrap().len(), 2);
+		assert_eq!(poll_times.lock().len(), 2);
 		crate::auth::oauth::set_oauth_fetch(None);
 	}
 
@@ -834,7 +835,7 @@ mod tests {
 					never_aborted_signal(),
 					move |prompt| match &prompt.kind {
 						AuthPromptKind::Select { message, options } => {
-							select_for_prompt.lock().unwrap().push(crate::auth::types::AuthPrompt {
+							select_for_prompt.lock().push(crate::auth::types::AuthPrompt {
 								signal: prompt.signal.clone(),
 								kind: AuthPromptKind::Select { message: message.clone(), options: options.clone() },
 							});
@@ -847,7 +848,6 @@ mod tests {
 						AuthEvent::DeviceCode { user_code, verification_uri, interval_seconds, expires_in_seconds } => {
 							device_infos_for_notify
 								.lock()
-								.unwrap()
 								.push((user_code, verification_uri, interval_seconds, expires_in_seconds));
 						}
 						_ => {}
@@ -861,7 +861,7 @@ mod tests {
 		assert_eq!(credential.credentials.access, access_token);
 		assert_eq!(credential.credentials.extra.get("accountId").and_then(serde_json::Value::as_str), Some("account-456"));
 		{
-			let prompts = select_prompts.lock().unwrap();
+			let prompts = select_prompts.lock();
 			assert_eq!(prompts.len(), 1);
 			match &prompts[0].kind {
 				AuthPromptKind::Select { message, options } => {
@@ -876,7 +876,7 @@ mod tests {
 			}
 		}
 		{
-			let infos = device_infos.lock().unwrap();
+			let infos = device_infos.lock();
 			assert_eq!(infos.len(), 1);
 			assert_eq!(infos[0].0, "WXYZ-7890");
 			assert_eq!(infos[0].1, "https://auth.openai.com/codex/device");
@@ -929,7 +929,7 @@ mod tests {
 					));
 				}
 				if url == DEVICE_TOKEN_URL {
-					poll_times_for_fetch.lock().unwrap().push(crate::utils::diagnostics::now_ms());
+					poll_times_for_fetch.lock().push(crate::utils::diagnostics::now_ms());
 					return Ok(device_auth_pending_response());
 				}
 				Err(ProviderHttpError::new(format!("Unexpected fetch URL: {url}")))
@@ -938,7 +938,7 @@ mod tests {
 
 		let credentials = tokio::spawn(login_device_code_for_test(controller.signal(), |_event| {}));
 		tokio::time::advance(std::time::Duration::from_millis(0)).await;
-		assert_eq!(poll_times.lock().unwrap().len(), 1);
+		assert_eq!(poll_times.lock().len(), 1);
 
 		controller.abort();
 		tokio::time::advance(std::time::Duration::from_millis(1)).await;
@@ -970,7 +970,7 @@ mod tests {
 					));
 				}
 				if url == DEVICE_TOKEN_URL {
-					poll_times_for_fetch.lock().unwrap().push(crate::utils::diagnostics::now_ms());
+					poll_times_for_fetch.lock().push(crate::utils::diagnostics::now_ms());
 					return Ok(device_auth_pending_response());
 				}
 				Err(ProviderHttpError::new(format!("Unexpected fetch URL: {url}")))
@@ -979,7 +979,7 @@ mod tests {
 
 		let credentials = tokio::spawn(login_device_code_for_test(never_aborted_signal(), |_event| {}));
 		tokio::time::advance(std::time::Duration::from_millis(0)).await;
-		assert_eq!(poll_times.lock().unwrap().len(), 1);
+		assert_eq!(poll_times.lock().len(), 1);
 
 		tokio::time::advance(std::time::Duration::from_secs(15 * 60)).await;
 		let error = credentials.await.expect("task").expect_err("timeout");
@@ -1026,8 +1026,8 @@ mod tests {
 					));
 				}
 				if url == DEVICE_TOKEN_URL {
-					poll_times_for_fetch.lock().unwrap().push(crate::utils::diagnostics::now_ms());
-					return Ok(poll_responses_for_fetch.lock().unwrap().remove(0));
+					poll_times_for_fetch.lock().push(crate::utils::diagnostics::now_ms());
+					return Ok(poll_responses_for_fetch.lock().remove(0));
 				}
 				if url == TOKEN_URL {
 					return Ok(json_response(
@@ -1051,7 +1051,7 @@ mod tests {
 		let credential = credentials.await.expect("task").expect("credentials");
 		assert_eq!(credential.credentials.access, access_token);
 		assert_eq!(credential.credentials.extra.get("accountId").and_then(serde_json::Value::as_str), Some("account-403-404"));
-		assert_eq!(poll_times.lock().unwrap().len(), 3);
+		assert_eq!(poll_times.lock().len(), 3);
 		crate::auth::oauth::set_oauth_fetch(None);
 	}
 
@@ -1162,7 +1162,7 @@ mod tests {
 				assert_eq!(url, TOKEN_URL);
 				let body = std::mem::replace(&mut request.body, HttpBody::Empty).collect().await.expect("body");
 				let exchange = crate::auth::oauth::parse_form(&String::from_utf8(body).expect("utf8"));
-				*exchange_for_fetch.lock().unwrap() = Some(exchange);
+				*exchange_for_fetch.lock() = Some(exchange);
 				Ok(json_response(
 					serde_json::json!({
 						"access_token": access_for_fetch,
@@ -1184,7 +1184,7 @@ mod tests {
 					move |prompt| match &prompt.kind {
 						AuthPromptKind::Select { .. } => Ok("browser".to_string()),
 						AuthPromptKind::ManualCode { .. } => {
-							let state = url::Url::parse(&auth_url_for_prompt.lock().unwrap())
+							let state = url::Url::parse(&auth_url_for_prompt.lock())
 								.expect("auth url")
 								.query_pairs()
 								.find(|(key, _)| key == "state")
@@ -1196,7 +1196,7 @@ mod tests {
 					},
 					move |event| {
 						if let AuthEvent::AuthUrl { url, .. } = event {
-							*auth_url_for_notify.lock().unwrap() = url;
+							*auth_url_for_notify.lock() = url;
 						}
 					},
 				),
@@ -1208,7 +1208,7 @@ mod tests {
 		assert_eq!(credential.credentials.access, access_token);
 		assert_eq!(credential.credentials.extra.get("accountId").and_then(serde_json::Value::as_str), Some("acct"));
 		{
-			let exchange = exchange_seen.lock().unwrap().clone().expect("exchange captured");
+			let exchange = exchange_seen.lock().clone().expect("exchange captured");
 			assert_eq!(exchange.get("code").map(String::as_str), Some("pasted-code"));
 			assert_eq!(exchange.get("redirect_uri").map(String::as_str), Some("http://localhost:1455/auth/callback"));
 		}

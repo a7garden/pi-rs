@@ -2,7 +2,8 @@
 //! here the fixture is the crate's own `mcp-stdio-fixture` bin (and
 //! `mcp-stubborn-fixture` for the shutdown case), located via `CARGO_BIN_EXE_*`.
 
-use std::sync::{Arc, Mutex as StdMutex};
+use std::sync::{Arc};
+use {parking_lot::Mutex as StdMutex};
 use std::time::{Duration, Instant};
 
 use pi_mcp::client::{ClientState, McpClient, McpClientOptions};
@@ -18,7 +19,7 @@ fn stubborn() -> String {
 }
 
 fn stderr_text(stderr: &Arc<StdMutex<String>>) -> String {
-	stderr.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone()
+	stderr.lock().clone()
 }
 
 async fn wait_for_stderr(stderr: &Arc<StdMutex<String>>, needle: &str) {
@@ -41,7 +42,7 @@ async fn connects_to_a_newline_delimited_mcp_server_and_captures_stderr() {
 		on_stderr: Some(Arc::new(move |chunk| {
 			stderr_sink
 				.lock()
-				.unwrap_or_else(std::sync::PoisonError::into_inner)
+				
 				.push_str(chunk);
 		})),
 		..Default::default()
@@ -80,7 +81,7 @@ async fn kills_a_server_that_ignores_shutdown_including_its_children() {
 		on_stderr: Some(Arc::new(move |chunk| {
 			stderr_sink
 				.lock()
-				.unwrap_or_else(std::sync::PoisonError::into_inner)
+				
 				.push_str(chunk);
 		})),
 		..Default::default()

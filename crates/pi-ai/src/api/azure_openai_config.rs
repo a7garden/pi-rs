@@ -201,9 +201,9 @@ impl AzureEndpointOptions {
 	/// Cross-module process-environment guard: the azure tests in the config,
 	/// responses, and completions modules all mutate the process env exactly
 	/// like the upstream suite; they serialize on this shared lock.
-	pub(crate) fn test_env_lock() -> std::sync::MutexGuard<'static, ()> {
-		static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-		LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+	pub(crate) fn test_env_lock() -> parking_lot::MutexGuard<'static, ()> {
+		static LOCK: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
+		LOCK.lock()
 	}
 }
 

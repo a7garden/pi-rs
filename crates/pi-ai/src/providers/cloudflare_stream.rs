@@ -119,7 +119,7 @@ pub fn cloudflare_classifier(classifier: Arc<dyn ProviderClassifier>) -> Arc<dyn
 #[cfg(test)]
 mod tests {
 	// Port of test/cloudflare-stream.test.ts.
-	use std::sync::Mutex;
+	use parking_lot::Mutex;
 
 	use super::*;
 	use crate::types::{BaseModelFields, Context, ModelCost, ModelCostRates, ModelInput};
@@ -170,7 +170,7 @@ mod tests {
 			_context: &TranscriptContext,
 			_options: &StreamOptions,
 		) -> AssistantMessageEventStream {
-			self.captured.lock().expect("captured lock").push(model.base.base_url.clone());
+			self.captured.lock().push(model.base.base_url.clone());
 			AssistantMessageEventStream::new()
 		}
 
@@ -180,7 +180,7 @@ mod tests {
 			_context: &TranscriptContext,
 			_options: &SimpleStreamOptions,
 		) -> AssistantMessageEventStream {
-			self.captured.lock().expect("captured lock").push(model.base.base_url.clone());
+			self.captured.lock().push(model.base.base_url.clone());
 			AssistantMessageEventStream::new()
 		}
 	}
@@ -209,7 +209,7 @@ mod tests {
 		streams.stream_simple(&test_model(), &empty_context(), &simple_options);
 
 		assert_eq!(
-			*captured.lock().expect("captured lock"),
+			*captured.lock(),
 			vec![
 				"https://gateway.ai.cloudflare.com/v1/account/gateway/openai".to_string(),
 				"https://gateway.ai.cloudflare.com/v1/account/gateway/openai".to_string(),
@@ -225,7 +225,7 @@ mod tests {
 		let options = SimpleStreamOptions::default();
 		streams.stream_simple(&test_model(), &empty_context(), &options);
 
-		let captured = captured.lock().expect("captured lock");
+		let captured = captured.lock();
 		assert_eq!(
 			captured.first().map(String::as_str),
 			Some("https://gateway.ai.cloudflare.com/v1/{CLOUDFLARE_ACCOUNT_ID}/{CLOUDFLARE_GATEWAY_ID}/openai")

@@ -19,7 +19,8 @@
 //!   `ThrownValue::Error(AbortReason)`; upstream `ModelsError` causes are
 //!   folded into the message via `ModelsError::with_cause` (crate convention).
 
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc};
+use {parking_lot::Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::auth::types::{
@@ -226,7 +227,7 @@ pub async fn refresh_stored_oauth_credential(
 	// closure (upstream's first statement) and again after, like `finally`.
 	let disposer: Arc<Mutex<Option<Box<dyn FnOnce() + Send>>>> = Arc::new(Mutex::new(Some(listener)));
 	let consume_disposer = |disposer: &Arc<Mutex<Option<Box<dyn FnOnce() + Send>>>>| {
-		if let Some(dispose) = disposer.lock().expect("abort listener lock").take() {
+		if let Some(dispose) = disposer.lock().take() {
 			dispose();
 		}
 	};
@@ -242,7 +243,7 @@ pub async fn refresh_stored_oauth_credential(
 			let provider_id = provider_id.clone();
 			let disposer = disposer.clone();
 			Box::pin(async move {
-				if let Some(dispose) = disposer.lock().expect("abort listener lock").take() {
+				if let Some(dispose) = disposer.lock().take() {
 					dispose();
 				}
 				signal.check().map_err(ThrownValue::error)?;
