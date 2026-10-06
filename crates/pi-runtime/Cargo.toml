@@ -1,0 +1,27 @@
+[package]
+name = "pi-runtime"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+pi-chord = { path = "../pi-chord" }
+pi-codemode = { path = "../pi-codemode" }
+deno_core = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+parking_lot = { workspace = true }
+async-trait = "0.1"
+sha2 = "0.10"
+# TypeScript/JSX transpile for module loading and facet bundling (swc stack).
+# The swc crates below are version-pinned to the exact revisions deno_ast
+# links against; bump them together with deno_ast.
+deno_ast = { version = "0.53", features = ["transpiling"] }
+deno_error = "0.7"
+
+[dev-dependencies]
+tempfile = "3"
