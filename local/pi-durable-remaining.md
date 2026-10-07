@@ -77,3 +77,16 @@ Verification commands:
 
 Then: pi-env, pi-coding-agent (scaffolds), ledger finalization, workspace
 version bump only after all crates are at v1.0.3 (PORT_MAP rule 6).
+
+## Crate-wide serial run (this commit, known-hang tests skipped)
+291 passed / 16 FAILED, then hangs in the tasks_* abort family:
+- failures cluster in chord_guide(1), runtime_registry(1), task_runtime(2),
+  tasks_abort(2), tasks_graph(1), tasks_queue(2), tasks_phase_runtime(1),
+  tasks_recovery(2), runtime_tools remainder
+- hangs: tasks_recovery::task_waits_for_all_settled_dependencies_including_faulted_tasks,
+  tasks_abort::abort_during_reservation_settlement / abort_mark_wins_over_a_fault,
+  plus state view-watch suite and select_phase (pre-existing)
+Common thread of the tasks_* failures/hangs: abort/join semantics on the
+runner lifecycle (abort_invocation signals the controller, but the runner
+completes only when its phase future observes the signal; join_invocation
+then waits on invocation.done) — same class as the tools abort fixes.
