@@ -259,6 +259,7 @@ pub fn clear_progress(slot: &mut ToolSlot) {
 pub enum SchedulerFault {
 	Faulted { message: String },
 	Aborted { reason: String },
+	Orphaned { reason: String },
 }
 
 /// Harness cleanup for a terminal outcome the scheduler writes itself
@@ -310,6 +311,10 @@ pub fn settle_scheduler_outcome(
 			detail: Some(Value::String(message.clone())),
 		},
 		SchedulerFault::Aborted { reason } => SubmissionSettlement::Unanswered {
+			reason: reason.clone(),
+			detail: None,
+		},
+		SchedulerFault::Orphaned { reason } => SubmissionSettlement::Unanswered {
 			reason: reason.clone(),
 			detail: None,
 		},

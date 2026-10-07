@@ -230,6 +230,10 @@ pub struct TaskScheduler {
 
 	inner: Mutex<SchedulerState>,
 	wake: tokio::sync::Notify,
+	/// The runtime the scheduler was opened on; publications that fire from
+	/// the storage-bridge thread spawn scheduler work through this handle so
+	/// they never land on (and deadlock against) the bridge's own runtime.
+	runtime_handle: tokio::runtime::Handle,
 }
 
 struct SchedulerState {
@@ -277,6 +281,7 @@ impl TaskScheduler {
 			withdraw_inputs: options.withdraw_inputs,
 			conversation: options.conversation,
 			context: options.context,
+			runtime_handle: tokio::runtime::Handle::current(),
 			inner: Mutex::new(SchedulerState {
 				live: BTreeMap::new(),
 				invocations: HashMap::new(),
@@ -693,7 +698,7 @@ impl TaskScheduler {
 			inner.reconcile_scheduled = true;
 		}
 		let scheduler = self.clone();
-		tokio::spawn(async move {
+		self.runtime_handle.spawn(async move {
 			tokio::task::yield_now().await;
 			scheduler.reconcile().await;
 		});
@@ -1084,12 +1089,13 @@ impl TaskScheduler {
 			inner.draining = true;
 		}
 		let scheduler = self.clone();
-		tokio::spawn(async move {
+		self.runtime_handle.spawn(async move {
 			scheduler.drain().await;
 		});
 	}
 
 	async fn drain(self: &Arc<Self>) {
+		eprintln!("[drain] pass");
 		let result: Result<(), String> = async {
 			loop {
 				let proceed = {
@@ -1144,10 +1150,17 @@ impl TaskScheduler {
 						let inner = scheduler.inner.lock();
 						inner.enabled && !inner.closing
 					};
+					eprintln!("[reserve] pass enabled={enabled}");
 					if !enabled {
 						return Ok(());
 					}
 					scheduler.load_scopes_on(tx, Vec::new())?;
+					#[cfg(test)]
+					for record in scheduler.live_snapshot() {
+						if record.kind == "pi.compaction" {
+							eprintln!("[reserve-live] task={:?} status={:?}", record.id, record.state.status);
+						}
+					}
 					let owned = scheduler.owned_live_on(tx);
 					// Taken once per pass, and only when some task is a
 					// candidate.
@@ -1367,7 +1380,7 @@ impl TaskScheduler {
 
 	fn start(self: &Arc<Self>, reservation: Reservation) {
 		let scheduler = self.clone();
-		tokio::spawn(async move {
+		self.runtime_handle.spawn(async move {
 			let invocation = reservation.invocation.clone();
 			let result: Result<(), String> = async {
 				match invocation.mode {
@@ -1387,6 +1400,8 @@ impl TaskScheduler {
 	/// Run phase handlers, each preceded by a step that decides on the line
 	/// whether the invocation continues.
 	async fn run(self: &Arc<Self>, reservation: Reservation) -> Result<(), String> {
+		#[cfg(test)]
+		eprintln!("[run] task={:?} mode={:?}", reservation.invocation.task_id, reservation.invocation.mode);
 		let invocation = reservation.invocation.clone();
 		let state = Arc::new(Mutex::new(RunState {
 			task: reservation.task.clone(),

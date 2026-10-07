@@ -144,10 +144,31 @@ impl Harness {
 					.unwrap_or(0)
 			})
 		});
-		let settings: Arc<dyn Fn() -> HarnessSettings + Send + Sync> = options.settings_provider.clone().unwrap_or_else(|| {
-			let settings_value = options.settings.clone();
-			Arc::new(move || settings_value.clone().unwrap_or_default())
-		});
+		let settings: Arc<dyn Fn() -> HarnessSettings + Send + Sync> = match options.settings_provider.clone() {
+			Some(provider) => {
+				// The provider is a live overlay (upstream: tests mutate one
+				// settings object): fields it leaves absent keep the static
+				// settings.
+				let static_settings = options.settings.clone();
+				Arc::new(move || {
+					let mut merged = static_settings.clone().unwrap_or_default();
+					let dynamic = provider();
+					merged.extensions = dynamic.extensions.or(merged.extensions);
+					merged.stream = dynamic.stream.or(merged.stream);
+					merged.retry = dynamic.retry.or(merged.retry);
+					merged.compaction = dynamic.compaction.or(merged.compaction);
+					merged.progress = dynamic.progress.or(merged.progress);
+					merged.tool_execution = dynamic.tool_execution.or(merged.tool_execution);
+					merged.steering_mode = dynamic.steering_mode.or(merged.steering_mode);
+					merged.follow_up_mode = dynamic.follow_up_mode.or(merged.follow_up_mode);
+					merged
+				}) as Arc<dyn Fn() -> HarnessSettings + Send + Sync>
+			}
+			None => {
+				let settings_value = options.settings.clone();
+				Arc::new(move || settings_value.clone().unwrap_or_default())
+			}
+		};
 		let session = std::sync::Arc::new(create_session(storage.clone()));
 		let conversation_created = options.conversation_created.clone();
 		let harness_slot: Arc<Mutex<Option<Arc<Harness>>>> = Arc::default();
@@ -199,6 +220,11 @@ impl Harness {
 					},
 					crate::types::TaskOutcomeStatus::Aborted => crate::harness::live::SchedulerFault::Aborted {
 						reason: outcome.reason.clone().unwrap_or_else(|| "aborted".to_string()),
+					},
+					// The scheduler also writes `orphaned` (spec §5.4); its
+					// cleanup clears the compaction status and ends the run.
+					crate::types::TaskOutcomeStatus::Orphaned => crate::harness::live::SchedulerFault::Orphaned {
+						reason: outcome.reason.clone().unwrap_or_else(|| "orphaned".to_string()),
 					},
 					_ => return Ok(()),
 				};
@@ -573,7 +599,8 @@ impl Conversation {
 		self.harness.tasks.resume();
 		let input = CompactionInput { reason: CompactionReason::Manual, instructions };
 		let conversation_id = self.id;
-		self.harness
+		let id = self
+			.harness
 			.session
 			.commit(
 				move |tx| {
@@ -587,7 +614,11 @@ impl Conversation {
 				context,
 			)
 			.await
-			.map_err(|e| e.to_string())
+			.map_err(|e| e.to_string())?;
+		// The creation publication can land inside a drain pass whose reserve
+		// already ran; kick again so the new task dispatches immediately.
+		self.harness.tasks.resume();
+		Ok(id)
 	}
 
 	pub async fn reset(&self, handoff: Option<String>, context: &Context) -> Result<(), String> {

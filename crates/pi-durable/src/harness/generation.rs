@@ -370,8 +370,6 @@ async fn prepare_phase(task: TaskRecord, runtime: Arc<dyn TaskRuntime>, context:
 		}
 	}
 	let view = runtime.context_view(conversation_id, &context, None).await?;
-	#[cfg(test)]
-	eprintln!("[prepare-entry] attempt={attempt} compacted={compacted:?} overflow={overflow:?} entries={}", view.entries.len());
 	let shown = replay_sections(&view.messages);
 	let report_runtime = runtime.clone();
 	let report = move |error: String| report_runtime.report(error);
@@ -412,8 +410,6 @@ async fn prepare_phase(task: TaskRecord, runtime: Arc<dyn TaskRuntime>, context:
 		}
 	}
 	let entries = plan_system_entries(&view, &desired, &agent.tool_declarations(), runtime.now() as i64);
-	#[cfg(test)]
-	eprintln!("[prep] tokens_check keep_recent={} background={}", runtime.settings().compaction.keep_recent_tokens, runtime.settings().compaction.background_tokens);
 	// Upstream reads `settings.compaction` live at selection time (the runtime
 	// exposes the harness settings object), so a policy changed while sections
 	// rendered applies to the cut decision.
@@ -427,8 +423,6 @@ async fn prepare_phase(task: TaskRecord, runtime: Arc<dyn TaskRuntime>, context:
 	} else {
 		None
 	};
-	#[cfg(test)]
-	eprintln!("[prep] threshold={threshold:?} policy={:?}", runtime.settings().compaction);
 	if threshold == Some("blocking") {
 		// Compact first and prepare again; the transcript is unchanged until
 		// the compaction appends.
@@ -486,8 +480,6 @@ async fn prepare_phase(task: TaskRecord, runtime: Arc<dyn TaskRuntime>, context:
 					// Checked in this commit, so a compaction admitted during
 					// preparation counts.
 					if threshold == Some("background") {
-						#[cfg(test)]
-						eprintln!("[prep] starting background compaction");
 						let draft = tx
 							.doc(&crate::harness::live::live_doc(), Some(conversation_id.0), None, None)
 							.map_err(|e| e.to_string())?;
