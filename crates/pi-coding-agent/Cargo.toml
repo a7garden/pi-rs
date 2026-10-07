@@ -1,0 +1,20 @@
+[package]
+name = "pi-coding-agent"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+# Session ids (upstream crypto.randomUUID → generateId).
+getrandom = "0.2"
+# Insertion-ordered entry/label indexes (upstream Map iteration order).
+indexmap = { version = "2", features = ["serde"] }
+# Wire types cross process boundaries (session JSONL files).
+serde = { workspace = true }
+serde_json = { workspace = true, features = ["preserve_order"] }
+thiserror = { workspace = true }
+# Session listing/discovery (async list/listAll, spawn_blocking file scans).
+tokio = { workspace = true }
+pi-ai = { path = "../pi-ai" }
+pi-agent = { path = "../pi-agent" }
