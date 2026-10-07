@@ -1367,9 +1367,13 @@ async fn tool_abort_writes_only_durable_output_and_settles_the_run() {
 	let slow = tool("slow", move |_args, api, ctx| {
 		let started = started_copy.clone();
 		async move {
+			eprintln!("[tw] tool entered");
 			api.output(b"durable\n", None);
+			eprintln!("[tw] output done");
 			api.details(json!({"started":true}), &ctx).await.expect("persist durable progress");
+			eprintln!("[tw] details done");
 			api.output(b"buffered\n", None);
+			eprintln!("[tw] output2 done");
 			started.notify_one();
 			std::future::pending::<()>().await;
 			ToolExecutionResult::default()
@@ -1382,7 +1386,9 @@ async fn tool_abort_writes_only_durable_output_and_settles_the_run() {
 	let live = fixture.harness.session.snapshot(&live_doc(), Some(fixture.root.id.0), None, &context()).await.unwrap().unwrap();
 	let task_id = live.get("tools").and_then(Value::as_array).and_then(|slots| slots.first()).and_then(|slot| slot.get("taskId")).and_then(Value::as_u64).unwrap();
 	assert_eq!(fixture.harness.abort_task(crate::types::TaskId(task_id), &context()).await.unwrap(), "marked");
+	eprintln!("[ta] abort marked");
 	receipt.wait(&context()).await.expect("aborted tool result continues run");
+	eprintln!("[ta] receipt settled");
 	assert_eq!(result_text(&results(&all_entries(&fixture.root).await)[0]), "durable\n|<harness>\n[error] Tool slow was aborted\n</harness>");
 	close(&fixture).await;
 }

@@ -55,16 +55,20 @@ Known root-cause candidates to investigate first:
 3. state module: `ConversationViews::watch` (attach_watch_internal) still does
    not register an observer — likely the same missing-wiring class fixed for
    `state()` in view.rs; the failing-view-listener test is the first hang.
-5. runtime_tools: `call_phase` (tool.rs) carries repaired args / block /
-   final result through per-thread RefCells (ARGS/BLOCK/FINAL at tool.rs:844).
-   The afterTool replacement ("replaced") and beforeTool argument rewrite
-   ("#7!") do not reach the executor in
-   prepare_arguments_runs_before_validation_and_after_tool_replacements_chain —
-   suspect the hook callbacks run on a thread where those RefCells were never
-   seeded (same D3 class as the beforeRequest fix in generation.rs; replace
-   the RefCells with shared Arc<Mutex> slots like that fix).
-   tool_task_abort_is_distinct_from_recovery_interruption and
-   tool_abort_writes_only_durable_output hang (>60s).
+5. runtime_tools RESOLVED for 13 of 16: beforeTool/afterTool rewritten as
+   sequential loops over agent_hooks("pi.tool") with chained results (first
+   blocking decision wins, later hooks skipped; afterTool replacements feed
+   the next hook); all_entries() reversed (storage scan newest-first).
+   REMAINING: 3 FAILED (generation_hook_errors yield order,
+   yielded_generation submission placed, real_bash_output reopen) and the
+   abort/details/progress hang family (tool_abort_writes_only_durable,
+   aborting_during_after_tool, explicit_text, generation_after_tools_hook,
+   interrupted_*, safe_*). Next lever identified: api.details() must reject
+   on the invocation abort (upstream details races the invocation signal);
+   a first attempt (bridge invocation signal into
+   progress.mark_and_wait via race_with_abort_signal) still hung — the wait
+   is not the only abort path; audit progress.stop()/details waiter
+   rejection next.
 4. select_phase ignore: pre-close creation publication does not trigger a
    seeing drain pass; a lossless publication→kick→drain handoff would let the
    `#[ignore]` come off.
