@@ -7,6 +7,8 @@
 
 use std::collections::BTreeMap;
 
+use indexmap::IndexMap;
+
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -548,7 +550,7 @@ pub struct SystemMessage {
 	pub content: SystemContent,
 	/// Named, ordered prompt sections; `null` removes a section.
 	#[serde(default, skip_serializing_if = "Option::is_none")]
-	pub sections: Option<BTreeMap<String, Option<String>>>,
+	pub sections: Option<IndexMap<String, Option<String>>>,
 	/// Complete definitions of tools that become available at this point.
 	#[serde(rename = "toolsAdded", default, skip_serializing_if = "Option::is_none")]
 	pub tools_added: Option<Vec<Tool>>,

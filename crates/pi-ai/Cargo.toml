@@ -11,6 +11,7 @@ serde = { workspace = true }
 # TelemetryContext passed through provider request options.
 pi-telemetry = { path = "../pi-telemetry" }
 serde_json = { workspace = true, features = ["preserve_order"] }
+indexmap = { version = "2", features = ["serde"] }
 thiserror = { workspace = true }
 # Adapter tasks (lazy_stream spawn), abort races, sleep, default fetch client runtime.
 tokio = { workspace = true }

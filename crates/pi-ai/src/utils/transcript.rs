@@ -2,6 +2,8 @@
 
 use std::collections::BTreeMap;
 
+use indexmap::IndexMap;
+
 use crate::types::{Message, SystemContent, SystemMessage, Tool, ToolReference, TranscriptContext};
 use crate::utils::text::{get_system_message_text, system_content_text};
 
@@ -74,14 +76,18 @@ pub fn without_initial_system_message(messages: &[Message]) -> Vec<Message> {
 /// Resolve the tools available after applying every transcript delta in order
 /// (`getCurrentTools`).
 pub fn get_current_tools(messages: &[Message]) -> Vec<Tool> {
-	let mut tools: BTreeMap<String, Tool> = BTreeMap::new();
+	let mut tools: IndexMap<String, Tool> = IndexMap::new();
 	for message in messages {
 		let Some(system) = as_system(message) else { continue };
 		for tool in system.tools_removed.iter().flatten() {
-			tools.remove(&tool.name);
+			tools.shift_remove(&tool.name);
 		}
 		for tool in system.tools_added.iter().flatten() {
-			tools.insert(tool.name.clone(), tool.clone());
+			if let Some(existing) = tools.get_mut(&tool.name) {
+				*existing = tool.clone();
+			} else {
+				tools.insert(tool.name.clone(), tool.clone());
+			}
 		}
 	}
 	tools.into_values().collect()
@@ -93,7 +99,7 @@ pub fn get_current_tools(messages: &[Message]) -> Vec<Tool> {
 /// resolved with [`get_current_tools`].
 pub fn get_current_system_message(messages: &[Message]) -> Option<SystemMessage> {
 	let mut content: Vec<String> = Vec::new();
-	let mut sections: BTreeMap<String, Option<String>> = BTreeMap::new();
+	let mut sections: IndexMap<String, Option<String>> = IndexMap::new();
 	let mut timestamp: Option<i64> = None;
 	for message in messages {
 		let Some(system) = as_system(message) else { continue };
@@ -105,10 +111,14 @@ pub fn get_current_system_message(messages: &[Message]) -> Option<SystemMessage>
 		for (name, value) in system.sections.iter().flatten() {
 			match value {
 				None => {
-					sections.remove(name);
+					sections.shift_remove(name);
 				}
 				Some(value) => {
-					sections.insert(name.clone(), Some(value.clone()));
+					if let Some(existing) = sections.get_mut(name) {
+						*existing = Some(value.clone());
+					} else {
+						sections.insert(name.clone(), Some(value.clone()));
+					}
 				}
 			}
 		}
@@ -119,7 +129,7 @@ pub fn get_current_system_message(messages: &[Message]) -> Option<SystemMessage>
 	}
 	Some(SystemMessage {
 		content: SystemContent::Text(content.join("\n\n")),
-		sections: (!sections.is_empty()).then(|| sections.into_iter().map(|(k, v)| (k, v)).collect()),
+		sections: (!sections.is_empty()).then(|| sections),
 		tools_added: (!tools.is_empty()).then(|| tools),
 		tools_removed: None,
 		timestamp: timestamp.unwrap_or(0),
@@ -224,11 +234,15 @@ pub fn get_tool_state_changes(previous: &[Tool], current: &[Tool]) -> ToolStateC
 /// Every definition referenced by transcript tool state, in first-declaration
 /// order (`getDeclaredTools`).
 pub fn get_declared_tools(messages: &[Message]) -> Vec<Tool> {
-	let mut definitions: BTreeMap<String, Tool> = BTreeMap::new();
+	let mut definitions: IndexMap<String, Tool> = IndexMap::new();
 	for message in messages {
 		let Some(system) = as_system(message) else { continue };
 		for tool in system.tools_added.iter().flatten() {
-			definitions.insert(tool.name.clone(), tool.clone());
+			if let Some(existing) = definitions.get_mut(&tool.name) {
+				*existing = tool.clone();
+			} else {
+				definitions.insert(tool.name.clone(), tool.clone());
+			}
 		}
 	}
 	definitions.into_values().collect()
@@ -313,7 +327,7 @@ mod tests {
 	//! anthropic/openai API modules) and travel with those slices; see the
 	//! port report for the skipped list.
 
-	use std::collections::BTreeMap;
+	use indexmap::IndexMap;
 
 	use serde_json::json;
 
@@ -338,7 +352,7 @@ mod tests {
 
 	fn system_message(
 		content: &str,
-		sections: BTreeMap<String, Option<String>>,
+		sections: IndexMap<String, Option<String>>,
 		tools_added: Option<Vec<Tool>>,
 		tools_removed: Option<Vec<ToolReference>>,
 		timestamp: i64,
@@ -381,10 +395,10 @@ mod tests {
 	}
 
 	fn transcript() -> TranscriptContext {
-		let mut base_sections = BTreeMap::new();
+		let mut base_sections = IndexMap::new();
 		base_sections.insert("a".to_string(), Some("<a>1</a>".to_string()));
 		base_sections.insert("b".to_string(), Some("<b>1</b>".to_string()));
-		let mut patch_sections = BTreeMap::new();
+		let mut patch_sections = IndexMap::new();
 		patch_sections.insert("a".to_string(), Some("<a>2</a>".to_string()));
 		patch_sections.insert("b".to_string(), None);
 		patch_sections.insert("c".to_string(), Some("<c>1</c>".to_string()));
@@ -399,7 +413,7 @@ mod tests {
 					10,
 				),
 				user_message("hello", 11),
-				system_message("also do this", BTreeMap::new(), None, None, 12),
+				system_message("also do this", IndexMap::new(), None, None, 12),
 				assistant_message(13),
 				system_message(
 					"",
@@ -413,7 +427,7 @@ mod tests {
 		})
 	}
 
-	fn sections(entries: &[(&str, &str)]) -> BTreeMap<String, Option<String>> {
+	fn sections(entries: &[(&str, &str)]) -> IndexMap<String, Option<String>> {
 		entries
 			.iter()
 			.map(|(name, value)| (name.to_string(), Some(value.to_string())))
@@ -425,7 +439,7 @@ mod tests {
 		let messages = transcript().into_messages();
 		let current = get_current_system_message(&messages).expect("system message");
 
-		let mut expected_sections = BTreeMap::new();
+		let mut expected_sections = IndexMap::new();
 		expected_sections.insert("a".to_string(), Some("<a>2</a>".to_string()));
 		expected_sections.insert("c".to_string(), Some("<c>1</c>".to_string()));
 		assert_eq!(
@@ -441,6 +455,59 @@ mod tests {
 		assert_eq!(
 			get_current_system_prompt(&messages),
 			"base\n\nalso do this\n\n<a>2</a>\n\n<c>1</c>"
+		);
+	}
+
+	#[test]
+	fn replay_preserves_section_and_tool_insertion_order() {
+		let mut removal_and_overwrite = IndexMap::new();
+		removal_and_overwrite.insert("z".to_string(), Some("z2".to_string()));
+		removal_and_overwrite.insert("a".to_string(), None);
+		let messages = vec![
+			system_message(
+				"",
+				sections(&[("z", "z1"), ("a", "a1"), ("b", "b1")]),
+				Some(vec![tool("z"), tool("a"), tool("b")]),
+				None,
+				1,
+			),
+			system_message(
+				"",
+				removal_and_overwrite,
+				Some(vec![tool_with_description("z", "updated")]),
+				Some(vec![ToolReference { name: "a".to_string() }]),
+				2,
+			),
+			system_message("", sections(&[("a", "a2")]), Some(vec![tool("a")]), None, 3),
+		];
+
+		let current = get_current_system_message(&messages).expect("system message");
+		let ordered_sections: Vec<_> = current
+			.sections
+			.as_ref()
+			.unwrap()
+			.iter()
+			.map(|(key, value)| (key.as_str(), value.as_deref()))
+			.collect();
+		assert_eq!(ordered_sections, [("z", Some("z2")), ("b", Some("b1")), ("a", Some("a2"))]);
+		assert_eq!(get_current_system_prompt(&messages), "z2\n\nb1\n\na2");
+		assert_eq!(
+			get_current_tools(&messages).iter().map(|tool| tool.name.as_str()).collect::<Vec<_>>(),
+			["z", "b", "a"]
+		);
+		assert_eq!(
+			get_declared_tools(&messages).iter().map(|tool| tool.name.as_str()).collect::<Vec<_>>(),
+			["z", "a", "b"]
+		);
+		let serialized_sections = serde_json::to_value(current.sections.unwrap()).expect("sections serialize");
+		assert_eq!(
+			serialized_sections
+				.as_object()
+				.unwrap()
+				.keys()
+				.map(String::as_str)
+				.collect::<Vec<_>>(),
+			["z", "b", "a"]
 		);
 	}
 
@@ -467,7 +534,7 @@ mod tests {
 
 	#[test]
 	fn a_late_full_patch_on_a_transcript_without_a_leading_message_replays_as_the_prompt() {
-		let mut sections = BTreeMap::new();
+		let mut sections = IndexMap::new();
 		sections.insert("preamble".to_string(), Some("You are pi.".to_string()));
 		let context = normalize_context(&Context {
 			system_prompt: None,
@@ -571,8 +638,8 @@ mod tests {
 		let additive = normalize_context(&Context {
 			system_prompt: None,
 			messages: vec![
-				system_message("", BTreeMap::new(), Some(vec![tool("a")]), None, 1),
-				system_message("", BTreeMap::new(), Some(vec![tool("b")]), None, 2),
+				system_message("", IndexMap::new(), Some(vec![tool("a")]), None, 1),
+				system_message("", IndexMap::new(), Some(vec![tool("b")]), None, 2),
 			],
 			tools: None,
 		});
@@ -581,8 +648,8 @@ mod tests {
 		let redeclared = normalize_context(&Context {
 			system_prompt: None,
 			messages: vec![
-				system_message("", BTreeMap::new(), Some(vec![tool("a")]), None, 1),
-				system_message("", BTreeMap::new(), Some(vec![tool_with_description("a", "changed")]), None, 2),
+				system_message("", IndexMap::new(), Some(vec![tool("a")]), None, 1),
+				system_message("", IndexMap::new(), Some(vec![tool_with_description("a", "changed")]), None, 2),
 			],
 			tools: None,
 		});
