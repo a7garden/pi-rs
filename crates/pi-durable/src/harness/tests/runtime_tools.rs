@@ -138,6 +138,9 @@ async fn all_entries(root: &Conversation) -> Vec<crate::types::EntryRecord> {
 		entries.extend(page.items);
 		cursor = page.next;
 		if cursor.is_none() {
+			// The storage scan is newest-first; upstream `allEntries()` is
+			// oldest-first.
+			entries.reverse();
 			return entries;
 		}
 	}

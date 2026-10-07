@@ -20,7 +20,21 @@ hang. Per-module failure counts from the last full run:
 
 - runtime_generation: FIXED — 31/31 green (fixture was missing faux api-key
   auth; interrupted-retry reopen needed sqlite + reopened submission handle)
-- runtime_tools: 15 FAILED (was 16; generation_hooks fixed)
+- runtime_tools: 3 FAILED + ~9 HANG in the abort/details/progress family
+  (was 16 FAILED + hangs everywhere). Fixed this pass: beforeTool/afterTool
+  rewritten as sequential registration-order loops over agent_hooks with
+  chained results (first blocking decision wins, later hooks skipped;
+  afterTool replacements feed the next hook); all_entries() reversed to
+  oldest-first (storage scan is newest-first) — fixed the coding-tools,
+  selected-extensions, retained-output, deselect/registry tests.
+  Remaining FAILED: generation_hook_errors (yield order),
+  yielded_generation (submission placed), real_bash_output (reopen).
+  Hanging family (abort/details/progress): tool_abort_writes_only_durable,
+  aborting_during_after_tool, explicit_text_is_bounded,
+  generation_after_tools_hook, interrupted_before_tool_intent,
+  interrupted_unsafe_tool, safe_recovery_uses_current_cwd,
+  safe_replay_clears_prior, safe_tool_replay_requires,
+  tool_task_abort_is_distinct (intermittent).
 - task_runtime: 2 FAILED
 - tasks_abort: 1 FAILED
 - task_graph: 1 FAILED

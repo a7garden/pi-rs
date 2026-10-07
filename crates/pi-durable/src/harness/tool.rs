@@ -393,40 +393,18 @@ async fn final_result(
 		usage: result.usage.clone(),
 		control: result.control.clone(),
 	};
-	// Hook: afterTool.
-	{
-		let hooks = runtime.hooks();
-		let call2 = call.clone();
-		let final2 = final_result.clone();
-		let runtime2 = runtime.clone();
-		let context2 = context.clone();
-		hooks
-			.each(
-				"afterTool",
-				Arc::new(move |handler: &Arc<dyn crate::tasks::HookHandler>| {
-					let call = call2.clone();
-					let mut final_result = final2.clone();
-					let runtime = runtime2.clone();
-					let context = context2.clone();
-					let hooks_table = handler.as_any().downcast_ref::<ToolHooks>().cloned();
-						Box::pin(async move {
-						let Some(hooks) = hooks_table else { return Ok(()) };
-						if let Some(hook) = &hooks.after_tool {
-							if let Some(replaced) =
-								hook(call, final_result, coerce_hook_api(runtime.clone()), context).await?
-							{
-								final_result = replaced;
-								store_final(&final_result);
-							}
-						}
-						Ok(())
-						})
-				}),
-			)
-			.await?;
-	}
-	if let Some(stored) = take_final() {
-		final_result = stored;
+	// Hook: afterTool. Hooks run in registration order and chain: each
+	// receives the previous result and its replacement feeds the next
+	// (upstream loops `result = replacement`).
+	let agent = runtime.agent(context).await?;
+	for handler in crate::harness::agent::agent_hooks(&agent, "pi.tool") {
+		let Some(hooks) = handler.as_any().downcast_ref::<ToolHooks>() else { continue };
+		let Some(hook) = &hooks.after_tool else { continue };
+		if let Some(replaced) =
+			hook(call.clone(), final_result.clone(), coerce_hook_api(runtime.clone()), context.clone()).await?
+		{
+			final_result = replaced;
+		}
 	}
 	// The retained output's truncation applies only while afterTool kept
 	// that content.
@@ -731,7 +709,8 @@ async fn call_phase(task: TaskRecord, runtime: Arc<dyn TaskRuntime>, context: Co
 	let input: ToolTaskInput = serde_json::from_value(task.input.clone())
 		.map_err(|error| format!("Tool task input is invalid: {error}"))?;
 	let call = read_call(&runtime, &input, &context).await?;
-	let tool = runtime.agent(&context).await?.tools.iter().find(|each| each.name() == call.name).cloned();
+	let agent = runtime.agent(&context).await?;
+	let tool = agent.tools.iter().find(|each| each.name() == call.name).cloned();
 	let Some(tool) = tool else {
 		let error = harness_error("tool_unavailable", &format!("Tool {} is not available", call.name));
 		return Box::pin(settle(&runtime, &call, Ending::Completed, &empty_reported(), &error, &context)).await;
@@ -751,59 +730,37 @@ async fn call_phase(task: TaskRecord, runtime: Arc<dyn TaskRuntime>, context: Co
 		}
 		Checked::Args(args) => args,
 	};
-	// Hook: beforeTool.
+	// Hook: beforeTool. Hooks run in registration order on the current
+	// arguments (the tool's repaired arguments), chain their argument
+	// decisions, and the first blocking decision wins: later hooks are not
+	// invoked (upstream loops the hooks and returns the block immediately).
 	let mut args = args;
 	let mut block: Option<String> = None;
-	{
-		let hooks = runtime.hooks();
-		let call2 = call.clone();
-		let runtime2 = runtime.clone();
-		let context2 = context.clone();
-		hooks
-			.each(
-				"beforeTool",
-				Arc::new(move |handler: &Arc<dyn crate::tasks::HookHandler>| {
-					let mut call = call2.clone();
-					if let Value::Object(arguments) = serde_json::to_value(&args_snapshot()).expect("args") {
-						call.arguments = arguments;
-					}
-					let runtime = runtime2.clone();
-					let context = context2.clone();
-					let hooks_table = handler.as_any().downcast_ref::<ToolHooks>().cloned();
-						Box::pin(async move {
-						let Some(hooks) = hooks_table else { return Ok(()) };
-						let Some(hook) = &hooks.before_tool else { return Ok(()) };
-						match hook(call, coerce_hook_api(runtime.clone()), context).await {
-							Err(error) => {
-								if runtime_aborted() {
-									return Err(error);
-								}
-								set_block(error);
-							}
-							Ok(Some(decision)) => {
-								if let Some(blocked) = decision.block {
-									set_block(blocked);
-								} else if let Some(arguments) = decision.arguments {
-									set_args(arguments);
-								}
-							}
-							Ok(None) => {}
-						}
-						Ok(())
-						})
-				}),
-			)
-			.await?;
-	}
-	if let Some(blocked) = take_block() {
-		let _ = blocked;
-		if let Some(block) = block.as_ref().or(Some(&blocked)) {
-			let blocked_result = harness_error("blocked", &format!("Tool call blocked: {block}"));
-			return settle(&runtime, &call, Ending::Completed, &empty_reported(), &blocked_result, &context).await;
+	for handler in crate::harness::agent::agent_hooks(&agent, "pi.tool") {
+		let Some(hooks) = handler.as_any().downcast_ref::<ToolHooks>() else { continue };
+		let Some(hook) = &hooks.before_tool else { continue };
+		let mut hooked_call = call.clone();
+		hooked_call.arguments = args.clone();
+		match hook(hooked_call, coerce_hook_api(runtime.clone()), context.clone()).await {
+			Err(error) => {
+				block = Some(error);
+				break;
+			}
+			Ok(Some(decision)) => {
+				if let Some(blocked) = decision.block {
+					block = Some(blocked);
+					break;
+				}
+				if let Some(arguments) = decision.arguments {
+					args = arguments;
+				}
+			}
+			Ok(None) => {}
 		}
 	}
-	if let Some(replacement) = take_args() {
-		args = replacement;
+	if let Some(block) = block {
+		let blocked_result = harness_error("blocked", &format!("Tool call blocked: {block}"));
+		return settle(&runtime, &call, Ending::Completed, &empty_reported(), &blocked_result, &context).await;
 	}
 	let args = match validate(&tool, &call, &args) {
 		Checked::Error(error) => {
@@ -846,31 +803,6 @@ thread_local! {
 	static ARGS: std::cell::RefCell<Option<Map<String, Value>>> = const { std::cell::RefCell::new(None) };
 }
 
-fn set_block(message: String) {
-	BLOCK.with(|cell| *cell.borrow_mut() = Some(message));
-}
-
-fn take_block() -> Option<String> {
-	BLOCK.with(|cell| cell.borrow_mut().take())
-}
-
-fn set_args(arguments: Map<String, Value>) {
-	ARGS.with(|cell| *cell.borrow_mut() = Some(arguments));
-}
-
-fn take_args() -> Option<Map<String, Value>> {
-	ARGS.with(|cell| cell.borrow_mut().take())
-}
-
-fn args_snapshot() -> Value {
-	ARGS.with(|cell| cell.borrow().as_ref().map(|args| Value::Object(args.clone()))).unwrap_or(Value::Null)
-}
-
-fn runtime_aborted() -> bool {
-	// The per-invocation signal is checked in the caller's closure; hooks
-	// that fail while not aborted block the call.
-	false
-}
 
 fn empty_reported() -> Arc<parking_lot::Mutex<Reported>> {
 	Arc::new(parking_lot::Mutex::new(Reported {
