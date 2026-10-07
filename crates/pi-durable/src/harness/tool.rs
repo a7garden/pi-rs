@@ -238,7 +238,23 @@ async fn run(
 					control: None,
 				}
 			} else {
-				execute(Value::Object(args), Arc::new(core), context.clone()).await
+				// A tool panic becomes a `tool_error` failure result (upstream
+				// catches the execute throw); the retained output survives.
+				match futures_util::FutureExt::catch_unwind(std::panic::AssertUnwindSafe(
+					execute(Value::Object(args), Arc::new(core), context.clone()),
+				))
+				.await
+				{
+					Ok(result) => result,
+					// Content stays unset so the retained (durable) output is
+					// still applied (upstream leaves `content` undefined).
+					Err(payload) => ToolExecutionResult {
+						content: None,
+						is_error: Some(true),
+						diagnostics: Some(vec![tool_diagnostic("tool_error", &panic_text(payload))]),
+						..Default::default()
+					},
+				}
 			}
 		}
 		Err(_) => unreachable!("tool execute registration panics at definition"),
@@ -795,7 +811,16 @@ async fn call_phase(task: TaskRecord, runtime: Arc<dyn TaskRuntime>, context: Co
 			&context,
 		)
 		.await?;
-	run(&runtime, &call, tool, args, &context).await
+	run(&runtime, &call, tool, args, &context).await?;
+	// An abort that landed during execution leaves the call's result
+	// unpersisted: the abort phase settles it instead (upstream checks the
+	// signal before writing the completed result).
+	if let Some(signal) = context.abort_signal() {
+		if signal.aborted() {
+			return Box::pin(abort_phase(task, runtime, context)).await;
+		}
+	}
+	Ok(())
 }
 
 thread_local! {
@@ -851,7 +876,32 @@ async fn execute_phase(task: TaskRecord, runtime: Arc<dyn TaskRuntime>, context:
 	// `failed` records cancellation intent, so the call's owned
 	// conversations, left unsupervised, are aborted.
 	let ending = Ending::Failed { message: message.clone() };
-	let partial = harness_error("interrupted", &message);
+	// The interrupted result keeps the slot's retained (durable) output.
+	let conversation_id = runtime.conversation_id();
+	let task_id = runtime.task_id();
+	let partial: Arc<parking_lot::Mutex<Option<ToolExecutionResult>>> = Arc::default();
+	{
+		let runtime2 = runtime.clone();
+		let context2 = context.clone();
+		let partial2 = partial.clone();
+		let message2 = message.clone();
+		runtime
+			.commit(
+				commit_change(move |tx, _current| {
+					let draft = tx
+						.doc(&crate::harness::live::live_doc(), Some(conversation_id.0), None, None)
+						.map_err(|e| e.to_string())?;
+					let mut live = read_live(&draft);
+					let slot = crate::harness::live::tool_slot(&mut live, &runtime2.task_id())
+						.cloned();
+					*partial2.lock() = Some(from_slot(slot.as_ref(), "interrupted", &message2));
+					Ok(None)
+				}),
+				&context2,
+			)
+			.await?;
+	}
+	let partial = partial.lock().clone().expect("interrupted settle reads the slot");
 	settle(&runtime, &call, ending, &empty_reported(), &partial, &context).await
 }
 
@@ -862,7 +912,32 @@ async fn abort_phase(task: TaskRecord, runtime: Arc<dyn TaskRuntime>, context: C
 	let call = read_call(&runtime, &input, &context).await?;
 	let message = format!("Tool {} was aborted", call.name);
 	let ending = Ending::Aborted;
-	let partial = harness_error("aborted", &message);
+	// The aborted result keeps the slot's retained (durable) output.
+	let conversation_id = runtime.conversation_id();
+	let task_id = runtime.task_id();
+	let partial: Arc<parking_lot::Mutex<Option<ToolExecutionResult>>> = Arc::default();
+	{
+		let runtime2 = runtime.clone();
+		let context2 = context.clone();
+		let partial2 = partial.clone();
+		let message2 = message.clone();
+		runtime
+			.commit(
+				commit_change(move |tx, _current| {
+					let draft = tx
+						.doc(&crate::harness::live::live_doc(), Some(conversation_id.0), None, None)
+						.map_err(|e| e.to_string())?;
+					let mut live = read_live(&draft);
+					let slot = crate::harness::live::tool_slot(&mut live, &runtime2.task_id())
+						.cloned();
+					*partial2.lock() = Some(from_slot(slot.as_ref(), "aborted", &message2));
+					Ok(None)
+				}),
+				&context2,
+			)
+			.await?;
+	}
+	let partial = partial.lock().clone().expect("abort settle reads the slot");
 	settle(&runtime, &call, ending, &empty_reported(), &partial, &context).await
 }
 

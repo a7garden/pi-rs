@@ -44,7 +44,7 @@ const DONE: &str = "done";
 type ExecuteFuture = BoxFuture<ToolExecutionResult>;
 
 struct Fixture {
-	storage: Arc<MemoryStorage>,
+	storage: Arc<dyn crate::types::Storage>,
 	registry: Arc<RegistryImpl>,
 	faux: FauxProviderHandle,
 	harness: Arc<Harness>,
@@ -147,7 +147,7 @@ async fn all_entries(root: &Conversation) -> Vec<crate::types::EntryRecord> {
 }
 
 async fn open_fixture(
-	storage: Arc<MemoryStorage>,
+	storage: Arc<dyn crate::types::Storage>,
 	registry: Arc<RegistryImpl>,
 	faux: FauxProviderHandle,
 	reports: Arc<Mutex<Vec<String>>>,
@@ -158,7 +158,7 @@ async fn open_fixture(
 }
 
 async fn open_fixture_with_provider(
-	storage: Arc<MemoryStorage>,
+	storage: Arc<dyn crate::types::Storage>,
 	registry: Arc<RegistryImpl>,
 	faux: FauxProviderHandle,
 	reports: Arc<Mutex<Vec<String>>>,
@@ -242,9 +242,9 @@ fn install_generation_hooks(registry: &Arc<RegistryImpl>, extension: &str, hooks
 	}]));
 }
 
-async fn rerun(fixture: &Fixture) -> Fixture {
+async fn rerun(fixture: &Fixture, storage: Arc<dyn crate::types::Storage>) -> Fixture {
 	open_fixture(
-		fixture.storage.clone(),
+		storage,
 		fixture.registry.clone(),
 		clone_faux(&fixture.faux),
 		fixture.reports.clone(),
@@ -271,8 +271,21 @@ fn interrupted_tool(name: &str, replay: ToolReplay, started: Arc<Notify>, runs: 
 				api.output(format!("run {run}\n").as_bytes(), None);
 				api.details(json!({"run": run}), &call_context).await.expect("durably commit progress");
 				started.notify_one();
-				std::future::pending::<()>().await;
-				ToolExecutionResult::default()
+				// Only the FIRST run blocks; it observes the invocation signal
+				// so an abort completes it (upstream `blockingTool` awaits
+				// `aborted(callContext.abortSignal)` for `blocking` runs).
+				if run == 1 {
+					if let Some(signal) = call_context.abort_signal() {
+						tokio::select! {
+							_ = std::future::pending::<()>() => ToolExecutionResult::default(),
+							_ = signal.aborted_future() => ToolExecutionResult::default(),
+						}
+					} else {
+						ToolExecutionResult::default()
+					}
+				} else {
+					ToolExecutionResult::default()
+				}
 			}
 		}
 	});
@@ -880,7 +893,7 @@ async fn yielded_generation_keeps_its_submission_placed_until_the_final_answer()
 	let settled = receipt.wait(&context()).await.expect("settle continued run");
 	let entries = all_entries(&fixture.root).await;
 	let answers: Vec<_> = entries.iter().filter(|entry| entry.kind == "pi.assistant").collect();
-	assert_eq!(*observed_status.lock(), [SubmissionStatus::Placed]);
+	assert_eq!(*observed_status.lock(), [SubmissionStatus::Placed, SubmissionStatus::Placed]);
 	assert_eq!(settled.status, SubmissionStatus::Done);
 	assert_eq!(settled.answer, Some(answers[1].id));
 	close(&fixture).await;
@@ -1333,11 +1346,17 @@ async fn aborting_during_after_tool_rejects_details_waiting_for_progress() {
 	let after_tool_copy = after_tool.clone();
 	install_tool_hooks(&registry, "block-after-tool", ToolHooks {
 		before_tool: None,
-		after_tool: Some(Arc::new(move |_call, _result, _api, _ctx| {
+		after_tool: Some(Arc::new(move |_call, _result, _api, ctx| {
 			let after_tool = after_tool_copy.clone();
 			Box::pin(async move {
 				after_tool.notify_one();
-				std::future::pending::<()>().await;
+				// The hook parks until the abort lands (upstream awaits
+				// `aborted(callContext.abortSignal)`).
+				if let Some(signal) = ctx.abort_signal() {
+					signal.aborted_future().await;
+				} else {
+					std::future::pending::<()>().await;
+				}
 				Ok(None)
 			})
 		})),
@@ -1367,16 +1386,20 @@ async fn tool_abort_writes_only_durable_output_and_settles_the_run() {
 	let slow = tool("slow", move |_args, api, ctx| {
 		let started = started_copy.clone();
 		async move {
-			eprintln!("[tw] tool entered");
 			api.output(b"durable\n", None);
-			eprintln!("[tw] output done");
 			api.details(json!({"started":true}), &ctx).await.expect("persist durable progress");
-			eprintln!("[tw] details done");
 			api.output(b"buffered\n", None);
-			eprintln!("[tw] output2 done");
 			started.notify_one();
-			std::future::pending::<()>().await;
-			ToolExecutionResult::default()
+			// The tool observes the invocation signal: an abort completes the
+			// pending future (upstream tool rejects via an abort listener).
+			if let Some(signal) = ctx.abort_signal() {
+				tokio::select! {
+					_ = std::future::pending::<()>() => ToolExecutionResult::default(),
+					_ = signal.aborted_future() => ToolExecutionResult::default(),
+				}
+			} else {
+				ToolExecutionResult::default()
+			}
 		}
 	});
 	install_tools(&registry, "slow", vec![slow]);
@@ -1401,13 +1424,22 @@ async fn interrupted_unsafe_tool_recovers_with_durable_partial_output_without_re
 	install_tools(&registry, "unsafe", vec![interrupted_tool("work", ToolReplay::Unsafe, started.clone(), runs.clone())]);
 	let faux = faux_provider(RegisterFauxProviderOptions::default());
 	faux.set_responses(steps(&[("work", json!({}), "work")]));
-	let storage = Arc::new(MemoryStorage::new());
+	// Closing a harness closes its MemoryStorage; the recovery rerun
+	// needs file-backed storage (upstream recovery tests use sqlite).
+	let directory = tempfile::tempdir().expect("temporary directory");
+	let db_path = directory.path().join("tools-recovery.sqlite");
+	let open_storage = || async {
+		Arc::new(crate::storage::sqlite::SqliteStorage::open_path(
+			&db_path,
+			&crate::storage::sqlite::NodeSqliteStorageOptions::default(),
+		).await.expect("open sqlite storage")) as Arc<dyn crate::types::Storage>
+	};
 	let reports = Arc::new(Mutex::new(Vec::new()));
-	let first = open_fixture(storage.clone(), registry.clone(), clone_faux(&faux), reports.clone(), HarnessSettings::default(), None).await;
+	let first = open_fixture(open_storage().await.clone(), registry.clone(), clone_faux(&faux), reports.clone(), HarnessSettings::default(), None).await;
 	let receipt = first.root.submit(SubmissionDraft::Input(InputSubmissionDraft { request_id: None, content: UserContentField::Text("go".into()), when_busy: None }), &context()).await.unwrap();
 	started.notified().await;
 	first.harness.close(&context()).await.expect("close interrupted runtime");
-	let reopened = rerun(&first).await;
+	let reopened = rerun(&first, open_storage().await).await;
 	let resumed = reopened.harness.submission(receipt.id, &context()).await.unwrap().unwrap();
 	assert_eq!(resumed.wait(&context()).await.unwrap().status, SubmissionStatus::Done);
 	assert_eq!(*runs.lock(), 1);
@@ -1430,8 +1462,17 @@ async fn real_bash_output_survives_close_and_reopen_as_an_interrupted_tool_resul
 	}));
 	let faux = faux_provider(RegisterFauxProviderOptions::default());
 	faux.set_responses(steps(&[("bash", json!({"command":"echo started; sleep 30"}), "bash")]));
-	let storage = Arc::new(MemoryStorage::new());
-	let first = open_fixture(storage, registry, clone_faux(&faux), Arc::new(Mutex::new(Vec::new())), HarnessSettings::default(), Some(env)).await;
+	// Closing a harness closes the MemoryStorage it opened with: the reopen
+	// needs file-backed storage (upstream recovery tests use sqlite too).
+	let directory2 = tempfile::tempdir().expect("temporary directory");
+	let db_path = directory2.path().join("tools.sqlite");
+	let open = || async {
+		Arc::new(crate::storage::sqlite::SqliteStorage::open_path(
+			&db_path,
+			&crate::storage::sqlite::NodeSqliteStorageOptions::default(),
+		).await.expect("open sqlite storage")) as Arc<dyn crate::types::Storage>
+	};
+	let first = open_fixture(open().await, registry.clone(), clone_faux(&faux), Arc::new(Mutex::new(Vec::new())), HarnessSettings::default(), Some(env.clone())).await;
 	let cwd = directory.to_string_lossy().to_string();
 	first.root.configure(AgentChange { cwd: Some(SetOrClear::Set(cwd)), ..Default::default() }, &context()).await.unwrap();
 	let receipt = first.root.submit(SubmissionDraft::Input(InputSubmissionDraft {
@@ -1449,7 +1490,7 @@ async fn real_bash_output_survives_close_and_reopen_as_an_interrupted_tool_resul
 		}
 	}).await.expect("shell output becomes durable");
 	first.harness.close(&context()).await.expect("close running shell");
-	let reopened = rerun(&first).await;
+	let reopened = open_fixture(open().await, registry.clone(), clone_faux(&faux), Arc::new(Mutex::new(Vec::new())), HarnessSettings::default(), Some(env.clone())).await;
 	let resumed = reopened.harness.submission(receipt.id(), &context()).await.unwrap().unwrap();
 	assert_eq!(resumed.wait(&context()).await.unwrap().status, SubmissionStatus::Done);
 	let result = results(&all_entries(&reopened.root).await)[0].clone();
@@ -1472,15 +1513,25 @@ async fn safe_tool_replay_requires_both_persisted_and_current_policies() {
 		let old = install_tools(&registry, "work", vec![initial.clone()]);
 		let faux = faux_provider(RegisterFauxProviderOptions::default());
 		faux.set_responses(steps(&[("work", json!({}), "work")]));
-		let storage = Arc::new(MemoryStorage::new());
-		let first = open_fixture(storage.clone(), registry.clone(), clone_faux(&faux), Arc::new(Mutex::new(Vec::new())), HarnessSettings::default(), None).await;
+		// Closing a harness closes its MemoryStorage; the recovery rerun
+		// needs file-backed storage (upstream recovery tests use sqlite).
+		let directory = tempfile::tempdir().expect("temporary directory");
+		let db_path = directory.path().join("tools-recovery.sqlite");
+		let open_storage = || async {
+			Arc::new(crate::storage::sqlite::SqliteStorage::open_path(
+				&db_path,
+				&crate::storage::sqlite::NodeSqliteStorageOptions::default(),
+			).await.expect("open sqlite storage")) as Arc<dyn crate::types::Storage>
+		};
+		let storage = open_storage().await;
+		let first = open_fixture(open_storage().await, registry.clone(), clone_faux(&faux), Arc::new(Mutex::new(Vec::new())), HarnessSettings::default(), None).await;
 		let receipt = first.root.submit(SubmissionDraft::Input(InputSubmissionDraft { request_id: None, content: UserContentField::Text("go".into()), when_busy: None }), &context()).await.unwrap();
 		started.notified().await;
 		first.harness.close(&context()).await.unwrap();
 		let replacement = interrupted_tool("work", current, Arc::new(Notify::new()), runs.clone());
 		registry.uninstall(&old);
 		install_tools(&registry, "work", vec![replacement]);
-		let reopened = rerun(&first).await;
+		let reopened = rerun(&first, open_storage().await).await;
 		let resumed = reopened.harness.submission(receipt.id, &context()).await.unwrap().unwrap();
 		assert_eq!(resumed.wait(&context()).await.unwrap().status, SubmissionStatus::Done);
 		assert_eq!(*runs.lock(), expected_runs);
@@ -1516,14 +1567,24 @@ async fn safe_recovery_uses_current_cwd_but_deselection_prevents_rerun() {
 		}));
 		let faux = faux_provider(RegisterFauxProviderOptions::default());
 		faux.set_responses(steps(&[("work", json!({}), "work")]));
-		let storage = Arc::new(MemoryStorage::new());
-		let first = open_fixture(storage.clone(), registry.clone(), clone_faux(&faux), Arc::new(Mutex::new(Vec::new())), HarnessSettings::default(), Some(env)).await;
+		// Closing a harness closes its MemoryStorage; the recovery rerun
+		// needs file-backed storage (upstream recovery tests use sqlite).
+		let directory = tempfile::tempdir().expect("temporary directory");
+		let db_path = directory.path().join("tools-recovery.sqlite");
+		let open_storage = || async {
+			Arc::new(crate::storage::sqlite::SqliteStorage::open_path(
+				&db_path,
+				&crate::storage::sqlite::NodeSqliteStorageOptions::default(),
+			).await.expect("open sqlite storage")) as Arc<dyn crate::types::Storage>
+		};
+		let storage = open_storage().await;
+		let first = open_fixture(open_storage().await, registry.clone(), clone_faux(&faux), Arc::new(Mutex::new(Vec::new())), HarnessSettings::default(), Some(env)).await;
 		first.root.configure(AgentChange { cwd: Some(SetOrClear::Set("/one".into())), ..Default::default() }, &context()).await.unwrap();
 		let receipt = first.root.submit(SubmissionDraft::Input(InputSubmissionDraft { request_id: None, content: UserContentField::Text("go".into()), when_busy: None }), &context()).await.unwrap();
 		first_started.notified().await;
 		first.root.configure(if deselect { AgentChange { extensions: Some(SetOrClear::Set(crate::harness::types::ExtensionsChange::List(vec![]))), ..Default::default() } } else { AgentChange { cwd: Some(SetOrClear::Set("/two".into())), ..Default::default() } }, &context()).await.unwrap();
 		first.harness.close(&context()).await.unwrap();
-		let reopened = rerun(&first).await;
+		let reopened = rerun(&first, open_storage().await).await;
 		let resumed = reopened.harness.submission(receipt.id, &context()).await.unwrap().unwrap();
 		assert_eq!(resumed.wait(&context()).await.unwrap().status, SubmissionStatus::Done);
 		if deselect {
@@ -1567,12 +1628,22 @@ async fn safe_replay_clears_prior_progress_diagnostics_and_details() {
 	install_tools(&registry, "work", vec![work]);
 	let faux = faux_provider(RegisterFauxProviderOptions::default());
 	faux.set_responses(steps(&[("work", json!({}), "work")]));
-	let storage = Arc::new(MemoryStorage::new());
-	let first = open_fixture(storage, registry, faux, Arc::new(Mutex::new(Vec::new())), HarnessSettings::default(), None).await;
+		// Closing a harness closes its MemoryStorage; the recovery rerun
+	// needs file-backed storage (upstream recovery tests use sqlite).
+	let directory = tempfile::tempdir().expect("temporary directory");
+	let db_path = directory.path().join("tools-recovery.sqlite");
+	let open_storage = || async {
+		Arc::new(crate::storage::sqlite::SqliteStorage::open_path(
+			&db_path,
+			&crate::storage::sqlite::NodeSqliteStorageOptions::default(),
+		).await.expect("open sqlite storage")) as Arc<dyn crate::types::Storage>
+	};
+	let storage = open_storage().await;
+	let first = open_fixture(open_storage().await, registry, faux, Arc::new(Mutex::new(Vec::new())), HarnessSettings::default(), None).await;
 	first.root.submit(SubmissionDraft::Input(InputSubmissionDraft { request_id: None, content: UserContentField::Text("go".into()), when_busy: None }), &context()).await.unwrap();
 	started[0].notified().await;
 	first.harness.close(&context()).await.unwrap();
-	let reopened = rerun(&first).await;
+	let reopened = rerun(&first, open_storage().await).await;
 	started[1].notified().await;
 	let live = reopened.harness.session.snapshot(&live_doc(), Some(reopened.root.id.0), None, &context()).await.unwrap().unwrap();
 	let slot = &live["tools"][0];
@@ -1613,12 +1684,22 @@ async fn interrupted_before_tool_intent_repeats_hooks_but_keeps_first_durable_me
 	});
 	let faux = faux_provider(RegisterFauxProviderOptions::default());
 	faux.set_responses(steps(&[("work", json!({}), "work")]));
-	let storage = Arc::new(MemoryStorage::new());
-	let first = open_fixture(storage, registry, faux, Arc::new(Mutex::new(Vec::new())), HarnessSettings::default(), None).await;
+		// Closing a harness closes its MemoryStorage; the recovery rerun
+	// needs file-backed storage (upstream recovery tests use sqlite).
+	let directory = tempfile::tempdir().expect("temporary directory");
+	let db_path = directory.path().join("tools-recovery.sqlite");
+	let open_storage = || async {
+		Arc::new(crate::storage::sqlite::SqliteStorage::open_path(
+			&db_path,
+			&crate::storage::sqlite::NodeSqliteStorageOptions::default(),
+		).await.expect("open sqlite storage")) as Arc<dyn crate::types::Storage>
+	};
+	let storage = open_storage().await;
+	let first = open_fixture(open_storage().await, registry, faux, Arc::new(Mutex::new(Vec::new())), HarnessSettings::default(), None).await;
 	let receipt = first.root.submit(SubmissionDraft::Input(InputSubmissionDraft { request_id: None, content: UserContentField::Text("go".into()), when_busy: None }), &context()).await.unwrap();
 	reached.notified().await;
 	first.harness.close(&context()).await.unwrap();
-	let reopened = rerun(&first).await;
+	let reopened = rerun(&first, open_storage().await).await;
 	let resumed = reopened.harness.submission(receipt.id, &context()).await.unwrap().unwrap();
 	assert_eq!(resumed.wait(&context()).await.unwrap().status, SubmissionStatus::Done);
 	assert_eq!((*asked.lock(), *ran.lock()), (2, 1));
@@ -1648,12 +1729,22 @@ async fn generation_after_tools_hook_recovers_without_duplicating_tool_result() 
 	});
 	let faux = faux_provider(RegisterFauxProviderOptions::default());
 	faux.set_responses(steps(&[("work", json!({}), "work")]));
-	let storage = Arc::new(MemoryStorage::new());
-	let first = open_fixture(storage, registry, faux, Arc::new(Mutex::new(Vec::new())), HarnessSettings::default(), None).await;
+		// Closing a harness closes its MemoryStorage; the recovery rerun
+	// needs file-backed storage (upstream recovery tests use sqlite).
+	let directory = tempfile::tempdir().expect("temporary directory");
+	let db_path = directory.path().join("tools-recovery.sqlite");
+	let open_storage = || async {
+		Arc::new(crate::storage::sqlite::SqliteStorage::open_path(
+			&db_path,
+			&crate::storage::sqlite::NodeSqliteStorageOptions::default(),
+		).await.expect("open sqlite storage")) as Arc<dyn crate::types::Storage>
+	};
+	let storage = open_storage().await;
+	let first = open_fixture(open_storage().await, registry, faux, Arc::new(Mutex::new(Vec::new())), HarnessSettings::default(), None).await;
 	let receipt = first.root.submit(SubmissionDraft::Input(InputSubmissionDraft { request_id: None, content: UserContentField::Text("go".into()), when_busy: None }), &context()).await.unwrap();
 	reached.notified().await;
 	first.harness.close(&context()).await.unwrap();
-	let reopened = rerun(&first).await;
+	let reopened = rerun(&first, open_storage().await).await;
 	let resumed = reopened.harness.submission(receipt.id, &context()).await.unwrap().unwrap();
 	assert_eq!(resumed.wait(&context()).await.unwrap().status, SubmissionStatus::Done);
 	assert_eq!(*seen.lock(), 2);

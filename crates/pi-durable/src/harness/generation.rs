@@ -1169,7 +1169,13 @@ async fn answer(runtime: &Arc<dyn TaskRuntime>, message: AssistantMessage, conte
 						Box::pin(async move {
 						let Some(hooks) = hooks_table else { return Ok(()) };
 						let Some(hook) = &hooks.on_yield else { return Ok(()) };
-						let result = hook(message, coerce_hook_api(runtime.clone()), context).await?;
+						// The first `onYield` continuation wins; later handlers
+						// are not invoked for this answer (upstream returns early
+						// when a continuation is already decided).
+						if continuation_is_set() {
+							return Ok(());
+						}
+						let result = hook(message, coerce_hook_api(runtime.clone()), context.clone()).await?;
 						if let Some(result) = result {
 							set_continuation(result.continue_);
 						}
@@ -1252,6 +1258,12 @@ thread_local! {
 
 fn set_continuation(content: crate::harness::types::UserInput) {
 	CONTINUATION.with(|cell| *cell.borrow_mut() = Some(content));
+}
+
+/// Whether an earlier `onYield` handler already won this answer (upstream:
+/// `if (continuation !== undefined) return;` inside each handler callback).
+fn continuation_is_set() -> bool {
+	CONTINUATION.with(|cell| cell.borrow().is_some())
 }
 
 fn take_continuation() -> Option<crate::harness::types::UserInput> {

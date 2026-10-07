@@ -20,21 +20,19 @@ hang. Per-module failure counts from the last full run:
 
 - runtime_generation: FIXED — 31/31 green (fixture was missing faux api-key
   auth; interrupted-retry reopen needed sqlite + reopened submission handle)
-- runtime_tools: 3 FAILED + ~9 HANG in the abort/details/progress family
-  (was 16 FAILED + hangs everywhere). Fixed this pass: beforeTool/afterTool
-  rewritten as sequential registration-order loops over agent_hooks with
-  chained results (first blocking decision wins, later hooks skipped;
-  afterTool replacements feed the next hook); all_entries() reversed to
-  oldest-first (storage scan is newest-first) — fixed the coding-tools,
-  selected-extensions, retained-output, deselect/registry tests.
-  Remaining FAILED: generation_hook_errors (yield order),
-  yielded_generation (submission placed), real_bash_output (reopen).
-  Hanging family (abort/details/progress): tool_abort_writes_only_durable,
-  aborting_during_after_tool, explicit_text_is_bounded,
-  generation_after_tools_hook, interrupted_before_tool_intent,
-  interrupted_unsafe_tool, safe_recovery_uses_current_cwd,
-  safe_replay_clears_prior, safe_tool_replay_requires,
-  tool_task_abort_is_distinct (intermittent).
+- runtime_tools: 20 ok serially; the rest hang in reopen/recovery paths.
+  Fixed: beforeTool/afterTool sequential registration-order loops with
+  chained results (first block wins; afterTool replacements feed the next
+  hook); onYield first-continuation-wins; tool execute panic becomes a
+  tool_error result (content unset so retained output applies); abort +
+  interrupted settles keep the slot's retained output (fromSlot); all_entries
+  oldest-first; recovery tests on sqlite with fresh storage per harness and
+  abort-aware/blocking-once tool closures (upstream blockingTool pattern).
+  Remaining hangs: generation_after_tools_hook,
+  interrupted_before_tool_intent, safe_recovery_uses_current_cwd,
+  safe_replay_clears_prior, safe_tool_replay_requires (intermittent pass),
+  tool_task_abort_is_distinct (intermittent) — all in the
+  close-mid-hook/reopen/replay interaction; 0 FAILED at the last hang point.
 - task_runtime: 2 FAILED
 - tasks_abort: 1 FAILED
 - task_graph: 1 FAILED
