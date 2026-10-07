@@ -10,6 +10,8 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+use parking_lot::Mutex;
+
 use pi_ai::types::{
 	AssistantContent, AssistantMessage, DeferredHandle, Model, ModelThinkingLevel, SimpleStreamOptions,
 	StopReason, ToolCall,
@@ -221,8 +223,6 @@ fn threshold_compaction(
 		return None;
 	}
 	let tokens = estimate_context(view, &planned_messages);
-	#[cfg(test)]
-	eprintln!("[estimate] tokens={tokens} blocking={} background={} entries={} messages={}", context_window.saturating_sub(policy.reserve_tokens), context_window.saturating_sub(policy.reserve_tokens).saturating_sub(policy.background_tokens), view.entries.len(), view.messages.len());
 	let blocking = context_window.saturating_sub(policy.reserve_tokens);
 	let background = blocking.saturating_sub(policy.background_tokens);
 	let over = if tokens > blocking {
@@ -564,11 +564,13 @@ async fn request_phase(task: TaskRecord, runtime: Arc<dyn TaskRuntime>, context:
 	let view = runtime.context_view(conversation_id, &context, Some(cutoff)).await?;
 	let mut messages = view.messages.clone();
 	// Hook: beforeRequest.
+	let replaced_slot: Arc<Mutex<Option<Vec<pi_ai::Message>>>> = Arc::default();
 	{
 		let hooks = runtime.hooks();
 		let payload_messages = messages.clone();
 		let runtime2 = runtime.clone();
 		let context2 = context.clone();
+		let slot = replaced_slot.clone();
 		hooks
 			.each(
 				"beforeRequest",
@@ -576,13 +578,14 @@ async fn request_phase(task: TaskRecord, runtime: Arc<dyn TaskRuntime>, context:
 					let payload = BeforeRequestPayload { messages: payload_messages.clone() };
 					let runtime = runtime2.clone();
 					let context = context2.clone();
+					let slot = slot.clone();
 					let hooks_table = handler.as_any().downcast_ref::<GenerationHooks>().cloned();
 					let future: BoxFuture<Result<(), String>> = Box::pin(async move {
 						let Some(hooks) = hooks_table else { return Ok(()) };
 						let Some(hook) = &hooks.before_request else { return Ok(()) };
 						let replaced = hook(payload, coerce_hook_api(runtime.clone()), context.clone()).await?;
 						if let Some(replaced) = replaced {
-							messages_replaced(&replaced.messages);
+							*slot.lock() = Some(replaced.messages);
 						}
 						Ok(())
 					});
@@ -591,6 +594,12 @@ async fn request_phase(task: TaskRecord, runtime: Arc<dyn TaskRuntime>, context:
 			)
 			.await?;
 	}
+	// A beforeRequest hook may replace the request payload (upstream
+	// `beforeRequest` returning `{ messages }`).
+	let messages = match replaced_slot.lock().take() {
+		Some(replaced) => replaced,
+		None => messages,
+	};
 	let session_id = ensure_provider_session_id(runtime.as_ref(), &context).await?;
 	let deferred = stream_options.deferred.as_ref().and_then(deferred_request);
 	let mut options = SimpleStreamOptions {
@@ -613,21 +622,6 @@ async fn request_phase(task: TaskRecord, runtime: Arc<dyn TaskRuntime>, context:
 		poll_at: None,
 	};
 	classify(&runtime, request, message, &context).await
-}
-
-thread_local! {
-	/// Replacement messages from the last `beforeRequest` invocation (D3:
-	/// the erased invoker cannot return values; the request phase reads the
-	/// single replacement right after `hooks.each`).
-	static REPLACED_MESSAGES: std::cell::RefCell<Option<Vec<pi_ai::Message>>> = const { std::cell::RefCell::new(None) };
-}
-
-fn messages_replaced(messages: &[pi_ai::Message]) {
-	REPLACED_MESSAGES.with(|cell| *cell.borrow_mut() = Some(messages.to_vec()));
-}
-
-fn take_replaced_messages() -> Option<Vec<pi_ai::Message>> {
-	REPLACED_MESSAGES.with(|cell| cell.borrow_mut().take())
 }
 
 /// Phase `retry`.

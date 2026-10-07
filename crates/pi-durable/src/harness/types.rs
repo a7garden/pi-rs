@@ -661,6 +661,7 @@ pub struct RootConversationOptions {
 /// Curated pi-ai request options; absent fields use pi-ai defaults (upstream
 /// `ConversationStreamOptions`).
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ConversationStreamOptions {
 	pub transport: Option<Transport>,
 	pub timeout_ms: Option<u64>,

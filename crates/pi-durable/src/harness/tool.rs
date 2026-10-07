@@ -663,7 +663,11 @@ pub fn append_tool_result(
 fn render_diagnostics(diagnostics: &[ToolDiagnostic]) -> String {
 	let body = diagnostics
 		.iter()
-		.map(|diagnostic| format!("[{:?}] {}", diagnostic.severity, diagnostic.message))
+		.map(|diagnostic| {
+			// Upstream severities are lowercase strings: "info" | "warn" | "error".
+			let severity = format!("{:?}", diagnostic.severity).to_lowercase();
+			format!("[{severity}] {}", diagnostic.message)
+		})
 		.collect::<Vec<_>>()
 		.join("\n");
 	format!("<harness>\n{body}\n</harness>")

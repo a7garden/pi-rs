@@ -1095,7 +1095,6 @@ impl TaskScheduler {
 	}
 
 	async fn drain(self: &Arc<Self>) {
-		eprintln!("[drain] pass");
 		let result: Result<(), String> = async {
 			loop {
 				let proceed = {
@@ -1150,7 +1149,6 @@ impl TaskScheduler {
 						let inner = scheduler.inner.lock();
 						inner.enabled && !inner.closing
 					};
-					eprintln!("[reserve] pass enabled={enabled}");
 					if !enabled {
 						return Ok(());
 					}
@@ -1400,8 +1398,6 @@ impl TaskScheduler {
 	/// Run phase handlers, each preceded by a step that decides on the line
 	/// whether the invocation continues.
 	async fn run(self: &Arc<Self>, reservation: Reservation) -> Result<(), String> {
-		#[cfg(test)]
-		eprintln!("[run] task={:?} mode={:?}", reservation.invocation.task_id, reservation.invocation.mode);
 		let invocation = reservation.invocation.clone();
 		let state = Arc::new(Mutex::new(RunState {
 			task: reservation.task.clone(),
@@ -1940,11 +1936,23 @@ impl TaskRuntime for SchedulerRuntime {
 				};
 				tx.set_task(updated).map_err(|error| error.to_string())?;
 			}
+			// A staged terminal outcome finalizes in this commit when its
+			// owned work is already gone (upstream writes `terminal`
+			// directly; the Completing stop only holds faulted cleanup).
+			scheduler.finalize_on(tx)?;
 			*captured_in.lock() = Some(next);
 			Ok(Value::Null)
 		};
 		let bound = pi_chord::context::with_abort_signal(self.invocation.signal(), context.clone());
-		self.scheduler.session.commit_dyn(&mut callback, &bound).await.map_err(|error| error.to_string())?;
+		let scope = crate::session::TransactionScope {
+			conversation_id: Some(self.conversation_id()),
+			task_id: Some(self.invocation.task_id),
+		};
+		self.scheduler
+			.session
+			.commit_dyn_with_scope(&mut callback, &bound, scope)
+			.await
+			.map_err(|error| error.to_string())?;
 		let result = captured.lock().take().unwrap_or(None);
 		Ok(result)
 	}
@@ -1959,9 +1967,13 @@ impl TaskRuntime for SchedulerRuntime {
 			validate_task_commit(tx, &invocation, &scheduler).map(|_| ())
 		};
 		let bound = pi_chord::context::with_abort_signal(self.invocation.signal(), context.clone());
+		let scope = crate::session::TransactionScope {
+			conversation_id: Some(self.conversation_id()),
+			task_id: Some(self.invocation.task_id),
+		};
 		self.scheduler
 			.session
-			.commit_dyn_with_guard(&mut guard, change, &bound)
+			.commit_dyn_with_guard_and_scope(&mut guard, change, &bound, scope)
 			.await
 			.map_err(|error| error.to_string())
 	}

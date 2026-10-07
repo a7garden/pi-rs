@@ -133,6 +133,15 @@ impl ProviderStreams for TestApi {
 	}
 }
 
+/// Ambient-only faux api-key `resolve` (upstream `{ auth: {} }`): without it
+/// auth resolution returns `None` and every request fails with
+/// "Provider is not configured".
+fn ambient_faux_resolve<'a>(
+	_input: pi_ai::auth::types::ApiKeyAuthInput<'a>,
+) -> pi_ai::auth::types::BoxFuture<'a, Result<Option<pi_ai::auth::types::AuthResult>, ThrownValue>> {
+	Box::pin(async move { Ok(Some(pi_ai::auth::types::AuthResult::default())) })
+}
+
 fn fixture(options: RegisterFauxProviderOptions, partial: Option<PartialGate>, fail_cancel: bool) -> Fixture {
 	let core = FauxCore::new(options);
 	let provider = create_provider(CreateProviderOptions {
@@ -140,7 +149,15 @@ fn fixture(options: RegisterFauxProviderOptions, partial: Option<PartialGate>, f
 		name: None,
 		base_url: None,
 		headers: None,
-		auth: Default::default(),
+		auth: pi_ai::auth::types::ProviderAuth {
+			api_key: Some(pi_ai::auth::types::ApiKeyAuth {
+				name: "Faux".to_string(),
+				login: None,
+				check: None,
+				resolve: Box::new(ambient_faux_resolve),
+			}),
+			oauth: None,
+		},
 		models: core.models().into_iter().map(pi_ai::types::AnyModel::Chat).collect(),
 		fetch_models: None,
 		filter_models: None,
@@ -1059,19 +1076,36 @@ async fn interrupted_retry_uses_stream_settings_from_the_next_preparation() {
 		retry: Some(RetryPolicyOverrides { enabled: Some(true), max_retries: Some(2), base_delay_ms: Some(60_000), ..Default::default() }),
 		..Default::default()
 	};
-	let storage = Arc::new(MemoryStorage::new());
-	let (harness, conversation) = open_root(storage.clone(), &fixture, Some(settings(111)), Some(now_fn.clone()), None, true).await;
+	// Closing a harness closes the MemoryStorage it opened with; the reopen
+	// needs file-backed storage (upstream uses sqlite for reopen tests too).
+	let directory = tempfile::tempdir().expect("temporary directory");
+	let path = directory.path().join("generation.sqlite");
+	let open = || async {
+		Arc::new(crate::storage::sqlite::SqliteStorage::open_path(
+			&path,
+			&crate::storage::sqlite::NodeSqliteStorageOptions::default(),
+		).await.expect("open sqlite storage")) as Arc<dyn Storage>
+	};
+	let (harness, conversation) = open_root(open().await, &fixture, Some(settings(111)), Some(now_fn.clone()), None, true).await;
 	harness.resume();
 	let submission = submit(&conversation, "hi").await;
 	let retrying = wait_live(&harness, conversation.id, |state| state.generation.as_ref().and_then(|generation| generation.retry.as_ref()).is_some()).await;
 	let task_id = retrying.run.unwrap().task_id;
 	harness.close(&context()).await.expect("close before retry");
-	let (reopened, reopened_root) = open_root(storage, &fixture, Some(settings(222)), Some(now_fn), None, false).await;
+	let (reopened, reopened_root) = open_root(open().await, &fixture, Some(settings(222)), Some(now_fn), None, false).await;
 	let reopened_task = reopened.get_task(task_id, &context()).await.unwrap().unwrap();
 	assert_eq!(reopened_task.state.checkpoint.as_ref().unwrap()["phase"], "retry");
 	now.store(61_000, Ordering::SeqCst);
 	reopened.resume();
-	assert_eq!(submission.wait(&context()).await.unwrap().status, SubmissionStatus::Done);
+	let settled = reopened
+		.submission(submission.id, &context())
+		.await
+		.unwrap()
+		.unwrap()
+		.wait(&context())
+		.await
+		.unwrap();
+	assert_eq!(settled.status, SubmissionStatus::Done);
 	assert_eq!(*seen.lock(), [Some(111), Some(222)]);
 	assert_eq!(entry_kinds(&all_entries(&reopened_root).await), ["pi.user", "pi.assistant", "pi.assistant"]);
 	reopened.close(&context()).await.expect("close reopened harness");

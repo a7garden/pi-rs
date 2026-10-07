@@ -448,6 +448,17 @@ impl Session {
 	) -> Result<Value, SessionError> {
 		self.run_commit_sync_value(change, context, None).await
 	}
+	/// `commit_dyn` bound to a transaction scope: appended entries stamp the
+	/// scope's task as `byTaskId` (upstream runtime commits commit through
+	/// the invocation's scope).
+	pub async fn commit_dyn_with_scope(
+		&self,
+		change: &mut super::CommitValueCallback<'_>,
+		context: &Context,
+		scope: TransactionScope,
+	) -> Result<Value, SessionError> {
+		self.run_commit_sync_value(change, context, Some(scope)).await
+	}
 	/// Commit a borrowed callback after a synchronous transaction guard.
 	pub(crate) async fn commit_dyn_with_guard(
 		&self,
@@ -456,6 +467,15 @@ impl Session {
 		context: &Context,
 	) -> Result<Value, SessionError> {
 		self.run_commit_sync_value_guarded(guard, change, context, None).await
+	}
+	pub(crate) async fn commit_dyn_with_guard_and_scope(
+		&self,
+		guard: &mut super::CommitGuardCallback<'_>,
+		change: &mut super::CommitValueCallback<'_>,
+		context: &Context,
+		scope: TransactionScope,
+	) -> Result<Value, SessionError> {
+		self.run_commit_sync_value_guarded(guard, change, context, Some(scope)).await
 	}
 
 	/// Internal commit exposing the transaction scope: the scope sets the
