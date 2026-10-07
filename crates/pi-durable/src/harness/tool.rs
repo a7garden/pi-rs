@@ -414,7 +414,7 @@ async fn final_result(
 	// (upstream loops `result = replacement`).
 	let agent = runtime.agent(context).await?;
 	for handler in crate::harness::agent::agent_hooks(&agent, "pi.tool") {
-		let Some(hooks) = handler.as_any().downcast_ref::<ToolHooks>() else { continue };
+		let Some(hooks) = (*handler).as_any().downcast_ref::<ToolHooks>() else { continue };
 		let Some(hook) = &hooks.after_tool else { continue };
 		if let Some(replaced) =
 			hook(call.clone(), final_result.clone(), coerce_hook_api(runtime.clone()), context.clone()).await?
@@ -753,7 +753,7 @@ async fn call_phase(task: TaskRecord, runtime: Arc<dyn TaskRuntime>, context: Co
 	let mut args = args;
 	let mut block: Option<String> = None;
 	for handler in crate::harness::agent::agent_hooks(&agent, "pi.tool") {
-		let Some(hooks) = handler.as_any().downcast_ref::<ToolHooks>() else { continue };
+		let Some(hooks) = (*handler).as_any().downcast_ref::<ToolHooks>() else { continue };
 		let Some(hook) = &hooks.before_tool else { continue };
 		let mut hooked_call = call.clone();
 		hooked_call.arguments = args.clone();

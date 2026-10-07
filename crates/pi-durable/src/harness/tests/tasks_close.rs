@@ -435,7 +435,7 @@ async fn close_rejects_runtime_commit_queued_before_admission_was_sealed() {
 		json!({"phase":"run"}),
 		[(
 			"run".into(),
-			handler(move |_, runtime, ctx| {
+			handler(move |_, runtime, _ctx| {
 				let storage = task_storage.clone();
 				let gate_slot = gate_for_task.clone();
 				let gate_created = created_for_task.clone();
@@ -450,7 +450,10 @@ async fn close_rejects_runtime_commit_queued_before_admission_was_sealed() {
 					*blocker_slot.lock() = Some(append_blocker(root));
 					wait_for_blocker(&storage).await;
 					let runtime_for_commit = runtime.clone();
-					let queued_context = ctx.clone();
+					// Upstream queues the runtime commit with the base test
+					// context, so the rejection comes from the scheduler's
+					// closing check, not the invocation signal.
+					let queued_context = context();
 					*queued_slot.lock() = Some(tokio::spawn(async move {
 						runtime_for_commit
 							.commit(commit_change(|_, _| Ok(Some(NextTaskState::completed(Value::Null)))), &queued_context)
@@ -498,7 +501,7 @@ struct CloseOnSnapshotRegistry {
 	harness: Mutex<Option<Arc<Harness>>>,
 	signal: Mutex<Option<AbortSignal>>,
 	close_started: tokio::sync::Notify,
-	closing: Mutex<Option<JoinHandle<Result<(), String>>>>,
+	closing: Mutex<Option<std::thread::JoinHandle<Result<(), String>>>>,
 }
 
 impl CloseOnSnapshotRegistry {
@@ -518,9 +521,15 @@ impl RegistryReader for CloseOnSnapshotRegistry {
 	fn snapshot(&self) -> Arc<dyn RegistrySnapshot> {
 		if self.armed.swap(false, Ordering::SeqCst) {
 			let harness = self.harness.lock().as_ref().expect("harness is installed").clone();
-			let closing = tokio::spawn(async move {
+			// Upstream's `void (async () => close())` executes the close's
+			// synchronous prefix (through admission sealing and the seal
+			// signal) inline; tokio::spawn would queue the whole future on
+			// this worker's unstealable LIFO slot and starve while the spin
+			// below waits for that signal. Run close on its own thread.
+			let runtime_handle = tokio::runtime::Handle::current();
+			let closing = std::thread::spawn(move || {
 				let context = context();
-				harness.close(&context).await
+				runtime_handle.block_on(harness.close(&context))
 			});
 			*self.closing.lock() = Some(closing);
 			self.close_started.notify_one();
@@ -601,7 +610,7 @@ async fn close_during_progress_snapshot_prevents_the_next_phase() {
 		}
 		tokio::task::yield_now().await;
 	};
-	closing.await.expect("close task joins").expect("close succeeds");
+	closing.join().expect("close task joins").expect("close succeeds");
 	assert_eq!(*phases.lock(), ["one"]);
 }
 

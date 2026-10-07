@@ -37,6 +37,16 @@ pub type BoxFuture<T> = Pin<Box<dyn Future<Output = T> + Send>>;
 /// registration). Dispatch is by handler *name* through
 /// [`HookRunner::each`]; the invoker downcasts to the concrete hooks struct it
 /// expects (D2).
+///
+/// **Calling `as_any`/`as_any_arc`:** the blanket impl below covers every
+/// sized `Send + Sync` type, including `Arc<dyn HookHandler>` and references
+/// to it. Method-call sugar therefore picks the wrapper's own impl, not the
+/// inner handler's (`arc.as_any()` yields the `Arc` itself as the `Any`;
+/// even a `&dyn HookHandler` receiver resolves to the blanket impl for the
+/// reference type). The only correct form is the unsized place expression:
+/// `(*handler).as_any()` for an owned `Arc` binding, `(**handler).as_any()`
+/// for `&Arc<dyn HookHandler>` (e.g. a [`HookInvokeFn`] parameter). These
+/// hit the trait-object vtable and produce the concrete handler as `Any`.
 pub trait HookHandler: Send + Sync {
 	fn as_any(&self) -> &dyn std::any::Any;
 	fn as_any_arc(self: Arc<Self>) -> Arc<dyn std::any::Any + Send + Sync>;

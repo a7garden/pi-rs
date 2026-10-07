@@ -579,7 +579,7 @@ async fn request_phase(task: TaskRecord, runtime: Arc<dyn TaskRuntime>, context:
 					let runtime = runtime2.clone();
 					let context = context2.clone();
 					let slot = slot.clone();
-					let hooks_table = handler.as_any().downcast_ref::<GenerationHooks>().cloned();
+					let hooks_table = (**handler).as_any().downcast_ref::<GenerationHooks>().cloned();
 					let future: BoxFuture<Result<(), String>> = Box::pin(async move {
 						let Some(hooks) = hooks_table else { return Ok(()) };
 						let Some(hook) = &hooks.before_request else { return Ok(()) };
@@ -957,7 +957,7 @@ async fn classify(
 					let message = message2.clone();
 					let runtime = runtime2.clone();
 					let context = context2.clone();
-					let hooks_table = handler.as_any().downcast_ref::<GenerationHooks>().cloned();
+					let hooks_table = (**handler).as_any().downcast_ref::<GenerationHooks>().cloned();
 						Box::pin(async move {
 						let Some(hooks) = hooks_table else { return Ok(()) };
 						if let Some(hook) = &hooks.after_response {
@@ -1165,7 +1165,7 @@ async fn answer(runtime: &Arc<dyn TaskRuntime>, message: AssistantMessage, conte
 					let message = message2.clone();
 					let runtime = runtime2.clone();
 					let context = context2.clone();
-					let hooks_table = handler.as_any().downcast_ref::<GenerationHooks>().cloned();
+					let hooks_table = (**handler).as_any().downcast_ref::<GenerationHooks>().cloned();
 						Box::pin(async move {
 						let Some(hooks) = hooks_table else { return Ok(()) };
 						let Some(hook) = &hooks.on_yield else { return Ok(()) };
@@ -1412,7 +1412,7 @@ async fn finish_tool_round(
 				Arc::new(move |handler: &Arc<dyn crate::tasks::HookHandler>| {
 					let runtime = runtime2.clone();
 					let context = context2.clone();
-					let hooks_table = handler.as_any().downcast_ref::<GenerationHooks>().cloned();
+					let hooks_table = (**handler).as_any().downcast_ref::<GenerationHooks>().cloned();
 					let results = results2.clone();
 					Box::pin(async move {
 							let Some(hooks) = hooks_table else { return Ok(()) };

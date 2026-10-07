@@ -4,8 +4,11 @@
 //! JS line. The Rust session runs commit callbacks as synchronous closures
 //! (`crate::tasks` D3, `crate::harness::api` seam), so [`StorageBridge`] pumps
 //! each storage call through one dedicated worker thread with its own tokio
-//! runtime and blocks on the reply channel. The worker is independent of the
-//! caller's runtime, so the blocking wait is safe from any executor context.
+//! runtime. Read-style calls block on the reply channel: their replies never
+//! park, so the wait is safe from any executor context. [`StorageBridge::commit`]
+//! is awaited by the caller instead — a storage backend may legitimately park a
+//! commit (test gates), and blocking the caller's executor thread for it
+//! deadlocks single-thread runtimes.
 //!
 //! Deviations: D1 — the bridge is a mechanical detail of the sync-Tx facade
 //! (session module D1); call order is exactly the caller's, so no upstream
@@ -27,7 +30,10 @@ enum Job {
 	Commit {
 		writes: Vec<StorageWrite>,
 		context: Context,
-		reply: Sender<Result<Seq, StorageRejected>>,
+		// Awaited by the caller (settlement runs in async context), so a
+		// storage backend that parks the commit (test gates) must not stall
+		// the caller's executor thread.
+		reply: tokio::sync::oneshot::Sender<Result<Seq, StorageRejected>>,
 	},
 	MintId {
 		reply: Sender<u64>,
@@ -147,10 +153,14 @@ impl StorageBridge {
 		receiver.recv().expect("pi-durable storage worker replied")
 	}
 
-	pub(crate) fn commit(&self, writes: &[StorageWrite], context: &Context) -> Result<Seq, StorageRejected> {
+	pub(crate) async fn commit(&self, writes: &[StorageWrite], context: &Context) -> Result<Seq, StorageRejected> {
 		let writes = writes.to_vec();
 		let context = context.clone();
-		self.call(|reply| Job::Commit { writes, context, reply })
+		let (reply, receiver) = tokio::sync::oneshot::channel();
+		self.sender
+			.send(Job::Commit { writes, context, reply })
+			.expect("pi-durable storage worker is alive");
+		receiver.await.expect("pi-durable storage worker replied")
 	}
 
 	pub(crate) fn mint_id(&self) -> u64 {
@@ -312,6 +322,7 @@ async fn run_job(storage: &dyn Storage, job: Job) {
 		Job::Commit { writes, context, reply } => {
 			let _ = reply.send(storage.commit(&writes, &context).await);
 		}
+
 		Job::MintId { reply } => {
 			let _ = reply.send(storage.mint_id().await);
 		}

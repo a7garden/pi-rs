@@ -82,6 +82,23 @@ impl ViewObserver for SourceObserver {
 	}
 }
 
+/// Forwards mount revisions into a conversation view watch (upstream: the
+/// `CommittedWatch` created by `ConversationViews.watch` is itself the
+/// registered mount observer).
+struct WatchObserver {
+	watch: CommittedWatch<ConversationView>,
+}
+
+impl ViewObserver for WatchObserver {
+	fn advance(&self, value: &ConversationView, ops: &[Op], context: &Context) {
+		self.watch.advance(value.clone(), ops.to_vec(), context.clone());
+	}
+
+	fn close_session(&self) {
+		self.watch.close_session();
+	}
+}
+
 fn mounted_kinds() -> Vec<(&'static str, crate::documents::DocToken)> {
 	vec![
 		("pi.agent", agent_doc()),
@@ -252,30 +269,46 @@ impl ConversationViews {
 	) -> Result<CommittedWatch<ConversationView>, String> {
 		let mount = self.mount_for(id, context).await?;
 		let value = mount.lock().value.clone();
+		let registration_id = Arc::new(());
 		let watch = crate::session::observation::CommittedWatch::new(
 			value,
 			Box::new({
-				let mounts = self.mounts.clone();
-				let mount = Arc::clone(&mount);
+				let mounts = Arc::downgrade(&self.mounts);
+				let mount = Arc::downgrade(&mount);
+				let registration_id = Arc::downgrade(&registration_id);
 				move || {
-					let mut mounts = mounts.lock();
-					if let std::collections::hash_map::Entry::Occupied(entry) = mounts.entry(id) {
-						if Arc::ptr_eq(entry.get(), &mount) {
-							entry.remove();
+					let (Some(mount), Some(registration_id)) = (mount.upgrade(), registration_id.upgrade()) else {
+						return;
+					};
+					let empty = {
+						let mut mount = mount.lock();
+						mount.observers.retain(|registered| !Arc::ptr_eq(&registered.id, &registration_id));
+						mount.observers.is_empty()
+					};
+					if empty {
+						if let Some(mounts) = mounts.upgrade() {
+							let mut mounts = mounts.lock();
+							if mounts.get(&id).is_some_and(|registered| Arc::ptr_eq(registered, &mount)) {
+								mounts.remove(&id);
+							}
 						}
 					}
 				}
 			}),
 		);
+		// Close or cancellation may begin while the mount hydrates; register
+		// nothing then.
 		if *self.closed.lock() {
+			watch.close_session();
 			return Err(closed_error());
 		}
 		if let Some(signal) = context.abort_signal() {
 			if signal.aborted() {
+				watch.close_session();
 				return Err(abort_reason_text(&signal));
 			}
 		}
-		self.mounts.lock().insert(id, mount);
+		mount.lock().observers.push(ObserverRegistration { id: registration_id, observer: Arc::new(WatchObserver { watch: watch.clone() }) });
 		Ok(watch)
 	}
 

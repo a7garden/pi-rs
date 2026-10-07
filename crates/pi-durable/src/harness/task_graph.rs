@@ -93,6 +93,21 @@ trait TaskGraphObserver: Send + Sync {
 	fn close_session(&self);
 }
 
+/// Forwards mount revisions into a task graph watch (upstream: the watch is
+/// itself the registered mount observer, `task-graph.ts` `#attach`).
+struct WatchObserver {
+	watch: TaskGraphWatch,
+}
+
+impl TaskGraphObserver for WatchObserver {
+	fn advance(&self, value: &TaskGraph, ops: &[Op], context: &Context) {
+		self.watch.advance(value.clone(), ops.to_vec(), context.clone());
+	}
+	fn close_session(&self) {
+		self.watch.close_session();
+	}
+}
+
 struct TaskGraphMount {
 	value: TaskGraph,
 	observers: Vec<Arc<dyn TaskGraphObserver>>,
@@ -146,7 +161,7 @@ impl TaskGraphView {
 			.session
 			.read_on_line(async move {
 				let value = view.build_value(context).await?;
-				let watch = CommittedWatch::new(value, Box::new({
+				let watch = CommittedWatch::new(value.clone(), Box::new({
 					let view = view.clone();
 					move || {
 						*view.mount.lock() = None;
@@ -161,8 +176,8 @@ impl TaskGraphView {
 					}
 				}
 				let mount = Arc::new(Mutex::new(TaskGraphMount {
-					value: watch_value(&watch),
-					observers: Vec::new(),
+					value,
+					observers: vec![Arc::new(WatchObserver { watch: watch.clone() }) as Arc<dyn TaskGraphObserver>],
 				}));
 				*view.mount.lock() = Some(mount);
 				Ok::<_, String>(watch)
@@ -205,10 +220,6 @@ impl TaskGraphView {
 		}
 		Ok(TaskGraph { tasks })
 	}
-}
-
-fn watch_value(_watch: &CommittedWatch<TaskGraph>) -> TaskGraph {
-	TaskGraph::default()
 }
 
 /// Derive the mount's operations from one publication, apply them, and hand

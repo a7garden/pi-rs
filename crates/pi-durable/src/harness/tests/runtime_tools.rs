@@ -1550,12 +1550,23 @@ async fn safe_recovery_uses_current_cwd_but_deselection_prevents_rerun() {
 		let registry = Arc::new(create_registry());
 		let cwd_capture = cwd_seen.clone();
 		let started_capture = first_started.clone();
-		let mut work = tool("work", move |_args, api, _ctx| {
+		let mut work = tool("work", move |_args, api, ctx| {
 			let cwd_seen = cwd_capture.clone();
 			let started = started_capture.clone();
 			async move {
 				cwd_seen.lock().push(api.env().map(|env| env.cwd().to_owned()));
-				if cwd_seen.lock().len() == 1 { started.notify_one(); std::future::pending::<()>().await; }
+				if cwd_seen.lock().len() == 1 {
+					started.notify_one();
+					// Upstream's blocking tool awaits the call's abort signal.
+					if let Some(signal) = ctx.abort_signal() {
+						tokio::select! {
+							_ = std::future::pending::<()>() => {}
+							_ = signal.aborted_future() => {}
+						}
+					} else {
+						std::future::pending::<()>().await;
+					}
+				}
 				ToolExecutionResult::default()
 			}
 		});
@@ -1620,7 +1631,15 @@ async fn safe_replay_clears_prior_progress_diagnostics_and_details() {
 				api.details(json!({"run":2}), &ctx).await.unwrap();
 			}
 			started[run].notify_one();
-			std::future::pending::<()>().await;
+			// Upstream's blocking tool awaits the call's abort signal.
+			if let Some(signal) = ctx.abort_signal() {
+				tokio::select! {
+					_ = std::future::pending::<()>() => {}
+					_ = signal.aborted_future() => {}
+				}
+			} else {
+				std::future::pending::<()>().await;
+			}
 			ToolExecutionResult::default()
 		}
 	});
@@ -1676,7 +1695,16 @@ async fn interrupted_before_tool_intent_repeats_hooks_but_keeps_first_durable_me
 				let attempt = { let mut asked = asked.lock(); *asked += 1; *asked };
 				let decision = api.memo_put("decision", json!(format!("attempt {attempt}")), &ctx).await?;
 				decisions.lock().push(decision);
-				if attempt == 1 { reached.notify_one(); std::future::pending::<()>().await; }
+				// Upstream awaits `aborted(callContext.abortSignal)` on the
+				// first attempt: close must end the hook via its signal.
+				if attempt == 1 {
+					reached.notify_one();
+					if let Some(signal) = ctx.abort_signal() {
+						signal.aborted_future().await;
+					} else {
+						std::future::pending::<()>().await;
+					}
+				}
 				Ok(None)
 			})
 		})),
@@ -1716,12 +1744,21 @@ async fn generation_after_tools_hook_recovers_without_duplicating_tool_result() 
 	let reached_copy = reached.clone();
 	let seen_copy = seen.clone();
 	install_generation_hooks(&registry, "after-tools", GenerationHooks {
-		after_tools: Some(Arc::new(move |_assistant, _results, _api, _ctx| {
+		after_tools: Some(Arc::new(move |_assistant, _results, _api, ctx| {
 			let reached = reached_copy.clone();
 			let seen = seen_copy.clone();
 			Box::pin(async move {
 				let count = { let mut seen = seen.lock(); *seen += 1; *seen };
-				if count == 1 { reached.notify_one(); std::future::pending::<()>().await; }
+				// Upstream awaits `aborted(callContext.abortSignal)` on the first
+				// call: close must end the hook via its signal.
+				if count == 1 {
+					reached.notify_one();
+					if let Some(signal) = ctx.abort_signal() {
+						signal.aborted_future().await;
+					} else {
+						std::future::pending::<()>().await;
+					}
+				}
 				Ok(())
 			})
 		})),

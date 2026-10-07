@@ -342,8 +342,13 @@ async fn task_output_watch_delivers_committed_text_then_retirement() {
 					let draft = tx.doc(&second_output, Some(task_id.0), None, None).map_err(|error| error.to_string())?;
 					draft.set(&[Seg::Key("stdout".into())], json!("$ make\nok\n"))?;
 					draft.set(&[Seg::Key("chunks".into())], json!(2))?;
-					Ok(Some(NextTaskState::completed(Value::Null)))
+					Ok(None)
 				}), &task_context)
+				.await?;
+			// Upstream commits the outcome separately from the final output
+			// write, so the content publication precedes terminal settlement.
+			runtime
+				.commit(commit_change(|_, _| Ok(Some(NextTaskState::completed(Value::Null)))), &task_context)
 				.await?;
 			Ok(())
 		})

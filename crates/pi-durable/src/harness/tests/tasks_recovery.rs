@@ -1249,7 +1249,7 @@ async fn failed_open_releases_registry_subscription_and_closes_its_session() {
 		registry: registry.clone(),
 		..Default::default()
 	}).await;
-	let id = create(&first, &task, Value::Null).await;
+	let _id = create(&first, &task, Value::Null).await;
 	first.resume();
 	wait_log(&log, 1).await;
 
@@ -1271,6 +1271,9 @@ async fn failed_open_releases_registry_subscription_and_closes_its_session() {
 	};
 	assert!(error.contains("disk full"));
 	assert_eq!(subscriptions.load(std::sync::atomic::Ordering::SeqCst), 0);
-	assert_eq!(storage.memory().task(id, &context()).await.map(|record| record.state.status), Some(TaskStateStatus::Running));
+	// Upstream: the failed harness's close closed the shared storage, so its
+	// reads reject afterwards (`storage.task` throws); the port's controlled
+	// storage blinds them instead.
+	assert!(storage.is_closed());
 	first.close(&context()).await.expect("close original harness");
 }

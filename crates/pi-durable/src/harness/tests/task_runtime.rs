@@ -1,16 +1,30 @@
 use std::collections::BTreeMap;
+use std::path::Path;
 use std::sync::Arc;
 
 use parking_lot::Mutex;
 use pi_chord::context::Context;
 use serde_json::{Value, json};
 
-use super::support::{context, open, open_default, root};
+use super::support::{context, open, open_default, registry, root};
 use crate::harness::types::{AnyTask, Extension, Registry};
 use crate::tasks::{
 	BoxFuture, NextTaskState, PhaseHandler, Task, TaskDefinition, TaskRuntime, commit_change, define_task,
 };
-use crate::types::{JoinPolicy, TaskOptions, TaskOutcomeStatus, TaskOwnership, TaskStateStatus};
+use crate::types::{JoinPolicy, TaskOptions, TaskOutcomeStatus, TaskOwnership, TaskStateStatus, Storage};
+
+/// Close/reopen tests need reads that survive `session.close`, which closes
+/// the storage (upstream close/reopen tests use SQLite for the same reason).
+async fn sqlite(path: &Path) -> Arc<dyn Storage> {
+	Arc::new(
+		crate::storage::sqlite::SqliteStorage::open_path(
+			path,
+			&crate::storage::sqlite::NodeSqliteStorageOptions::default(),
+		)
+		.await
+		.expect("open sqlite storage"),
+	)
+}
 
 fn task(name: &str, phases: impl IntoIterator<Item = (String, PhaseHandler)>, abort: PhaseHandler) -> Task {
 	let phases = phases.into_iter().collect::<BTreeMap<_, _>>();
@@ -125,21 +139,31 @@ async fn task_waits_for_all_settled_dependencies_including_faulted_tasks() {
 	})], abort_completed("stop"));
 	let failing = task("test.runtime-failing-dependency", [("run".into(), handler(|_, _, _| Box::pin(async { Err("expected failure".into()) })))], abort_completed("stop"));
 	let ids = Arc::new(Mutex::new(Vec::new()));
-	let waiter = task("test.runtime-waiter", [
-		("wait".into(), { let ids = ids.clone(); handler(move |_, runtime, ctx| {
-			let on = ids.lock().clone();
-			Box::pin(async move {
-				runtime.commit(commit_change(move |_, _| Ok(Some(NextTaskState::Waiting {
-					checkpoint: json!({"phase":"resume"}), on, policy: JoinPolicy::AllSettled,
-				}))), &ctx).await?;
+	// Upstream's waiter starts at `wait`; the shared `task()` helper
+	// hardcodes a `run` initial checkpoint this definition does not carry.
+	let waiter = define_task(TaskDefinition {
+		name: "test.runtime-waiter".into(),
+		version: 1,
+		initial: Arc::new(|_| json!({"phase":"wait"})),
+		phases: Arc::new(BTreeMap::from([
+			("wait".into(), { let ids = ids.clone(); handler(move |_, runtime, ctx| {
+				let on = ids.lock().clone();
+				Box::pin(async move {
+					runtime.commit(commit_change(move |_, _| Ok(Some(NextTaskState::Waiting {
+						checkpoint: json!({"phase":"resume"}), on, policy: JoinPolicy::AllSettled,
+					}))), &ctx).await?;
+					Ok(())
+				})
+			}) }),
+			("resume".into(), handler(|_, runtime, ctx| Box::pin(async move {
+				runtime.commit(commit_change(|_, _| Ok(Some(NextTaskState::completed(json!("resumed"))))), &ctx).await?;
 				Ok(())
-			})
-		}) }),
-		("resume".into(), handler(|_, runtime, ctx| Box::pin(async move {
-			runtime.commit(commit_change(|_, _| Ok(Some(NextTaskState::completed(json!("resumed"))))), &ctx).await?;
-			Ok(())
-		}))),
-	], abort_completed("stop"));
+			}))),
+		])),
+		abort: abort_completed("stop"),
+		migrate: None,
+		hooks: None,
+	});
 	register(&registry, vec![dependency.clone(), failing.clone(), waiter.clone()]);
 	let conversation = root(&harness).await;
 	let dep = create(&conversation, dependency).await;
@@ -162,33 +186,54 @@ async fn task_waits_for_all_settled_dependencies_including_faulted_tasks() {
 
 #[tokio::test]
 async fn interrupted_running_task_reopens_pending_with_its_checkpoint_and_resumes() {
-	let (storage, registry, harness) = open_default().await;
+	let directory = tempfile::tempdir().expect("temporary directory");
+	let path = directory.path().join("session.sqlite");
+	let registry = registry();
+	let harness = open(
+		sqlite(&path).await,
+		crate::harness::types::HarnessOptions { registry: registry.clone(), ..Default::default() },
+	)
+	.await;
 	let reached = Arc::new(tokio::sync::Notify::new());
-	let work = task("test.runtime-restart", [("run".into(), {
-		let reached = reached.clone();
-		handler(move |record, runtime, ctx| {
-			let reached = reached.clone();
-			Box::pin(async move {
-				if record.state.checkpoint.as_ref().and_then(|v| v["phase"].as_str()) == Some("run") {
-					runtime.commit(commit_change(|_, _| Ok(Some(NextTaskState::Running {
-						checkpoint: json!({"phase":"resume"}),
-					}))), &ctx).await?;
-					reached.notify_one();
-					runtime.signal().aborted_future().await;
-					return Ok(());
-				}
-				runtime.commit(commit_change(|_, _| Ok(Some(NextTaskState::completed(json!("done"))))), &ctx).await?;
-				Ok(())
-			})
-		})
-	})], abort_completed("stop"));
+	// The checkpoint names the next phase, so the definition carries both
+	// `run` and `resume` (upstream intent/effect/outcome shape).
+	let work = task(
+		"test.runtime-restart",
+		[
+			("run".into(), {
+				let reached = reached.clone();
+				handler(move |_, runtime, ctx| {
+					let reached = reached.clone();
+					Box::pin(async move {
+						runtime.commit(commit_change(|_, _| Ok(Some(NextTaskState::Running {
+							checkpoint: json!({"phase":"resume"}),
+						}))), &ctx).await?;
+						reached.notify_one();
+						runtime.signal().aborted_future().await;
+						Ok(())
+					})
+				})
+			}),
+			("resume".into(), handler(|_, runtime, ctx| {
+				Box::pin(async move {
+					runtime.commit(commit_change(|_, _| Ok(Some(NextTaskState::completed(json!("done"))))), &ctx).await?;
+					Ok(())
+				})
+			})),
+		],
+		abort_completed("stop"),
+	);
 	register(&registry, vec![work.clone()]);
 	let conversation = root(&harness).await;
 	let id = create(&conversation, work.clone()).await;
 	harness.resume();
 	reached.notified().await;
 	harness.close(&context()).await.expect("close interrupted harness");
-	let reopened = open(storage, crate::harness::types::HarnessOptions { registry: registry.clone(), ..Default::default() }).await;
+	let reopened = open(
+		sqlite(&path).await,
+		crate::harness::types::HarnessOptions { registry: registry.clone(), ..Default::default() },
+	)
+	.await;
 	let pending = reopened.get_task(id, &context()).await.expect("read").expect("task survives");
 	assert_eq!(pending.state.status, TaskStateStatus::Pending);
 	assert_eq!(pending.state.checkpoint, Some(json!({"phase":"resume"})));
@@ -200,7 +245,14 @@ async fn interrupted_running_task_reopens_pending_with_its_checkpoint_and_resume
 
 #[tokio::test]
 async fn newer_task_definition_migrates_the_checkpoint_before_resuming() {
-	let (storage, registry, harness) = open_default().await;
+	let directory = tempfile::tempdir().expect("temporary directory");
+	let path = directory.path().join("session.sqlite");
+	let registry = registry();
+	let harness = open(
+		sqlite(&path).await,
+		crate::harness::types::HarnessOptions { registry: registry.clone(), ..Default::default() },
+	)
+	.await;
 	let old = define_task(TaskDefinition {
 		name: "test.runtime-migration".into(),
 		version: 1,
@@ -229,19 +281,20 @@ async fn newer_task_definition_migrates_the_checkpoint_before_resuming() {
 			})),
 		)])),
 		abort: abort_completed("stop"),
+		// Upstream migrations return the replacement checkpoint wholesale.
 		migrate: Some(Arc::new(|input, checkpoint, from_version| {
 			assert_eq!(from_version, 1);
-			let mut migrated = checkpoint.clone();
-			migrated["migrated"] = json!(true);
-			Ok(crate::tasks::TaskMigration { input: input.clone(), checkpoint: migrated })
+			assert_eq!(checkpoint, &json!({"phase":"run","old":true}));
+			Ok(crate::tasks::TaskMigration { input: input.clone(), checkpoint: json!({"phase":"run","migrated":true}) })
 		})),
 		hooks: None,
 	});
 	register(&registry, vec![upgraded]);
-	let reopened = open(storage, crate::harness::types::HarnessOptions {
-		registry: registry.clone(),
-		..Default::default()
-	}).await;
+	let reopened = open(
+		sqlite(&path).await,
+		crate::harness::types::HarnessOptions { registry: registry.clone(), ..Default::default() },
+	)
+	.await;
 	reopened.resume();
 	let receipt = reopened.wait_for_task(id, &context()).await.expect("migrated task settles");
 	assert_eq!(receipt.version, 2);

@@ -245,7 +245,7 @@ struct SchedulerState {
 	idle_waiters: Waiters<Option<ConversationId>, ()>,
 	/// Definition whose migration failed per task; retried only once the
 	/// registry resolves another definition.
-	failed_migrations: HashMap<TaskId, ()>,
+	failed_migrations: HashMap<TaskId, AnyTask>,
 	/// Owner task of each loaded conversation, `None` when ownerless.
 	edges: HashMap<ConversationId, Option<TaskId>>,
 	/// Tasks that own a loaded conversation; their nodes stay in `settled`
@@ -393,8 +393,7 @@ impl TaskScheduler {
 	/// The abort invocation starts once the task's ordinary owned work is
 	/// gone. A `completing` task is only marked.
 	pub async fn abort(self: &Arc<Self>, id: TaskId, context: &Context) -> Result<&'static str, String> {
-		let scheduler = self.clone();
-		let scheduler_in = scheduler.clone();
+		let scheduler_in = self.clone();
 		let id_in = id;
 		let marked = self
 			.session
@@ -407,7 +406,7 @@ impl TaskScheduler {
 						return Err(format!("Task {id} does not exist"));
 					};
 					if current.state.status == TaskStateStatus::Terminal {
-						return Ok("terminal");
+						return Ok(("terminal", None));
 					}
 					let invocation = scheduler.inner.lock().invocations.get(&id).cloned();
 					if invocation.is_none() && current.state.status != TaskStateStatus::Completing {
@@ -417,7 +416,7 @@ impl TaskScheduler {
 							let resolution = scheduler.resolve(&current, snapshot.as_ref());
 							if let Some(reason) = resolution.blocked() {
 								scheduler.terminate_on(tx, &current, orphaned_outcome(reason))?;
-								return Ok("marked");
+								return Ok(("marked", None));
 							}
 						}
 					}
@@ -426,26 +425,32 @@ impl TaskScheduler {
 						marked.abort_requested = true;
 						tx.set_task(marked).map_err(|e| e.to_string())?;
 					}
-					Ok("marked")
+					// Only the run invocation seen on the line is joined
+					// (upstream `marked.run`); a live abort handler is never
+					// waited for.
+					let run_done = invocation
+						.filter(|invocation| invocation.mode == Mode::Run)
+						.map(|invocation| invocation.done.clone());
+					Ok(("marked", run_done))
 				},
 				context,
 			)
 			.await
 			.map_err(|e| e.to_string())?;
-		// The commit listener signalled the run; join it.
-		self.join_invocation(id).await;
-		Ok(marked)
-	}
-
-	async fn join_invocation(&self, id: TaskId) {
-		let done = self.inner.lock().invocations.get(&id).map(|invocation| invocation.done.clone());
-		if let Some(mut done) = done {
-			while !*done.borrow_and_update() {
-				if done.changed().await.is_err() {
-					break;
+		// The commit listener signalled the run; join it, but release the
+		// wait when the caller's context is cancelled (upstream
+		// `awaitWithContext`).
+		if let Some(mut done) = marked.1 {
+			let join = async move {
+				while !*done.borrow_and_update() {
+					if done.changed().await.is_err() {
+						break;
+					}
 				}
-			}
+			};
+			pi_chord::context::await_with_context(join, context).await.map_err(|error| error.to_string())?;
 		}
+		Ok(marked.0)
 	}
 
 	pub async fn wait_for_task(self: &Arc<Self>, id: TaskId, context: &Context) -> Result<SettledTask, String> {
@@ -578,6 +583,11 @@ impl TaskScheduler {
 				}
 				if record.abort_requested && previous.as_ref().map(|previous| previous.abort_requested) != Some(true) {
 					inner.cascade_pending = true;
+					// live must be updated before the wake: the signalled
+					// step reads `inner.live` and must see the mark, or
+					// decide rule 6 miswrites faulted→terminal (upstream's
+					// synchronous listener ordering guarantees this).
+					inner.live.insert(record.id, record.clone());
 					// Signal a run invocation of the newly marked task; its
 					// next step ends it.
 					if let Some(invocation) = inner.invocations.get(&record.id) {
@@ -617,7 +627,10 @@ impl TaskScheduler {
 						&& state.policy == Some(JoinPolicy::FailFast)
 						&& state.on.as_ref().is_some_and(|on| on.contains(id))
 					{
-						inner.fail_fast_checks.insert(*id);
+						// Upstream adds the WAITER's id (record.id), not the
+						// failed task's: the reconcile re-checks the waiter
+						// when its dependency's failure lands.
+						inner.fail_fast_checks.insert(record.id);
 						drop(inner);
 						self.schedule_reconcile();
 						inner = self.inner.lock();
@@ -1069,7 +1082,11 @@ impl TaskScheduler {
 		{
 			let mut inner = self.inner.lock();
 			inner.closing = true;
-			inner._unsubscribe = None;
+			// Upstream `#unsubscribeRegistry()` invokes the disposer; dropping
+			// a `Box<dyn FnOnce>` would leak the subscription.
+			if let Some(unsubscribe) = inner._unsubscribe.take() {
+				unsubscribe();
+			}
 			inner.task_waiters.reject_all(&error);
 			inner.idle_waiters.reject_all(&error);
 			invocations = inner.invocations.values().cloned().collect();
@@ -1096,6 +1113,11 @@ impl TaskScheduler {
 
 	async fn drain(self: &Arc<Self>) {
 		let result: Result<(), String> = async {
+			// Like `schedule_reconcile`, never reserve synchronously after a
+			// kick: a task end that resolves a joiner (upstream's
+			// `invocation.finish()` microtask ordering) must let that joiner's
+			// next commit land before a reservation reads the line.
+			tokio::task::yield_now().await;
 			loop {
 				let proceed = {
 					let mut inner = self.inner.lock();
@@ -1254,7 +1276,7 @@ impl TaskScheduler {
 						Resolution::Ready(task, migrated_record)
 					}
 					Err(error) => {
-						self.inner.lock().failed_migrations.insert(record.id, ());
+						self.inner.lock().failed_migrations.insert(record.id, task.clone());
 						(self.report)(error);
 						Resolution::Blocked(BlockedReason::MigrationFailed)
 					}
@@ -1272,7 +1294,16 @@ impl TaskScheduler {
 		if version < record.version {
 			return Fit::Blocked { reason: BlockedReason::TaskTooOld };
 		}
-		if self.inner.lock().failed_migrations.contains_key(&record.id) {
+		// Upstream: a migration failure blocks only that definition
+		// (`failed?.task === task`); a changed definition retries.
+		let failed_same = self
+			.inner
+			.lock()
+			.failed_migrations
+			.get(&record.id)
+			.map(|failed| Arc::ptr_eq(&failed.definition, &task.definition))
+			.unwrap_or(false);
+		if failed_same {
 			return Fit::Blocked { reason: BlockedReason::MigrationFailed };
 		}
 		Fit::Ready { task, migrates: true }
@@ -1388,6 +1419,7 @@ impl TaskScheduler {
 			}
 			.await;
 			if let Err(error) = result {
+				(scheduler.report)(error);
 			}
 			scheduler.end(&invocation);
 			let _ = invocation.done_tx.send(true);
@@ -1496,9 +1528,9 @@ impl TaskScheduler {
 				.expect("staged task write");
 				return Decision::End;
 			}
-			let next_name = next.as_ref().map(|_| ());
-			if state.reported.as_ref() != next_name.map(Some).as_ref().map(|_| &()) {
-				state.reported = Some(());
+			let next_name = next.as_ref().map(|next| next.definition.name.clone());
+			if state.reported.as_ref() != Some(&next_name) {
+				state.reported = Some(next_name);
 				let cause = if next.is_none() { "missing_task" } else { "incompatible_task" };
 				(self.report)(format!(
 					"Task {} keeps running under its old {} definition ({cause})",
@@ -1564,7 +1596,12 @@ impl TaskScheduler {
 					let invocation2 = invocation_in.clone();
 					let found = scheduler.inner.lock().live.get(&invocation2.task_id).cloned();
 					let current = found.filter(|found| found.state.status == TaskStateStatus::Running);
-					let decision = match (&current, scheduler.inner.lock().closing) {
+					// Upstream `#step` reads `#closing` (a plain field) before
+					// `decide`; the guard must not span the callback —
+					// `decide` may re-enter registry snapshots whose callers
+					// block on `seal`, which itself takes `inner`.
+					let closing = scheduler.inner.lock().closing;
+					let decision = match (&current, closing) {
 						(Some(current), false) => (decide.lock())(tx, current),
 						_ => Decision::End,
 					};
@@ -1766,7 +1803,10 @@ impl TaskScheduler {
 struct RunState {
 	task: AnyTask,
 	snapshot: Arc<dyn RegistrySnapshot>,
-	reported: Option<()>,
+	/// The definition last reported as "keeps running under its old
+	/// definition": `None` = a missing definition (upstream
+	/// `state.reported.task`), so the first progress step always reports.
+	reported: Option<Option<String>>,
 	agent: Arc<tokio::sync::OnceCell<Result<Agent, String>>>,
 }
 
@@ -1943,14 +1983,17 @@ impl TaskRuntime for SchedulerRuntime {
 			*captured_in.lock() = Some(next);
 			Ok(Value::Null)
 		};
-		let bound = pi_chord::context::with_abort_signal(self.invocation.signal(), context.clone());
+		// Upstream passes the caller's context to `#gated` unchanged; the
+		// invocation signal is not chained here (the phase handler's context
+		// already carries it), so a closing harness rejects with its closed
+		// error instead of a stale abort reason.
 		let scope = crate::session::TransactionScope {
 			conversation_id: Some(self.conversation_id()),
 			task_id: Some(self.invocation.task_id),
 		};
 		self.scheduler
 			.session
-			.commit_dyn_with_scope(&mut callback, &bound, scope)
+			.commit_dyn_with_scope(&mut callback, context, scope)
 			.await
 			.map_err(|error| error.to_string())?;
 		let result = captured.lock().take().unwrap_or(None);
@@ -1966,14 +2009,13 @@ impl TaskRuntime for SchedulerRuntime {
 		let mut guard = move |tx: &mut Tx<'_>| {
 			validate_task_commit(tx, &invocation, &scheduler).map(|_| ())
 		};
-		let bound = pi_chord::context::with_abort_signal(self.invocation.signal(), context.clone());
 		let scope = crate::session::TransactionScope {
 			conversation_id: Some(self.conversation_id()),
 			task_id: Some(self.invocation.task_id),
 		};
 		self.scheduler
 			.session
-			.commit_dyn_with_guard_and_scope(&mut guard, change, &bound, scope)
+			.commit_dyn_with_guard_and_scope(&mut guard, change, context, scope)
 			.await
 			.map_err(|error| error.to_string())
 	}

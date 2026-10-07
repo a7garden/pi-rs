@@ -197,7 +197,9 @@ async fn independent_conversations_and_forks_keep_their_own_visible_history() {
 	let inherited = fork.entries(ConversationEntryQuery::default(), 10, None, &context()).await.expect("fork entries");
 	let deep = grandchild.entries(ConversationEntryQuery::default(), 10, None, &context()).await.expect("grandchild entries");
 	assert_eq!(deep.items.iter().map(|entry| entry.id).collect::<Vec<_>>(), vec![child_entry, first]);
-	assert_eq!(inherited.items.iter().map(|entry| entry.id).collect::<Vec<_>>(), vec![first]);
+	// The fork sees its own appended child entry plus the inherited fork
+	// point (upstream: child history is ["c2", "c1", "r2", "r1"]).
+	assert_eq!(inherited.items.iter().map(|entry| entry.id).collect::<Vec<_>>(), vec![child_entry, first]);
 	assert!(unrelated.entries(ConversationEntryQuery::default(), 10, None, &context()).await.expect("empty entries").items.is_empty());
 	assert!(harness.conversation(fork.id, &context()).await.expect("lookup fork").is_some());
 	assert!(harness.close(&context()).await.is_ok());
@@ -281,15 +283,24 @@ async fn conversation_configuration_replaces_fields_and_explicitly_clears_them()
 
 #[tokio::test]
 async fn plain_session_conversation_resolves_default_agent_without_writing_until_configured() {
-	let (_storage, _registry, harness) = open_default().await;
-	let id = harness
-		.session
+	// Upstream: the conversation is created by a plain Session (no Harness
+	// creation hook), so it has no `pi.agent` document until configured.
+	let storage = Arc::new(crate::storage::memory::MemoryStorage::new());
+	let plain = crate::session::create_session(storage.clone());
+	let id = plain
 		.commit(
 			|tx| tx.create_conversation(ConversationOwnership::Ownerless).map(|record| record.id).map_err(|error| error.to_string()),
 			&context(),
 		)
 		.await
-		.expect("create conversation through Session");
+		.expect("create conversation through plain Session");
+	drop(plain);
+	let registry = registry();
+	let harness = open(
+		storage.clone(),
+		crate::harness::types::HarnessOptions { registry: registry.clone(), ..Default::default() },
+	)
+	.await;
 	let conversation = harness.conversation(id, &context()).await.expect("lookup raw conversation").expect("conversation exists");
 	assert!(harness.session.snapshot(&crate::harness::agent::agent_doc(), Some(id.0), None, &context()).await
 		.expect("agent before resolution").is_none());
@@ -780,18 +791,19 @@ async fn conversation_view_head_marker_cuts_older_entries() {
 }
 
 #[tokio::test]
-async fn structured_fail_fast_wait_fails_parent_after_a_child_fails() {
+async fn fail_fast_wait_aborts_live_siblings_and_the_parent_completes() {
 	let (_storage, registry, harness) = open_default().await;
 	let failed = failing_task("test.join-failed-child");
-	let sibling = finishing_task("test.join-success-child");
+	let (started, _started_receive) = tokio::sync::mpsc::unbounded_channel();
+	let held = held_until_aborted_task("test.join-held-child", started);
 	let observed = Arc::new(parking_lot::Mutex::new(Vec::new()));
 	let parent = all_settled_parent(
 		"test.fail-fast-parent",
-		vec![failed.clone(), sibling.clone()],
+		vec![failed.clone(), held.clone()],
 		JoinPolicy::FailFast,
 		observed.clone(),
 	);
-	registry.install(Extension::new("test-fail-fast").with_tasks(vec![failed, sibling, parent.clone()]));
+	registry.install(Extension::new("test-fail-fast").with_tasks(vec![failed, held, parent.clone()]));
 	let conversation = root(&harness).await;
 	let parent_id = conversation
 		.commit(
@@ -809,8 +821,11 @@ async fn structured_fail_fast_wait_fails_parent_after_a_child_fails() {
 		.expect("create fail-fast parent");
 	harness.resume();
 	let settled = harness.wait_for_task(parent_id, &context()).await.expect("wait for fail-fast parent");
-	assert_eq!(settled.record.state.outcome.expect("failure outcome").status, TaskOutcomeStatus::Failed);
-	assert!(observed.lock().is_empty(), "fail-fast parent does not run its resume phase");
+	// Upstream: failFast aborts the live siblings, never the parent; the
+	// parent runs its resume phase and completes.
+	assert_eq!(settled.record.state.outcome.expect("parent outcome").status, TaskOutcomeStatus::Completed);
+	assert_eq!(*observed.lock(), vec![TaskOutcomeStatus::Failed, TaskOutcomeStatus::Aborted]);
+	assert!(!settled.record.abort_requested, "the parent itself is never marked");
 	assert!(harness.close(&context()).await.is_ok());
 }
 

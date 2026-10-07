@@ -229,13 +229,16 @@ pub fn create_agent(tx: &Tx<'_>, conversation: &ConversationRecord) -> Result<()
 	if conversation.parent.is_some() {
 		return Ok(());
 	}
+	// Upstream creates the conversation's own agent document first, then
+	// returns for ownerless conversations: every non-fork conversation has a
+	// (possibly empty) `pi.agent` document.
+	let draft = tx
+		.doc(&agent_doc(), Some(conversation.id.0), None, None)
+		.map_err(|e| e.to_string())?;
 	let owner = conversation.owner.as_ref().map(|owner| owner.conversation_id);
 	let Some(owner_id) = owner else { return Ok(()) };
 	let owner_draft = tx.doc(&agent_doc(), Some(owner_id.0), None, None).map_err(|e| e.to_string())?;
 	let owner_state = owner_draft.value().unwrap_or_default();
-	let draft = tx
-		.doc(&agent_doc(), Some(conversation.id.0), None, None)
-		.map_err(|e| e.to_string())?;
 	// A task-owned conversation copies the owner's whole agent state; write
 	// it field by field.
 	let owner_agent: AgentState = serde_json::from_value(Value::Object(owner_state)).unwrap_or_default();

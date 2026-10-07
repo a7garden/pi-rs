@@ -374,7 +374,7 @@ struct PingHandler(Arc<dyn Fn() + Send + Sync>);
 async fn ping(runtime: &Arc<dyn TaskRuntime>, calls: &Arc<Mutex<Vec<String>>>) -> Result<Vec<String>, String> {
 	calls.lock().clear();
 	let invoke: HookInvokeFn = Arc::new(|handler| {
-		let callback = handler.as_any().downcast_ref::<PingHandler>().map(|handler| handler.0.clone());
+		let callback = (**handler).as_any().downcast_ref::<PingHandler>().map(|handler| handler.0.clone());
 		Box::pin(async move {
 			if let Some(callback) = callback {
 				callback();

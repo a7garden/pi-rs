@@ -531,7 +531,7 @@ async fn select_phase(task: TaskRecord, runtime: Arc<dyn TaskRuntime>, context: 
 					let payload = payload.clone();
 					let runtime = runtime2.clone();
 					let context = context2.clone();
-					let hooks_table = handler.as_any().downcast_ref::<CompactionHooks>().cloned();
+					let hooks_table = (**handler).as_any().downcast_ref::<CompactionHooks>().cloned();
 						Box::pin(async move {
 						let Some(hooks) = hooks_table else { return Ok(()) };
 						let Some(hook) = &hooks.before_compact else { return Ok(()) };

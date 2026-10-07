@@ -1831,6 +1831,16 @@ dependencies = [
 [[package]]
 name = "pi-coding-agent"
 version = "1.0.3"
+dependencies = [
+ "getrandom 0.2.17",
+ "indexmap",
+ "pi-agent",
+ "pi-ai",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+]
 
 [[package]]
 name = "pi-durable"
@@ -1864,7 +1874,9 @@ dependencies = [
  "parking_lot",
  "pi-chord",
  "pi-durable",
+ "serde",
  "serde_json",
+ "sha2",
  "thiserror",
  "tokio",
  "windows-sys 0.61.2",

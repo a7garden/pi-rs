@@ -1,92 +1,93 @@
-# pi-durable remaining work (continuation notes, 2026-10-07)
+# pi-durable remaining work (continuation notes, 2026-10-08)
 
-State after dbabec0+1: `runtime_compaction` 70/71 green (1 ignored),
-`runtime_generation` 31/31 green.
+## State after this session's fixes (uncommitted, on top of 552c7d8)
 
-Additional fixes landed (commit after dbabec0):
-- runtime_generation test fixture builds its provider without api-key auth —
-  wired `resolve` (ambient-only) so auth resolution stops returning None.
-- SchedulerRuntime::commit/commit_tool now commit under
-  TransactionScope{task_id} — appended entries attribute byTaskId (upstream
-  runtime commits stamp entries; the admitted user entry stays unattributed).
-- Staged terminal outcomes finalize in the same commit when no owned work is
-  live (upstream writes `terminal` directly; the race left `completing`).
-- ConversationStreamOptions serializes camelCase into durable checkpoints.
-- render_diagnostics lowercases severity (`[error]`, upstream string enum).
-- beforeRequest replacement messages were stored in a thread_local nobody
-  read; now carried through a shared slot and applied to the request.
-Full lib suite excluding `harness::tests::state::` still has failures and one
-hang. Per-module failure counts from the last full run:
+Every previously-known failure and hang in `pi-durable` is fixed; full serial
+suite run in progress at commit time (all module suites green individually:
+state 26/26, tasks_close 7/7, task_runtime 6/6, tasks_abort, task_graph,
+tasks_recovery 23/23, runtime_tools 37/37, runtime_compaction/generation/
+registry green).
 
-- runtime_generation: FIXED — 31/31 green (fixture was missing faux api-key
-  auth; interrupted-retry reopen needed sqlite + reopened submission handle)
-- runtime_tools: 20 ok serially; the rest hang in reopen/recovery paths.
-  Fixed: beforeTool/afterTool sequential registration-order loops with
-  chained results (first block wins; afterTool replacements feed the next
-  hook); onYield first-continuation-wins; tool execute panic becomes a
-  tool_error result (content unset so retained output applies); abort +
-  interrupted settles keep the slot's retained output (fromSlot); all_entries
-  oldest-first; recovery tests on sqlite with fresh storage per harness and
-  abort-aware/blocking-once tool closures (upstream blockingTool pattern).
-  Remaining hangs: generation_after_tools_hook,
-  interrupted_before_tool_intent, safe_recovery_uses_current_cwd,
-  safe_replay_clears_prior, safe_tool_replay_requires (intermittent pass),
-  tool_task_abort_is_distinct (intermittent) — all in the
-  close-mid-hook/reopen/replay interaction; 0 FAILED at the last hang point.
-- task_runtime: 2 FAILED
-- tasks_abort: 1 FAILED
-- task_graph: 1 FAILED
-- runtime_registry: 1 FAILED
-- hang: `tasks_close::close_during_progress_snapshot_prevents_the_next_phase`
-  (serial and parallel; blocks the suite tail)
-- `harness::tests::state::` (26 tests): suite hangs at its first test even on
-  the pre-fix baseline (verified by stash) — view-watch/listener area.
+## Root causes fixed (port bugs)
 
-Known root-cause candidates to investigate first:
-1. tasks_close hang: close path waiting on a runner spawned through the new
-   `runtime_handle` (current_thread test runtimes only poll when the test
-   future yields; a close→join→spawn cycle can self-deadlock).
-2. runtime_generation cluster: check whether failures share the faux usage
-   estimate / settings overlay changes before assuming independent bugs —
-   run one test with `--nocapture` and compare against the upstream
-   counterpart in `upstream/pi/packages/durable/test/harness-generation.test.ts`.
-3. state module: `ConversationViews::watch` (attach_watch_internal) still does
-   not register an observer — likely the same missing-wiring class fixed for
-   `state()` in view.rs; the failing-view-listener test is the first hang.
-5. runtime_tools RESOLVED for 13 of 16: beforeTool/afterTool rewritten as
-   sequential loops over agent_hooks("pi.tool") with chained results (first
-   blocking decision wins, later hooks skipped; afterTool replacements feed
-   the next hook); all_entries() reversed (storage scan newest-first).
-   REMAINING: 3 FAILED (generation_hook_errors yield order,
-   yielded_generation submission placed, real_bash_output reopen) and the
-   abort/details/progress hang family (tool_abort_writes_only_durable,
-   aborting_during_after_tool, explicit_text, generation_after_tools_hook,
-   interrupted_*, safe_*). Next lever identified: api.details() must reject
-   on the invocation abort (upstream details races the invocation signal);
-   a first attempt (bridge invocation signal into
-   progress.mark_and_wait via race_with_abort_signal) still hung — the wait
-   is not the only abort path; audit progress.stop()/details waiter
-   rejection next.
-4. select_phase ignore: pre-close creation publication does not trigger a
-   seeing drain pass; a lossless publication→kick→drain handoff would let the
-   `#[ignore]` come off.
+1. **Storage bridge deadlock (session/bridge.rs)** — `StorageBridge::commit`
+   blocked the caller's executor thread on a std mpsc reply while a storage
+   backend parked the commit (ControlledStorage gates). On current_thread
+   test runtimes this deadlocked structurally (the thread that must release
+   the gate is blocked on the reply). Fix: Job::Commit reply is now a tokio
+   oneshot and `commit` is awaited by `settle_and_store`; read-style calls
+   still block (replies never park).
+2. **tasks_close hang, close_during_progress_snapshot** — close was spawned
+   with `tokio::spawn` from the spinning worker; it landed in the unstealable
+   LIFO slot and starved. Upstream's `void (async () => close())` runs the
+   close prefix synchronously. Fix (test): spawn close on a dedicated OS
+   thread with `Handle::block_on` (CloseOnSnapshotRegistry).
+3. **observe() ordering (scheduler.rs)** — abort-mark publication signalled
+   the run invocation BEFORE `inner.live.insert`; the woken step could read a
+   stale live record, miss rule 3, and fall into rule 6 ("no durable
+   progress"), writing faulted→terminal before the first abort_task. Fix:
+   insert into live before signalling.
+4. **abort() join semantics** — unconditional mode-blind `join_invocation`
+   that ignored caller cancellation. Rewritten to upstream shape: the commit
+   returns ("terminal"|"marked", Option<run-done>); only the run-mode
+   invocation is joined, via `await_with_context` so a cancelled caller
+   rejects with its own reason; a live abort handler is never joined.
+5. **decide rule 5 report guard** — `reported: Option<()>` merged the
+   "nothing reported yet" and "missing definition reported" states, so the
+   first `missing_task` report never fired. Now
+   `reported: Option<Option<String>>` tracks the reported definition name.
+6. **failed-migration retry** — `fit` blocked on `failed_migrations
+   .contains_key`, so a changed definition never retried. Upstream keys the
+   failure to the definition (`failed?.task === task`); the map now stores
+   the AnyTask and `fit` blocks only on the same definition.
+7. **seal() leaked the registry subscription** — `_unsubscribe = None`
+   dropped the `Box<dyn FnOnce>` without calling it. Now invoked (upstream
+   `#unsubscribeRegistry`).
+8. **create_agent** — returned before creating the conversation's own agent
+   doc for ownerless conversations; upstream `createAgent` creates the doc
+   first. `pi.agent` now exists (empty) for every non-fork conversation.
+9. **TaskGraphView::watch** — mount created with empty observers and an
+   empty graph; the CommittedWatch is now registered as the mount observer
+   and the mount starts from the built graph (same class as the view.rs fix).
 
-Verification commands:
-- cargo test -p pi-durable --lib harness::tests::runtime_compaction:: -- --test-threads=1
-- cargo test -p pi-durable --lib -- --skip harness::tests::state::
+## Test-fixture deviations fixed (tests matched upstream, not the port)
 
-Then: pi-env, pi-coding-agent (scaffolds), ledger finalization, workspace
-version bump only after all crates are at v1.0.3 (PORT_MAP rule 6).
+- state.rs fork history: fork sees its own entries + inherited (upstream
+  [c2,c1,r2,r1] shape), not just the fork point.
+- fail-fast: upstream aborts live siblings and the PARENT COMPLETES via its
+  resume phase (held sibling for determinism); the old ported test expected
+  the parent to fail without resuming.
+- plain-session agent test: the conversation is created by a separate plain
+  Session before the harness opens (upstream shape), so no hook fires.
+- task_runtime close/reopen tests: sqlite storage (upstream uses sqlite for
+  all close/reopen; MemoryStorage blinds reads after session.close).
+- interrupted-running task: definition carries `run` + `resume` phases (the
+  checkpoint names the next phase).
+- migration test: migrate returns the replacement checkpoint wholesale.
+- failed-open test: asserts `storage.is_closed()` (upstream expects the
+  shared storage read to reject after the failed harness's close).
+- all_settled waiter: initial checkpoint is `wait` (upstream), not `run`.
+- runtime_tools recovery hooks/tools await `ctx.abort_signal()` (upstream
+  `aborted(callContext.abortSignal)`), not unconditional `pending()`.
+- close_rejects_runtime_commit: the queued commit uses the base context;
+  upstream rejects via the scheduler closing check, not the invocation
+  signal. SchedulerRuntime::commit/commit_tool pass the caller's context to
+  the gated checks unchanged (no forced invocation-signal chaining).
 
-## Crate-wide serial run (this commit, known-hang tests skipped)
-291 passed / 16 FAILED, then hangs in the tasks_* abort family:
-- failures cluster in chord_guide(1), runtime_registry(1), task_runtime(2),
-  tasks_abort(2), tasks_graph(1), tasks_queue(2), tasks_phase_runtime(1),
-  tasks_recovery(2), runtime_tools remainder
-- hangs: tasks_recovery::task_waits_for_all_settled_dependencies_including_faulted_tasks,
-  tasks_abort::abort_during_reservation_settlement / abort_mark_wins_over_a_fault,
-  plus state view-watch suite and select_phase (pre-existing)
-Common thread of the tasks_* failures/hangs: abort/join semantics on the
-runner lifecycle (abort_invocation signals the controller, but the runner
-completes only when its phase future observes the signal; join_invocation
-then waits on invocation.done) — same class as the tools abort fixes.
+## Scheduling-order hardening (port↔upstream semantics)
+
+- `drain()` yields once before reserving: a task end that resolves a joiner
+  must let the joiner's next commit land before a reservation reads the line
+  (upstream's microtask ordering; tokio's LIFO slot inverts it).
+
+## Wrap-up remaining
+
+- Full serial run green (in progress at commit time).
+- pi-env, pi-coding-agent scaffolds.
+- Workspace version bump only after all crates are at v1.0.3 (PORT_MAP rule 6).
+
+## Verification commands
+
+- cargo test -p pi-durable --lib -- --test-threads=1
+- cargo test -p pi-durable --lib harness::tests::runtime_tools:: -- --test-threads=1
+- cargo test -p pi-durable --lib harness::tests::tasks_recovery:: -- --test-threads=1

@@ -465,7 +465,7 @@ fn hooks_follow_selected_extension_order_filter_by_task_and_agent_fields_keep_de
 	let hook_names = |handlers: Vec<Arc<dyn crate::tasks::HookHandler>>| {
 		handlers
 			.iter()
-			.map(|handler| *handler.as_any().downcast_ref::<&'static str>().expect("hook marker"))
+			.map(|handler| *((**handler).as_any().downcast_ref::<&'static str>().expect("hook marker")))
 			.collect::<Vec<_>>()
 	};
 	assert_eq!(hook_names(agent_hooks(&default, "pi.tool")), ["before-a", "before-b"]);

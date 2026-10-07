@@ -604,7 +604,7 @@ impl Session {
 			return Ok(result);
 		}
 		// Once admitted, caller cancellation does not interrupt Storage settlement.
-		let seq = match self.inner.bridge.commit(&writes, context) {
+		let seq = match self.inner.bridge.commit(&writes, context).await {
 			Ok(seq) => seq,
 			// StorageRejected alone guarantees that no batch effect committed.
 			Err(error) => {
