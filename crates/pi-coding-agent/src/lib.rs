@@ -15,12 +15,24 @@
 //! | `core/session-manager.ts` | [`core::session_manager`] | complete |
 //! | `core/defaults.ts` | [`core::defaults`] | complete |
 //! | `core/settings-manager.ts` | [`core::settings_manager`] | complete (D18–D20) |
+//! | `core/usage-totals.ts` | [`core::usage_totals`] | complete |
+//! | `core/compaction/` | [`core::compaction`] (`compaction`, `branch_summarization`, `utils`) | complete (D23) |
+//! | `core/agent-session*.ts` | [`core::agent_session`] (portable surface: `parseSkillBlock`) | partial — `AgentSession`/`AgentSessionRuntime`/`AgentSessionServices` deferred (see [`core::agent_session`] docs) |
 //!
 //! Not ported yet (next passes), in dependency order:
-//! `core/messages` consumers — `core/compaction/`, `core/tools/`,
-//! `core/extensions/`, `core/export-html/`, `core/modes/{print,json-event,rpc,interactive}`
-//! (interactive TUI excluded by decision), `core/agent-session*.ts`,
-//! `core/model-*`, `core/system-prompt.ts`, `core/slash-commands.ts`,
+//! `core/agent-session.ts` (`AgentSession` class), `core/agent-session-runtime.ts`,
+//! `core/agent-session-services.ts` — blocked on `core/tools/`,
+//! `core/extensions/`, `core/model-registry.ts`, `core/model-runtime.ts`,
+//! `core/resource-loader.ts`, `core/sdk.ts`, `core/session-cwd.ts`,
+//! `core/cache-warmer.ts`, `core/nested-tool-calls.ts`,
+//! `core/bash-executor.ts`, `core/bug-report.ts`, `core/export-html/`,
+//! `core/system-prompt.ts`, `core/slash-commands.ts`, `core/source-info.ts`,
+//! `core/virtual-models.ts`, `core/prompt-templates.ts`,
+//! `core/session-export.ts`, `core/auth-guidance.ts` and the
+//! `modes/interactive` theme layer; then `core/tools/`, `core/extensions/`,
+//! `core/export-html/`, `core/modes/{print,json-event,rpc,interactive}`
+//! (interactive TUI excluded by decision), `core/model-*`,
+//! `core/system-prompt.ts`, `core/slash-commands.ts`,
 //! `extensions/{mcp,tool-search,llama,codemode}/`, `experimental/`,
 //! `services/`, `plugins/`, `durable/`, `migrations/`, `rpc-entry`,
 //! `main.ts`, and TUI-only utils (`modes/interactive/**`).
@@ -116,6 +128,22 @@
 //! - **D22 — `getPiUserAgent` platform naming.** `process.platform`/`arch`
 //!   map to `std::env::consts` with Node naming; the runtime token is
 //!   `rust` instead of `bun/x.y` or `node/vX`.
+//! - **D23 — compaction LLM seam and string metrics.** `completeSimple`/`streamFn`
+//!   calls go through [`pi_agent::StreamFn`] or the pi-ai default transport
+//!   behind [`core::compaction::compaction::complete_summarization`], which
+//!   returns `Err` (exact upstream throw strings) where upstream throws or
+//!   propagates a rejected promise; `generateBranchSummary` folds that error
+//!   into `BranchSummaryResult.error`. `RetryPolicy`/`RetryCallbacks` and the
+//!   `cacheRetention: "none"` + fresh-`sessionId` routing behavior are
+//!   preserved via `retryAssistantCall`. JS string `.length` becomes
+//!   `char` counts (UTF-8 vs UTF-16 differs only for astral text) and
+//!   `FileOperations` sets are `BTreeSet`s (upstream sorts before use).
+//!   `CompactionResult.details` is the concrete
+//!   [`core::compaction::compaction::CompactionDetails`] instead of a generic
+//!   payload. Upstream's API-key-gated LLM tests (`compaction.test.ts`
+//!   "LLM summarization") stay unported; upstream's `completeSimple` mocks are
+//!   replaced by `StreamFn` captures. `usage-totals.ts` was ported
+//!   ([`core::usage_totals`]) as a required dependency of `compaction.ts`.
 //!
 //! # Tests
 //!
@@ -123,10 +151,15 @@
 //! in [`core::session_manager::session_manager_tests`]; the ported subset of
 //! `test/paths.test.ts` lives in [`utils::paths`]; `test/settings-manager*.test.ts`
 //! (incl. the bug-regression and compaction suites) live in
-//! [`core::settings_manager::settings_manager_tests`]; per-utils upstream
-//! tests (`ansi-utils`, `frontmatter`, `changelog`, `clipboard*`,
-//! `tool-result-images`, `image-process`, `syntax-highlight`, …) are ported
-//! inline in their modules.
+//! [`core::settings_manager::settings_manager_tests`]; upstream
+//! `test/compaction.test.ts` + `test/branch-summarization.test.ts` +
+//! `test/compaction-{nested-calls,serialization,summary-reasoning}.test.ts`
+//! live in [`core::compaction::compaction::compaction_tests`] and the
+//! compaction submodule test modules; the standalone
+//! `getUsageCostBreakdown` case of `test/agent-session-stats.test.ts` lives
+//! in [`core::usage_totals`]; per-utils upstream tests (`ansi-utils`,
+//! `frontmatter`, `changelog`, `clipboard*`, `tool-result-images`,
+//! `image-process`, `syntax-highlight`, …) are ported inline in their modules.
 
 pub mod config;
 pub mod core;
@@ -157,6 +190,20 @@ pub use core::session_manager::{
 	SessionContext, SessionEntry, SessionEntryBase, SessionHeader, SessionInfo, SessionInfoEntry, SessionManager,
 	SessionManagerError, SessionMessageEntry, SessionModelRef, SessionProjection, SessionTreeNode, UsageEntry,
 	CURRENT_SESSION_VERSION,
+};
+pub use core::agent_session::{parse_skill_block, ParsedSkillBlock};
+pub use core::compaction::{
+	calculate_context_tokens, collect_entries_for_branch_summary, compact, complete_summarization,
+	estimate_context_tokens, estimate_projected_context_tokens, estimate_tokens, find_cut_point, find_turn_start_index,
+	generate_branch_summary, generate_summary, generate_summary_with_usage, get_last_assistant_usage,
+	get_summarization_failure, prepare_branch_entries, prepare_compaction, should_compact, BranchPreparation,
+	BranchSummaryDetails, BranchSummaryResult, CollectEntriesResult, CompactionDetails, CompactionPreparation,
+	CompactionResult, CompactionSettings, ContextUsageEstimate, CutPointResult, FileLists, FileOperations,
+	GenerateBranchSummaryOptions, SummaryWithUsage, DEFAULT_COMPACTION_SETTINGS, SUMMARIZATION_SYSTEM_PROMPT,
+};
+pub use core::usage_totals::{
+	add_usage_to_totals, combine_usage, create_usage_totals, get_usage_cost_breakdown, UsageCostBreakdownEntry,
+	UsageTotals,
 };
 pub use core::settings_manager::{
 	parse_http_idle_timeout_ms, resolve_default_tools, CacheWarmingMode, CodemodeMode, DefaultProjectTrust,
