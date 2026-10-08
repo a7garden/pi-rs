@@ -81,8 +81,11 @@ async fn request_ids_deduplicate_before_busy_admission_and_are_conversation_scop
 	assert_eq!(again.id(), first.id());
 	assert_eq!(first.status(&context()).await.expect("status").status, SubmissionStatus::Queued);
 	let commits_before_rejection = first.id();
-	let err = conversation.submit(input("reject", Some("r1"), Some(WhenBusy::Reject)), &context()).await.unwrap_err();
-	assert!(err.contains("already identifies a submission of type input"));
+	// Upstream `admitSubmission` deduplicates request IDs before the busy
+	// check ("Deduplication runs before the busy check"): a same-type
+	// duplicate returns the existing submission even when busy-rejecting.
+	let deduplicated = conversation.submit(input("reject", Some("r1"), Some(WhenBusy::Reject)), &context()).await.expect("deduplicate before busy check");
+	assert_eq!(deduplicated.id(), first.id());
 	assert!(
 		conversation
 			.submit(write("note", Some("r1")), &context())
@@ -160,12 +163,21 @@ async fn final_boundary_places_writes_first_and_one_follow_up_while_retaining_la
 		.await
 		.expect("apply final boundary");
 	assert_eq!(result.users, [first.id()]);
-	assert_eq!(write_submission.status(&context()).await.expect("write status").status, SubmissionStatus::Placed);
+	// Upstream placement (`applySubmissionChange`) turns a queued input
+	// `placed` and a queued write `done` — the write's entry is committed
+	// with the boundary, so it settles at once.
+	assert_eq!(write_submission.status(&context()).await.expect("write status").status, SubmissionStatus::Done);
 	assert_eq!(first.status(&context()).await.expect("first status").status, SubmissionStatus::Placed);
 	assert_eq!(second.status(&context()).await.expect("second status").status, SubmissionStatus::Queued);
 	assert_eq!(inbox_items(&conversation).await.iter().map(|item| item.id()).collect::<Vec<_>>(), [second.id()]);
 	let entries = conversation.entries(Default::default(), 10, None, &context()).await.expect("entries");
-	assert_eq!(entries.items.iter().map(|entry| entry.kind.as_str()).collect::<Vec<_>>(), ["pi.user", "note", "pi.user"]);
+	// Entry scans are newest-first (upstream `EntryQuery`); the write's entry
+	// carries the smaller id — writes are placed before user items.
+	assert_eq!(
+		entries.items.iter().map(|entry| entry.kind.as_str()).collect::<Vec<_>>(),
+		["pi.user", "note"]
+	);
+	assert!(entries.items[0].id > entries.items[1].id, "writes are placed first");
 	harness.close(&context()).await.expect("close");
 }
 

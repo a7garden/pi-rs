@@ -18,6 +18,12 @@
 //! - D-T4: read-only transactions (session `read_on_line`) reject write-path
 //!   methods with `Transaction is read-only` (upstream read-on-line jobs only
 //!   read).
+//! - D-T5: a checkpoint predicate signals rejection by panicking (a Rust
+//!   `Fn(&JsonObject, &[Op], CheckpointInfo) -> bool` cannot throw);
+//!   `assemble` catches the panic and fails the commit with the payload
+//!   message (upstream the thrown `Error` propagates), and `settle_success`
+//!   revokes every draft on any prepare/assemble failure (upstream
+//!   try/catch → `#abortChanges`).
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -1244,23 +1250,27 @@ impl<'a> Tx<'a> {
 	pub(crate) fn settle_success(&self) -> Result<Vec<StorageWrite>, TxError> {
 		let mut state = self.state.lock();
 		state.sealed = true;
-		for index in 0..state.documents.len() {
-			if state.documents[index].draft.is_some() && state.documents[index].prepared.is_none() {
-				let draft = state.documents[index].draft.clone().expect("checked above");
-				match draft.settle() {
-					Ok(prepared) => state.documents[index].prepared = Some(prepared),
-					Err(error) => {
-						for entry in &state.documents {
-							if let Some(draft) = &entry.draft {
-								draft.revoke();
-							}
-						}
-						return Err(TxError::message(error));
+		let prepared = (|| -> Result<Vec<StorageWrite>, TxError> {
+			for index in 0..state.documents.len() {
+				if state.documents[index].draft.is_some() && state.documents[index].prepared.is_none() {
+					let draft = state.documents[index].draft.clone().expect("checked above");
+					match draft.settle() {
+						Ok(prepared) => state.documents[index].prepared = Some(prepared),
+						Err(error) => return Err(TxError::message(error)),
 					}
 				}
 			}
+			self.assemble(&mut state)
+		})();
+		// Upstream wraps prepare + assemble in try/catch → `#abortChanges()`.
+		if prepared.is_err() {
+			for entry in &state.documents {
+				if let Some(draft) = &entry.draft {
+					draft.revoke();
+				}
+			}
 		}
-		self.assemble(&mut state)
+		prepared
 	}
 
 	/// Abort every prepared change (upstream `discard`).
@@ -1539,11 +1549,24 @@ impl<'a> Tx<'a> {
 					Some(PlanChange { prepared, version: _, loaded: Some(loaded), definition: Some(definition) }),
 				) => {
 					let info = crate::types::CheckpointInfo { deltas_since_base: loaded.lock().deltas_since_base };
-					definition
-						.checkpoint_when
-						.as_ref()
-						.map(|predicate| predicate(&prepared.value, &prepared.ops, info))
-						.unwrap_or(false)
+					match definition.checkpoint_when.as_ref() {
+						None => false,
+						Some(predicate) => {
+							// Upstream signals a rejecting predicate by
+							// throwing through `#assemble`; the Rust
+							// predicate signals it by panicking (documented
+							// deviation), so the panic becomes the commit's
+							// error and unwinds no further.
+							match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+								predicate(&prepared.value, &prepared.ops, info)
+							})) {
+								Ok(upgrade) => upgrade,
+								Err(payload) => {
+									return Err(TxError::message(checkpoint_panic_message(&*payload)))
+								}
+							}
+						}
+					}
 				}
 				_ => false,
 			};
@@ -1705,6 +1728,18 @@ fn plan_record_id(record: &PlanRecord) -> DocumentId {
 	match record {
 		PlanRecord::Create(create) => create.id,
 		PlanRecord::Existing(record) => record.id,
+	}
+}
+
+/// Message of a panicking checkpoint predicate — the Rust stand-in for the
+/// `error.message` of a predicate that throws upstream.
+fn checkpoint_panic_message(payload: &(dyn std::any::Any + Send)) -> String {
+	if let Some(message) = payload.downcast_ref::<String>() {
+		message.clone()
+	} else if let Some(message) = payload.downcast_ref::<&str>() {
+		(*message).to_string()
+	} else {
+		"checkpoint predicate failed".to_string()
 	}
 }
 

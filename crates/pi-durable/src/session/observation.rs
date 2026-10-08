@@ -177,6 +177,14 @@ impl<T: ObservedValue> CommittedWatch<T> {
 		self.closed().await
 	}
 
+	/// Synchronous prefix of [`Self::stop`]: upstream `stop()` terminates
+	/// synchronously and only awaits the closed promise; callers that must
+	/// not yield (an invocation end that stops watches before aborting its
+	/// signal) use this.
+	pub fn stop_detached(&self) {
+		self.terminate(WatchEnd::Stopped);
+	}
+
 	/// Settle when the watch terminates; an already-running callback remains
 	/// caller-owned.
 	pub async fn closed(&self) -> WatchEnd {

@@ -99,7 +99,8 @@ impl Submissions {
 		Ok(SubmissionHandle { id, submissions: self.clone() })
 	}
 
-	/// Handle for an existing submission, or `None`.
+	/// Handle for an existing submission, or `None` (upstream `get` returns
+	/// `undefined`; only `status`/`wait` throw for a missing submission).
 	pub async fn get(
 		self: &Arc<Self>,
 		id: SubmissionId,
@@ -107,14 +108,9 @@ impl Submissions {
 	) -> Result<Option<SubmissionHandle>, String> {
 		let record = self
 			.session
-			.read_on_line(async move {
-				self.storage
-					.submission(id, context)
-					.await
-					.ok_or_else(|| format!("Submission {id} does not exist"))
-			})
+			.read_on_line(async move { Ok(self.storage.submission(id, context).await) })
 			.await?;
-		Ok(Some(SubmissionHandle { id: record.id, submissions: self.clone() }))
+		Ok(record.map(|record| SubmissionHandle { id: record.id, submissions: self.clone() }))
 	}
 
 	pub async fn status(&self, id: SubmissionId, context: &Context) -> Result<SubmissionRecord, String> {

@@ -2,14 +2,18 @@
 //! scheduler, spec §5).
 //!
 //! Deviations: D1 — `queueMicrotask` scheduling becomes `tokio::spawn`
-//!Wake-driven passes (`#scheduleReconcile`/`#kick`); the serialize-on-the-
+//! Wake-driven passes (`#scheduleReconcile`/`#kick`); the serialize-on-the-
 //! Session-line invariant is unchanged (decisions run inside commits).
 //! D2 — `AbortController` per invocation becomes a chord `AbortSignal`
 //! controller pair; `done` is a oneshot notify. D3 — `setTimeout` delays
 //! become `tokio::time::sleep` (no 32-bit ms cap, so `MAX_TIMER_DELAY`
 //! stepping is unnecessary). D4 — JSON equality for progress detection is
 //! `serde_json` value equality (map order preserved by `preserve_order`,
-//! matching upstream write order).
+//! matching upstream write order). D5 — runtime `now`/`report` surface
+//! "invocation has ended" as a panic (their signatures are infallible;
+//! upstream throws), and `step` reports a rejected commit itself and returns
+//! `Ok(None)` where upstream catches and returns `undefined` — `#start`'s
+//! catch never fires, so no second report.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Arc;
@@ -133,6 +137,9 @@ struct Invocation {
 	context: Context,
 	/// Fired when the invocation ends.
 	controller: pi_chord::context::AbortController,
+	/// Watches the runtime acquired (upstream `invocation.watches`); stopped
+	/// when the invocation ends, before the controller aborts.
+	watches: Arc<parking_lot::Mutex<Vec<Arc<crate::tasks::DocumentWatch>>>>,
 	done: tokio::sync::watch::Receiver<bool>,
 	done_tx: tokio::sync::watch::Sender<bool>,
 }
@@ -144,6 +151,22 @@ impl Invocation {
 
 	fn abort_invocation(&self, reason: String) {
 		self.controller.abort(pi_chord::context::AbortReason::Message(reason));
+	}
+
+	/// Track an acquired watch; dropped from the set once it terminates
+	/// (upstream `watch.closed.then(() => invocation.watches.delete(watch))`).
+	fn register_watch(self: &Arc<Self>, watch: crate::tasks::DocumentWatch) {
+		let watch = Arc::new(watch);
+		if self.ended.load(std::sync::atomic::Ordering::SeqCst) {
+			watch.stop_detached();
+			return;
+		}
+		self.watches.lock().push(watch.clone());
+		let tracked = self.clone();
+		tokio::spawn(async move {
+			watch.closed().await;
+			tracked.watches.lock().retain(|current| !Arc::ptr_eq(current, &watch));
+		});
 	}
 }
 
@@ -1400,6 +1423,7 @@ impl TaskScheduler {
 			ended: Arc::new(std::sync::atomic::AtomicBool::new(false)),
 			context: pi_chord::context::with_abort_signal(signal, base.clone()),
 			controller,
+			watches: Arc::default(),
 			done,
 			done_tx,
 		});
@@ -1588,7 +1612,7 @@ impl TaskScheduler {
 		let decide = Mutex::new(decide);
 		let scheduler_in = scheduler.clone();
 		let invocation_in = invocation2.clone();
-		let result: Result<Option<TaskRecord>, String> = self
+		let result = self
 			.session
 			.commit(
 				move |tx| {
@@ -1630,15 +1654,20 @@ impl TaskScheduler {
 				},
 				&scheduler.context,
 			)
-			.await
-			.map_err(|error| {
-				scheduler.end(&invocation2);
+			.await;
+		// Upstream `#step` catches a rejected commit itself: it ends the
+		// invocation, reports once, and returns `undefined` — `#run` returns
+		// without rejecting, so `#start`'s catch never reports a second time.
+		Ok(match result {
+			Ok(current) => current,
+			Err(error) => {
+				scheduler.end(invocation);
 				if !scheduler.inner.lock().closing {
 					(scheduler.report)(error.to_string());
 				}
-				error.to_string()
-			});
-		result
+				None
+			}
+		})
 	}
 
 	/// Write an outcome the scheduler decided. While the task's ordinary
@@ -1666,7 +1695,7 @@ impl TaskScheduler {
 	}
 
 	/// End an invocation: its runtime operations reject from now on, its
-	/// signal aborts, and its task is free.
+	/// watches stop, its signal aborts, and its task is free.
 	fn end(&self, invocation: &Arc<Invocation>) {
 		if invocation.ended.swap(true, std::sync::atomic::Ordering::SeqCst) {
 			return;
@@ -1677,6 +1706,11 @@ impl TaskScheduler {
 			{
 				inner.invocations.remove(&invocation.task_id);
 			}
+		}
+		// Upstream `#end` stops the invocation's watches (synchronously,
+		// so they settle `stopped`) before aborting its controller.
+		for watch in invocation.watches.lock().drain(..) {
+			watch.stop_detached();
 		}
 		// Pending waits bound to the invocation, such as a tool's
 		// wait_for_task, reject with it.
@@ -2088,8 +2122,21 @@ impl TaskRuntime for SchedulerRuntime {
 		let bounds = crate::harness::context::capture_context_bounds(self.scheduler.storage.as_ref(), conversation_id, context, at).await?;
 		crate::harness::context::derive_context(self.scheduler.storage.as_ref(), conversation_id, bounds, context).await
 	}
-	fn now(&self) -> u64 { (self.scheduler.now)().max(0) as u64 }
-	fn report(&self, error: String) { (self.scheduler.report)(error) }
+	/// Upstream `now`/`report` throw once the invocation has ended; the
+	/// non-Result signatures surface that as a panic carrying the same
+	/// message.
+	fn now(&self) -> u64 {
+		if let Err(error) = self.check() {
+			panic!("{error}");
+		}
+		(self.scheduler.now)().max(0) as u64
+	}
+	fn report(&self, error: String) {
+		if let Err(ended) = self.check() {
+			panic!("{ended}");
+		}
+		(self.scheduler.report)(error)
+	}
 	async fn sleep(&self, until: u64, context: &Context) -> Result<(), String> { self.scheduler.sleep(&self.invocation, until, context).await }
 	async fn snapshot(&self, token: &crate::documents::DocToken, conversation_id: ConversationId, context: &Context) -> Result<Option<crate::types::JsonObject>, String> {
 		self.check()?;
@@ -2104,7 +2151,23 @@ impl TaskRuntime for SchedulerRuntime {
 	async fn watch_doc(&self, token: &crate::documents::DocToken, conversation_id: ConversationId, context: &Context) -> Result<Option<crate::tasks::DocumentWatch>, String> {
 		self.check()?;
 		let bound = pi_chord::context::with_abort_signal(self.invocation.signal(), context.clone());
-		self.scheduler.session.watch_doc(token, Some(conversation_id.0), None, &bound).await.map_err(|error| error.to_string())
+		let watch = self
+			.scheduler
+			.session
+			.watch_doc(token, Some(conversation_id.0), None, &bound)
+			.await
+			.map_err(|error| error.to_string())?;
+		if let Some(watch) = watch {
+			// Upstream `#watchDoc` stops and rejects when the invocation ended
+			// during acquisition, and otherwise tracks the watch for `#end`.
+			if self.invocation.ended.load(std::sync::atomic::Ordering::SeqCst) {
+				watch.stop_detached();
+				return Err(ended_message(self.invocation.task_id));
+			}
+			self.invocation.register_watch(watch.clone());
+			return Ok(Some(watch));
+		}
+		Ok(None)
 	}
 	async fn document_snapshot(
 		&self,
@@ -2150,11 +2213,22 @@ impl TaskRuntime for SchedulerRuntime {
 	) -> Result<Option<crate::tasks::DocumentWatch>, String> {
 		self.check()?;
 		let bound = pi_chord::context::with_abort_signal(self.invocation.signal(), context.clone());
-		self.scheduler
+		let watch = self
+			.scheduler
 			.session
 			.watch_doc(token, owner, key, &bound)
 			.await
-			.map_err(|error| error.to_string())
+			.map_err(|error| error.to_string())?;
+		if let Some(watch) = watch {
+			// Same acquisition race as `watch_doc` (upstream `#watchDoc`).
+			if self.invocation.ended.load(std::sync::atomic::Ordering::SeqCst) {
+				watch.stop_detached();
+				return Err(ended_message(self.invocation.task_id));
+			}
+			self.invocation.register_watch(watch.clone());
+			return Ok(Some(watch));
+		}
+		Ok(None)
 	}
 }
 

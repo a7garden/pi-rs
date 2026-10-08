@@ -702,7 +702,9 @@ async fn creates_a_task_and_then_its_document_in_one_transaction_without_read_af
 					)
 					.map_err(|e| e.to_string())?;
 				let progress_draft = tx.doc(&progress_for_tx, Some(task_id.0), None, None).map_err(|e| e.to_string())?;
-				progress_draft.push(&[pi_chord::delta::Seg::key("lines")], vec![json!("started")])
+				// Upstream pushes "created" here ("started" belongs to the
+				// file's createTask helper used by other tests).
+				progress_draft.push(&[pi_chord::delta::Seg::key("lines")], vec![json!("created")])
 					.map_err(|e| e.to_string())?;
 				let step_draft =
 					tx.doc(&step_for_tx, Some(task_id.0), Some("one"), Some(Value::Null)).map_err(|e| e.to_string())?;

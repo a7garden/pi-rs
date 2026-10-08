@@ -128,6 +128,65 @@ async fn copies_as_of_and_current_bases_while_leaving_initial_documents_absent()
 	);
 	let harness = open_test_session();
 	let parent_id = create_conversation(&harness.session).await;
+	// Upstream bundles the fork-point entry and the six at-fork writes in one
+	// commit, and the four after-fork writes in a second commit.
+	let set_in = |tx: &crate::session::Tx,
+	             token: &DocToken,
+	             conversation_id: ConversationId,
+	             key: Option<&str>,
+	             value: &str|
+	 -> Result<(), String> {
+		// Upstream passes a placeholder seed for family members
+		// (`tx.doc(AsOfFamily, parentId, "a", "unused")`); non-family
+		// definitions ignore it.
+		let draft = tx
+			.doc(token, Some(conversation_id.0), key, Some(json!("unused")))
+			.map_err(|e| e.to_string())?;
+		draft.set(&[Seg::key("value")], json!(value)).map_err(|e| e.to_string())
+	};
+	let fork_at = {
+		let (as_of, current, initial) = (as_of.clone(), current.clone(), initial.clone());
+		let (as_of_family, current_family) = (as_of_family.clone(), current_family.clone());
+		harness
+			.session
+			.commit(
+				move |tx| -> Result<_, String> {
+					let fork_at = tx
+						.append_entry(parent_id, EntryDraft { kind: Some("fork-point".into()), ..Default::default() })
+						.map_err(|e| e.to_string())?;
+					set_in(&tx, &as_of, parent_id, None, "as-at-fork")?;
+					set_in(&tx, &current, parent_id, None, "current-at-fork")?;
+					set_in(&tx, &initial, parent_id, None, "parent-only")?;
+					set_in(&tx, &as_of_family, parent_id, Some("a"), "family-as-a")?;
+					set_in(&tx, &as_of_family, parent_id, Some("b"), "family-as-b")?;
+					set_in(&tx, &current_family, parent_id, Some("a"), "family-current-a")?;
+					Ok(fork_at.id)
+				},
+				&context(),
+			)
+			.await
+			.expect("commit")
+	};
+	{
+		let (as_of, current) = (as_of.clone(), current.clone());
+		let (as_of_family, current_family) = (as_of_family.clone(), current_family.clone());
+		harness
+			.session
+			.commit(
+				move |tx| -> Result<(), String> {
+					set_in(&tx, &as_of, parent_id, None, "as-after-fork")?;
+					set_in(&tx, &current, parent_id, None, "current-when-copied")?;
+					set_in(&tx, &as_of_family, parent_id, Some("a"), "family-as-after")?;
+					set_in(&tx, &current_family, parent_id, Some("a"), "family-current-when-copied")
+				},
+				&context(),
+			)
+			.await
+			.expect("commit");
+	}
+	flush().await;
+	let document_reads = harness.storage.document_read_count();
+	// Child-side writes stay separate commits (upstream `tx.doc` awaits).
 	let set = |token: &DocToken, conversation_id: ConversationId, key: Option<&str>, value: &str| {
 		let token = token.clone();
 		let key = key.map(str::to_string);
@@ -147,20 +206,6 @@ async fn copies_as_of_and_current_bases_while_leaving_initial_documents_absent()
 				.expect("commit");
 		}
 	};
-
-	let fork_at = append(&harness.session, parent_id, "fork-point").await.id;
-	set(&as_of, parent_id, None, "as-at-fork").await;
-	set(&current, parent_id, None, "current-at-fork").await;
-	set(&initial, parent_id, None, "parent-only").await;
-	set(&as_of_family, parent_id, Some("a"), "family-as-a").await;
-	set(&as_of_family, parent_id, Some("b"), "family-as-b").await;
-	set(&current_family, parent_id, Some("a"), "family-current-a").await;
-	set(&as_of, parent_id, None, "as-after-fork").await;
-	set(&current, parent_id, None, "current-when-copied").await;
-	set(&as_of_family, parent_id, Some("a"), "family-as-after").await;
-	set(&current_family, parent_id, Some("a"), "family-current-when-copied").await;
-	flush().await;
-	let document_reads = harness.storage.document_read_count();
 
 	let child = fork(&harness.session, parent_id, fork_at).await;
 	flush().await;
@@ -621,37 +666,32 @@ async fn copies_the_incarnation_alive_at_the_fork_point_across_retirement_and_re
 	);
 	let harness = open_test_session();
 	let parent_id = create_conversation(&harness.session).await;
+	// Upstream bundles each entry append with its write (or retire) in the
+	// same commit, so the entry's commit carries that document state.
 	let mut entries = Vec::new();
 	for (kind, value) in [("old", Some("old")), ("retired", None), ("new", Some("new"))] {
-		let entry = append(&harness.session, parent_id, kind).await;
-		entries.push(entry.id);
-		match value {
-			Some(value) => {
-				let doc = doc.clone();
-				harness
-					.session
-					.commit(
-						move |tx| -> Result<(), String> {
+		let doc = doc.clone();
+		let entry = harness
+			.session
+			.commit(
+				move |tx| -> Result<_, String> {
+					let entry = tx
+						.append_entry(parent_id, EntryDraft { kind: Some(kind.into()), ..Default::default() })
+						.map_err(|e| e.to_string())?;
+					match value {
+						Some(value) => {
 							let draft = tx.doc(&doc, Some(parent_id.0), None, None).map_err(|e| e.to_string())?;
-							draft.set(&[Seg::key("value")], json!(value)).map_err(|e| e.to_string())
-						},
-						&context(),
-					)
-					.await
-					.expect("commit");
-			}
-			None => {
-				let doc = doc.clone();
-				harness
-					.session
-					.commit(
-						move |tx| tx.retire_doc(&doc, Some(parent_id.0), None).map_err(|e| e.to_string()),
-						&context(),
-					)
-					.await
-					.expect("retire");
-			}
-		}
+							draft.set(&[Seg::key("value")], json!(value)).map_err(|e| e.to_string())?;
+						}
+						None => tx.retire_doc(&doc, Some(parent_id.0), None).map_err(|e| e.to_string())?,
+					}
+					Ok(entry.id)
+				},
+				&context(),
+			)
+			.await
+			.expect("commit");
+		entries.push(entry);
 	}
 	let (old_at, retired_at, new_at) = (entries[0], entries[1], entries[2]);
 	let old_child = fork(&harness.session, parent_id, old_at).await;
@@ -724,18 +764,25 @@ async fn rejects_duplicate_as_of_and_current_selections_for_one_child_address() 
 	);
 	let harness = open_test_session();
 	let parent_id = create_conversation(&harness.session).await;
-	let old_at = append(&harness.session, parent_id, "old").await.id;
-	{
+	// Upstream creates the as-of document in the same commit as the "old"
+	// entry, so the as-of pass at that entry finds an incarnation.
+	let old_at = {
 		let as_of = as_of.clone();
 		harness
 			.session
 			.commit(
-				move |tx| tx.doc(&as_of, Some(parent_id.0), None, None).map(|_| ()).map_err(|e| e.to_string()),
+				move |tx| -> Result<_, String> {
+					let old_at = tx
+						.append_entry(parent_id, EntryDraft { kind: Some("old".into()), ..Default::default() })
+						.map_err(|e| e.to_string())?;
+					tx.doc(&as_of, Some(parent_id.0), None, None).map(|_| ()).map_err(|e| e.to_string())?;
+					Ok(old_at.id)
+				},
 				&context(),
 			)
 			.await
-			.expect("commit");
-	}
+			.expect("commit")
+	};
 	harness
 		.session
 		.commit(
@@ -1053,21 +1100,26 @@ async fn retires_a_copied_document_and_can_recreate_the_address_in_the_fork_tran
 	);
 	let harness = open_test_session();
 	let parent_id = create_conversation(&harness.session).await;
-	let fork_at = append(&harness.session, parent_id, "point").await.id;
-	{
+	// Upstream appends the fork point and creates the document value in one
+	// commit, so the doc is the incarnation alive at the fork point.
+	let fork_at = {
 		let doc = doc.clone();
 		harness
 			.session
 			.commit(
-				move |tx| -> Result<(), String> {
+				move |tx| -> Result<_, String> {
+					let fork_at = tx
+						.append_entry(parent_id, EntryDraft { kind: Some("point".into()), ..Default::default() })
+						.map_err(|e| e.to_string())?;
 					let draft = tx.doc(&doc, Some(parent_id.0), None, None).map_err(|e| e.to_string())?;
-					draft.set(&[Seg::key("value")], json!("copied")).map_err(|e| e.to_string())
+					draft.set(&[Seg::key("value")], json!("copied")).map_err(|e| e.to_string())?;
+					Ok(fork_at.id)
 				},
 				&context(),
 			)
 			.await
-			.expect("commit");
-	}
+			.expect("commit")
+	};
 	let child = {
 		let doc = doc.clone();
 		harness

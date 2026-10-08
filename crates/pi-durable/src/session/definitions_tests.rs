@@ -81,14 +81,43 @@ fn validates_persisted_version_semantics() {
 
 /// Upstream `types every owner, key, and seed overload` — the erased Rust
 /// surface keeps one runtime shape, so this exercises every addressing form
-/// end to end instead of at compile time.
+/// end to end instead of at compile time. Upstream only type-checks the body
+/// (`expectTypeOf`) without running it; the runtime owner validation needs a
+/// real task, so the check creates one first (the fabricated `TaskId` of an
+/// earlier draft was rejected as nonexistent).
 #[tokio::test]
 async fn addresses_every_owner_key_and_seed_overload() {
+	use crate::harness::types::AnyTask;
+	use crate::tasks::{PhaseHandler, TaskDefinition};
+	use crate::types::{TaskOptions, TaskOwnership};
 	let session = crate::session::create_session(Arc::new(crate::storage::memory::MemoryStorage::new()));
 	let conversation_id = create_conversation(&session).await;
-	let task_id = TaskId(7);
+
+	fn work_task() -> AnyTask {
+		let phases: std::collections::BTreeMap<String, PhaseHandler> = std::collections::BTreeMap::new();
+		AnyTask::new(TaskDefinition {
+			name: "test.overloads".to_string(),
+			version: 1,
+			initial: Arc::new(|_| json!({ "phase": "start" })),
+			phases: Arc::new(phases),
+			abort: Arc::new(|_record, _runtime, _context| Box::pin(async { Ok(()) })),
+			migrate: None,
+			hooks: None,
+		})
+	}
 
 	let check = move |tx: &mut Tx<'_>| -> Result<(), String> {
+		let task_id = tx
+			.create_task(
+				&work_task(),
+				json!({}),
+				TaskOptions {
+					ownership: TaskOwnership::Conversation,
+					conversation_id: Some(conversation_id),
+					background: None,
+				},
+			)
+			.map_err(|e| e.to_string())?;
 		tx.doc(&session_doc(), None, None, None).map(|_| ()).map_err(|e| e.to_string())?;
 		tx.doc(&latest_doc(), Some(conversation_id.0), None, None).map(|_| ()).map_err(|e| e.to_string())?;
 		tx.doc(&rewindable_doc(), Some(conversation_id.0), None, None).map(|_| ()).map_err(|e| e.to_string())?;

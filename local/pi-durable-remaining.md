@@ -82,19 +82,11 @@ registry green).
 
 ## Wrap-up remaining
 
-- pi-durable known-failure set after this session (5, all pre-existing family —
-  reproduce with `cargo test -p pi-durable --lib -- --test-threads=1
-  harness::tests::tasks_queue:: harness::tests::tasks_scheduling::rejected_fault_write
-  harness::tests::tasks_phase_runtime::runtime_operations_reject`):
-  - tasks_phase_runtime::runtime_operations_reject_after_invocation_ends... —
-    watch stop returns Cancelled instead of Stopped (watch end-state parity)
-  - tasks_queue::abort_withdraws_only_queued_items... — "Submission 999999
-    does not exist" (submission lookup before mint / admission timing)
-  - tasks_queue::final_boundary_places_writes_first... — status Done vs Placed
-  - tasks_queue::request_ids_deduplicate... — expected busy-reject got Ok
-  - tasks_scheduling::rejected_fault_write_retries_the_task — retry count 2 vs 1
-  All five are queue-admission/watch-end-state semantics; investigate together
-  with the agent-cancellation parity items below.
+- pi-durable: full serial suite GREEN as of 2026-10-08 (`cargo test -p
+  pi-durable --lib -- --test-threads=1` → 580 passed, 0 failed, 4 ignored;
+  parallel run green too). The former known-failure set of 5 and the 11
+  session failures are fixed; see "Root causes fixed (2026-10-08 afternoon)"
+  below.
 - pi-durable tasks_phase_runtime deferred items (pre-existing, not regressions):
   - `task_commits_entries_and_outcomes_atomically...`: racy commit-composition
     assertion relaxed (outcome pinned; Completing-vs-Terminal depends on the
@@ -104,18 +96,70 @@ registry green).
     (storage scans per terminal commit); needs a cheaper chain-load.
   - `task_agent_rejects_a_pre_cancelled_caller` +
     `task_surfaces_agent_resolution_failure...`: need upstream
-    `awaitWithContext(agent(), context)` parity. First attempt
+    `awaitWithContext(agent(), context)` parity (currently `#[ignore]`d in
+    harness/tests/tasks_phase_runtime.rs). First attempt
     (await_with_context around the agent cell) fixed both but slowed/
     destabilized the suite alongside the load_scopes attempt; deferred
     together with the cheap chain-load work.
-- Full serial run green (interrupted by time-boxing; every module suite is
-  green individually — rerun `cargo test -p pi-durable --lib -- --test-threads=1`
-  to completion to confirm).
 - pi-coding-agent: foundation + utils/config/defaults/settings-manager landed;
   remaining module checklist in crate docs (compaction, tools, extensions,
   export-html, modes print/json-event/rpc, agent-session, model-*/system-prompt/
   slash-commands, experimental, services, plugins, durable, migrations, main).
 - Workspace version bump only after all crates are at v1.0.3 (PORT_MAP rule 6).
+
+## Root causes fixed (2026-10-08 afternoon session)
+
+Port bugs (impl):
+1. **Invocation watches (scheduler.rs)** — upstream `#end` stops the
+   invocation's watches (synchronously, settling `stopped`) before aborting
+   its controller; the port never tracked them, so invocation-end watches
+   died `cancelled`. Port added `Invocation.watches` + `register_watch`
+   (upstream `#watchDoc` registration incl. the ended-during-acquisition
+   race) and `CommittedWatch::stop_detached` (upstream `stop()` terminates
+   synchronously).
+2. **Submissions::get (submissions.rs)** — errored "does not exist" where
+   upstream `get` returns `undefined`; only `status`/`wait` throw.
+3. **Scheduler step double report (scheduler.rs)** — port's `step` reported a
+   rejected commit in `map_err` AND returned `Err`, which `start`'s wrapper
+   reported again; upstream `#step` catches, reports once, returns
+   `undefined`. `step` now swallows after reporting (scheduler D5).
+4. **Runtime now/report after end (scheduler.rs)** — no ended guard; upstream
+   throws "invocation has ended". Port panics with the same message (D5).
+5. **Checkpoint predicate rollback (transaction.rs, D-T5)** — predicate
+   panics (the Rust stand-in for upstream throws) escaped `assemble` and
+   killed the caller; drafts were not revoked on assemble failure. Now
+   caught → `TxError` with the payload message, and `settle_success` revokes
+   all drafts on any failure (upstream try/catch → `#abortChanges`).
+6. **Fork duplicate-selection member string (forks.rs)** — `{key}/{kind}` →
+   upstream's `{kind}/{key}`.
+
+Test-fixture fixes (upstream tests are ground truth):
+- forks: as-of/current copies, incarnations, duplicate selections, and
+  retire-recreate tests split upstream's bundled "appendEntry + document
+  writes in ONE commit" into several commits (or missed family seeds —
+  upstream passes a placeholder seed for family members); re-bundled to
+  match. checkpoints rewindable migration: inverse — merged two upstream
+  commits into one; split back (and its current snapshot needs the
+  conversation id).
+- checkpoints delta-count fixture set the same value 3× where upstream
+  increments (later sets were empty batches that skip the predicate); the
+  version-2 base check reads `commits[len-2]` (upstream `.at(-2)`), and the
+  strict-migration deviation asserts "requires migration from version 1"
+  (the strict-JSON surface is unrepresentable over serde_json — documented
+  in the test header).
+- tables create-task fixture pushed "started" where upstream pushes
+  "created" in that transaction ("started" belongs to the file's createTask
+  helper).
+- definitions overload test fabricated `TaskId(7)`; upstream is type-level
+  only — the port now creates a real task in the commit and exercises every
+  addressing overload against it.
+- tasks_queue: request-id dedup returns the existing submission BEFORE the
+  busy-reject check (upstream "Deduplication runs before the busy check");
+  a write placed at a final boundary settles `done` (upstream
+  `applySubmissionChange`: placement turns a queued input `placed` and a
+  queued write `done`), and entry scans are newest-first (upstream
+  `EntryQuery`), so the boundary transcript asserts [f1-user, note] with the
+  write carrying the smaller entry id.
 
 ## Verification commands
 

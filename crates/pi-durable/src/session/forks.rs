@@ -124,7 +124,7 @@ fn collect_copies(
 			let copy_address = address_id_of_create(&record);
 			if copied_addresses.contains(&copy_address) {
 				let member = match &record.key {
-					Some(key) => format!("{key}/{}", record.kind),
+					Some(key) => format!("{}/{}", record.kind, key),
 					None => record.kind.clone(),
 				};
 				return Err(format!("Fork selects multiple source documents for {member}"));

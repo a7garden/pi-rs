@@ -263,11 +263,12 @@ async fn passes_the_stored_delta_count_since_the_newest_base() {
 		)
 		.await
 		.expect("commit");
-	for _ in 0..3 {
-		set_count(&harness.session, &v1, 1).await;
+	// Upstream increments (`count++`), so each batch is nonempty.
+	for count in 1..=3 {
+		set_count(&harness.session, &v1, count).await;
 	}
 	harness.session.unload_documents().await;
-	set_count(&harness.session, &v1, 1).await;
+	set_count(&harness.session, &v1, 4).await;
 	assert_eq!(*seen.lock(), vec![0, 1, 2, 0]);
 	let kinds: Vec<String> = harness
 		.storage
@@ -288,13 +289,15 @@ async fn passes_the_stored_delta_count_since_the_newest_base() {
 
 	// A required version base resets the count without calling the predicate.
 	let before = seen.lock().len();
-	set_count(&harness.session, &v2, 1).await;
-	set_count(&harness.session, &v2, 1).await;
+	set_count(&harness.session, &v2, 5).await;
+	set_count(&harness.session, &v2, 6).await;
 	assert_eq!(*seen.lock(), vec![0, 1, 2, 0, 0]);
 	assert_eq!(seen.lock().len() - before, 1);
 	let writes = harness.storage.commits();
-	let last = &writes[writes.len() - 1];
-	match &last[0] {
+	// Upstream reads `storage.commits.at(-2)`: the version base lands in the
+	// second-to-last commit; the last one is the plain delta after it.
+	let second_to_last = &writes[writes.len() - 2];
+	match &second_to_last[0] {
 		StorageWrite::DocumentChange { content: DocumentContent::Base { version, .. }, .. } => {
 			assert_eq!(*version, 2)
 		}
@@ -950,8 +953,12 @@ async fn strict_checks_migration_results_and_remains_usable_after_rejection() {
 		.snapshot(&incompatible, None, None, &context())
 		.await
 		.expect_err("incompatible");
+	// The upstream case's strict-JSON rejection surface is unrepresentable
+	// over `serde_json::Value` (deviation above); the substituted shape is
+	// classified as a missing migration (see
+	// `rejects_newer_stored_versions_and_older_versions_without_migration`).
 	assert!(
-		error.to_string().contains("newer version 2 than 1"),
+		error.to_string().contains("requires migration from version 1"),
 		"{error}"
 	);
 	let error = {
@@ -965,7 +972,7 @@ async fn strict_checks_migration_results_and_remains_usable_after_rejection() {
 			.await
 			.expect_err("incompatible")
 	};
-	assert!(error.to_string().contains("newer version 2 than 1"), "{error}");
+	assert!(error.to_string().contains("requires migration from version 1"), "{error}");
 	assert_eq!(harness.storage.commits().len(), commits);
 	harness
 		.session
@@ -1189,37 +1196,61 @@ async fn migrates_current_and_historical_rewindable_values_independently() {
 	let harness = open_test_session();
 	let conversation_id = create_conversation(&harness.session).await;
 	let (first_entry, second_entry) = {
-		let v1 = v1.clone();
-		let family = family.clone();
-		harness
+		// Upstream uses two commits (first entry + V1/family writes, then the
+		// second entry + V1 write), so the as-of anchors see per-commit state.
+		let first = harness
 			.session
 			.commit(
-				move |tx| -> Result<_, String> {
-					let first = tx
-						.append_entry(conversation_id, EntryDraft { kind: Some("first".into()), ..Default::default() })
-						.map_err(|e| e.to_string())?;
-					let v1_draft = tx.doc(&v1, Some(conversation_id.0), None, None).map_err(|e| e.to_string())?;
-					v1_draft.set(&[Seg::key("count")], json!(1)).map_err(|e| e.to_string())?;
-					let family_draft =
-						tx.doc(&family, Some(conversation_id.0), Some("member"), Some(json!("seed")))
+				{
+					let v1 = v1.clone();
+					let family = family.clone();
+					move |tx| -> Result<_, String> {
+						let first = tx
+							.append_entry(conversation_id, EntryDraft { kind: Some("first".into()), ..Default::default() })
 							.map_err(|e| e.to_string())?;
-					family_draft.set(&[Seg::key("count")], json!(1)).map_err(|e| e.to_string())?;
-					let second = tx
-						.append_entry(conversation_id, EntryDraft { kind: Some("second".into()), ..Default::default() })
-						.map_err(|e| e.to_string())?;
-					let v1_draft = tx.doc(&v1, Some(conversation_id.0), None, None).map_err(|e| e.to_string())?;
-					v1_draft.set(&[Seg::key("count")], json!(2)).map_err(|e| e.to_string())?;
-					Ok((first.id, second.id))
+						let v1_draft = tx.doc(&v1, Some(conversation_id.0), None, None).map_err(|e| e.to_string())?;
+						v1_draft.set(&[Seg::key("count")], json!(1)).map_err(|e| e.to_string())?;
+						let family_draft = tx
+							.doc(&family, Some(conversation_id.0), Some("member"), Some(json!("seed")))
+							.map_err(|e| e.to_string())?;
+						family_draft.set(&[Seg::key("count")], json!(1)).map_err(|e| e.to_string())?;
+						Ok(first.id)
+					}
 				},
 				&context(),
 			)
 			.await
-			.expect("commit")
+			.expect("commit");
+		let second = harness
+			.session
+			.commit(
+				{
+					let v1 = v1.clone();
+					move |tx| -> Result<_, String> {
+						let second = tx
+							.append_entry(conversation_id, EntryDraft { kind: Some("second".into()), ..Default::default() })
+							.map_err(|e| e.to_string())?;
+						let v1_draft = tx.doc(&v1, Some(conversation_id.0), None, None).map_err(|e| e.to_string())?;
+						v1_draft.set(&[Seg::key("count")], json!(2)).map_err(|e| e.to_string())?;
+						Ok(second.id)
+					}
+				},
+				&context(),
+			)
+			.await
+			.expect("commit");
+		(first, second)
 	};
 	harness.session.unload_documents().await;
 	let commits = harness.storage.commits().len();
+	// Upstream snapshots with the conversation id (`session.snapshot(V3, conversationId)`).
 	assert_eq!(
-		snapshot(&harness.session, &v3).await,
+		harness
+			.session
+			.snapshot(&v3, Some(conversation_id.0), None, &context())
+			.await
+			.expect("snapshot")
+			.map(|value| (*value).clone()),
 		Some(obj(json!({ "count": 2, "version": 3 })))
 	);
 	assert_eq!(*migrations.lock(), vec![1]);
