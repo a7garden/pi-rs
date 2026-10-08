@@ -1,5 +1,39 @@
-//! Port of `packages/coding-agent/src/utils/` — path helpers for the ported
-//! surface. Only the modules session-manager depends on are ported so far;
-//! the remaining upstream utils files stay unported (see crate docs).
+//! Port of `packages/coding-agent/src/utils/` — helpers for the ported
+//! surface. Modules are added as upstream files are ported (see crate docs).
+pub mod abort;
+pub mod ansi;
+pub mod changelog;
+pub mod child_process;
+pub mod deprecation;
+pub mod fs_watch;
+pub mod frontmatter;
+pub mod git;
+pub mod html;
+pub mod json;
+pub mod management_http;
+pub mod mime;
+pub mod clipboard;
+pub mod clipboard_command;
+pub mod clipboard_image;
+pub mod exif_orientation;
+pub mod image_convert;
+pub mod image_process;
+pub mod image_resize;
+pub mod image_resize_core;
+pub mod image_resize_worker;
+pub mod photon;
+pub mod syntax_highlight;
+pub mod tool_result_images;
+pub mod tools_manager;
+pub mod open_browser;
+pub mod output_files;
 pub mod paths;
+pub mod pi_user_agent;
+pub mod shell;
+pub mod sleep;
+pub mod text;
 pub mod time;
+pub mod version_check;
+pub mod windows_self_update;
+pub mod wsl;
+pub mod zip;

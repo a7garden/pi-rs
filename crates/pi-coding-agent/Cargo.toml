@@ -10,6 +10,14 @@ repository.workspace = true
 getrandom = "0.2"
 # Insertion-ordered entry/label indexes (upstream Map iteration order).
 indexmap = { version = "2", features = ["serde"] }
+# Settings storage locks (lock() without poisoning boilerplate).
+parking_lot = "0.12"
+# Process-group termination in utils/shell (upstream process.kill).
+libc = "0.2"
+# DEFLATE streams for utils/zip (upstream fflate).
+flate2 = "1"
+# HTTP fetch in utils/management-http (upstream global fetch).
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 # Wire types cross process boundaries (session JSONL files).
 serde = { workspace = true }
 serde_json = { workspace = true, features = ["preserve_order"] }
