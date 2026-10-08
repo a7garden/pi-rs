@@ -82,6 +82,19 @@ registry green).
 
 ## Wrap-up remaining
 
+- pi-durable known-failure set after this session (5, all pre-existing family —
+  reproduce with `cargo test -p pi-durable --lib -- --test-threads=1
+  harness::tests::tasks_queue:: harness::tests::tasks_scheduling::rejected_fault_write
+  harness::tests::tasks_phase_runtime::runtime_operations_reject`):
+  - tasks_phase_runtime::runtime_operations_reject_after_invocation_ends... —
+    watch stop returns Cancelled instead of Stopped (watch end-state parity)
+  - tasks_queue::abort_withdraws_only_queued_items... — "Submission 999999
+    does not exist" (submission lookup before mint / admission timing)
+  - tasks_queue::final_boundary_places_writes_first... — status Done vs Placed
+  - tasks_queue::request_ids_deduplicate... — expected busy-reject got Ok
+  - tasks_scheduling::rejected_fault_write_retries_the_task — retry count 2 vs 1
+  All five are queue-admission/watch-end-state semantics; investigate together
+  with the agent-cancellation parity items below.
 - pi-durable tasks_phase_runtime deferred items (pre-existing, not regressions):
   - `task_commits_entries_and_outcomes_atomically...`: racy commit-composition
     assertion relaxed (outcome pinned; Completing-vs-Terminal depends on the

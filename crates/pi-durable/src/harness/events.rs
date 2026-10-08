@@ -1,6 +1,6 @@
 //! Port of `packages/durable/src/harness/events.ts` (experimental agent events, spec §9.4).
 
-use std::collections::HashSet;
+use std::collections::{HashSet, VecDeque};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -11,7 +11,7 @@ use pi_chord::context::Context;
 use pi_chord::delta::{Op, Seg};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use tokio::sync::{oneshot, Notify};
+use tokio::sync::oneshot;
 
 use crate::harness::inbox::{InboxItem, InboxState};
 use crate::harness::live::{CompactionStatus, DeferredPoll, GenerationStatus, LiveState, RetryBackoff, SlotStatus, ToolSlot};
@@ -196,14 +196,20 @@ pub struct AgentEventStream {
 
 struct LegacyNext {
 	pull: Arc<LegacyPull>,
+	/// The watch starts on the first publication pull, so batches committed
+	/// before it stay pending and subject to the overflow collapse (upstream
+	/// attaches without draining until `start`).
+	started: bool,
 }
 
 struct LegacyPull {
 	state: Mutex<LegacyPullState>,
-	wake: Notify,
 }
 
 struct LegacyPullState {
+	/// Delivered batches awaiting a `next` call; buffered so the pump never
+	/// stalls on a slow consumer (upstream drains every frame immediately).
+	queue: VecDeque<Result<Vec<AgentEvent>, String>>,
 	request: Option<oneshot::Sender<Result<Vec<AgentEvent>, String>>>,
 	terminal: Option<LegacyTerminal>,
 	terminal_delivered: bool,
@@ -218,30 +224,25 @@ enum LegacyTerminal {
 impl LegacyPull {
 	fn new() -> Self {
 		Self {
-			state: Mutex::new(LegacyPullState { request: None, terminal: None, terminal_delivered: false }),
-			wake: Notify::new(),
+			state: Mutex::new(LegacyPullState {
+				queue: VecDeque::new(),
+				request: None,
+				terminal: None,
+				terminal_delivered: false,
+			}),
 		}
 	}
 
-	async fn deliver(&self, events: Vec<AgentEvent>) {
-		loop {
-			let notified = self.wake.notified();
-			let (request, terminal) = {
-				let mut state = self.state.lock();
-				if state.terminal.is_some() {
-					(None, true)
-				} else {
-					(state.request.take(), false)
-				}
-			};
-			if terminal {
-				return;
-			}
-			if let Some(request) = request {
-				let _ = request.send(Ok(events));
-				return;
-			}
-			notified.await;
+	/// Buffer one delivered batch, handing it straight to a waiting pull.
+	fn deliver(&self, events: Vec<AgentEvent>) {
+		let mut state = self.state.lock();
+		if state.terminal.is_some() {
+			return;
+		}
+		if let Some(request) = state.request.take() {
+			let _ = request.send(Ok(events));
+		} else {
+			state.queue.push_back(Ok(events));
 		}
 	}
 
@@ -249,6 +250,9 @@ impl LegacyPull {
 		let (sender, receiver) = oneshot::channel();
 		{
 			let mut state = self.state.lock();
+			if let Some(events) = state.queue.pop_front() {
+				return Some(events);
+			}
 			if state.terminal.is_some() {
 				if state.terminal_delivered {
 					return None;
@@ -261,7 +265,6 @@ impl LegacyPull {
 			}
 			state.request = Some(sender);
 		}
-		self.wake.notify_one();
 		receiver.await.ok()
 	}
 
@@ -271,22 +274,21 @@ impl LegacyPull {
 			WatchEnd::ListenerError { error } => LegacyTerminal::Error(error),
 			_ => LegacyTerminal::Closed,
 		};
-		let (request, terminal) = {
-			let mut state = self.state.lock();
-			if state.terminal.is_some() {
-				return;
-			}
-			let request = state.request.take();
-			if request.is_some() {
-				state.terminal_delivered = true;
-			}
-			state.terminal = Some(terminal.clone());
-			(request, terminal)
-		};
-		if let (Some(request), LegacyTerminal::Error(error)) = (request, terminal) {
-			let _ = request.send(Err(error));
+		let mut state = self.state.lock();
+		if state.terminal.is_some() {
+			return;
 		}
-		self.wake.notify_one();
+		let request = state.request.take();
+		let mut terminal_delivered = false;
+		if let Some(request) = request {
+			terminal_delivered = true;
+			if let LegacyTerminal::Error(error) = &terminal {
+				let _ = request.send(Err(error.clone()));
+			}
+			// A `closed` terminal drops the sender, releasing the waiter with `None`.
+		}
+		state.terminal_delivered = terminal_delivered;
+		state.terminal = Some(terminal);
 	}
 }
 
@@ -319,30 +321,34 @@ impl AgentEventStream {
 	pub async fn next(&mut self) -> Option<Result<Vec<AgentEvent>, String>> {
 		if self.legacy_next.is_none() {
 			let pull = Arc::new(LegacyPull::new());
-			let delivery_pull = pull.clone();
+			self.legacy_next = Some(LegacyNext { pull, started: false });
+			return Some(Ok(vec![AgentEvent::Snapshot { snapshot: self.snapshot.clone() }]));
+		}
+		let legacy = self.legacy_next.as_mut().expect("legacy pull initialized");
+		if !legacy.started {
+			legacy.started = true;
+			let delivery_pull = legacy.pull.clone();
 			let started = self.watch.start(Arc::new(
 				move |frame, ops, _context| -> Pin<Box<dyn Future<Output = ()> + Send>> {
 					let delivery_pull = delivery_pull.clone();
 					let events = delivered_events(frame, &ops);
-					Box::pin(async move { delivery_pull.deliver(events).await })
+					Box::pin(async move { delivery_pull.deliver(events) })
 				},
 			));
-			self.legacy_next = Some(LegacyNext { pull: pull.clone() });
 			let watch_for_close = match started {
 				Ok(()) => Some(self.watch.clone()),
 				Err(error) if error.0 == "Watch is stopped" => Some(self.watch.clone()),
 				Err(error) => {
-					pull.terminate(WatchEnd::ListenerError { error: error.to_string() });
+					legacy.pull.terminate(WatchEnd::ListenerError { error: error.to_string() });
 					None
 				}
 			};
 			if let Some(watch) = watch_for_close {
-				let close_pull = pull.clone();
+				let close_pull = legacy.pull.clone();
 				tokio::spawn(async move { close_pull.terminate(watch.closed().await) });
 			}
-			return Some(Ok(vec![AgentEvent::Snapshot { snapshot: self.snapshot.clone() }]));
 		}
-		self.legacy_next.as_ref().expect("legacy pull initialized").pull.next().await
+		legacy.pull.next().await
 	}
 }
 
