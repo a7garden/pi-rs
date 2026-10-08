@@ -21,6 +21,8 @@
 //! | `core/diagnostics.ts` | [`core::diagnostics`] | complete |
 //! | `core/source-info.ts` | [`core::source_info`] (D25) | complete |
 //! | `core/skills.ts` | [`core::skills`] (D24, D26) | complete |
+//! | `core/system-prompt.ts` | [`core::system_prompt`] | complete (D59; AgentSession-driven update cases defer with AgentSession) |
+//! | `core/slash-commands.ts` | [`core::slash_commands`] | complete — surface types and built-in catalog |
 //! | `core/package-manager.ts` | [`core::package_manager`] | complete (D55; `isStdoutTakenOver` stand-in lands with `core/output-guard.ts`) |
 //! | `core/pi-manifest.ts` | [`core::pi_manifest`] | complete |
 //! | `core/prompt-templates.ts` | [`core::prompt_templates`] | complete (D57, D57b) |
@@ -39,9 +41,19 @@
 //! | `core/tools/` (all 16 files) | [`core::tools`] | complete (D32–D35, D37–D39); `renderers/*.ts` + theme-coupled `render-utils` helpers deferred with the excluded interactive mode (D32) |
 //! | `core/bash-executor.ts` | [`core::bash_executor`] | complete (D35) |
 //! | `core/resolve-config-value.ts` | [`core::resolve_config_value`] | complete (sync child-process seams, module docs) |
+//! | `core/auth-storage.ts` | [`core::auth_storage`] (D70) | complete |
+//! | `core/cache-warmer.ts` | [`core::cache_warmer`] (D67) | complete — stream/session seams + tokio timers (D67); the `ExtensionRunner.emitCacheWarmingDecision` suite is in the module tests |
+//! | `core/nested-tool-calls.ts` | [`core::nested_tool_calls`] (D68) | complete |
+//! | `core/session-cwd.ts` | [`core::session_cwd`] (D65) | complete — the `createAgentSessionRuntime` case defers with `AgentSessionRuntime` |
+//! | `core/session-export.ts` | [`core::session_export`] (D66) | complete — no upstream direct suite; consumers defer with AgentSession/interactive (D66) |
+//! | `core/auth-guidance.ts` | [`core::auth_guidance`] (D69) | complete — no upstream suite; consumers defer with sdk/AgentSession (D69) |
 //! | `core/model-config.ts` | [`core::model_config`] (D51) | complete |
 //! | `core/model-resolver.ts` | [`core::model_resolver`] (D47, D48) | complete |
 //! | `core/provider-composer.ts` | [`core::provider_composer`] (D49, D50) | complete |
+//! | `core/models-store.ts` | [`core::models_store_wrapper`] (D60) | complete — stores consumed by the model runtime; upstream has no direct suite, see module tests |
+//! | `core/model-runtime.ts` | [`core::model_runtime`] (D63; deps: [`core::auth_storage`], [`core::runtime_credentials`], [`core::remote_catalog_provider`], [`core::virtual_models`]) | complete |
+//! | `core/runtime-credentials.ts` | [`core::runtime_credentials`] | complete (no upstream suite; covered by [`core::model_runtime`] tests) |
+//! | `core/model-registry.ts` | [`core::model_registry`] (D64) | complete — replaces the D29 `extensions/types.rs` stand-in with a re-export |
 //! | `test/model-resolver.test.ts` | [`core::model_resolver::model_resolver_tests`] (portable suites 1:1; the persisted-default suite constructs `AgentSession`/`AuthStorage`/`ModelRuntime` and follows those ports) | complete |
 //! | `test/resolve-config-value.test.ts` | [`core::resolve_config_value::resolve_config_value_tests`] (1:1; the platform-mock case drives the stdin-transport path through the shell-config override seam) | complete |
 //! | `test/tools.test.ts` | `core::tools::tools_tests` + `tests/tools_image_tests.rs` (85 cases, 1:1; image cases split out for photon-seam process isolation, D36) | complete |
@@ -52,13 +64,9 @@
 //! `core/agent-session-services.ts` — blocked on `core/tools/`,
 //! `core/extensions/` JS module loading (jiti seam, D40) and the session/agent
 //! dispatch integration,
-//! `core/model-registry.ts`, `core/model-runtime.ts`,
-//! `core/resource-loader.ts`, `core/sdk.ts`, `core/session-cwd.ts`,
-//! `core/cache-warmer.ts`, `core/nested-tool-calls.ts`,
-//! `core/bash-executor.ts`, `core/bug-report.ts`, `core/export-html/`,
-//! `core/system-prompt.ts`, `core/slash-commands.ts`,
-//! `core/virtual-models.ts`, `core/prompt-templates.ts`,
-//! `core/session-export.ts`, `core/auth-guidance.ts` and the
+//! `core/sdk.ts`,
+//! `core/bug-report.ts`, `core/export-html/`,
+//! and the
 //! `modes/interactive` theme layer; then `core/tools/renderers/` (with the
 //! theme layer), `core/export-html/`, `core/modes/{print,json-event,rpc,interactive}`
 //! (interactive TUI excluded by decision), `core/model-runtime.ts` +
@@ -363,9 +371,9 @@
 //!   namespace-clash checks run in the loader). The `operations.exec`
 //!   function check of `user_bash` results is bridge work.
 //! - **D44 — `buildSystemPrompt` is a renderer seam.** The runner takes a
-//!   `set_system_prompt_renderer` closure until the system-prompt module
-//!   ports; `ctx.getSystemPrompt()` re-renders per handler, so chained
-//!   `before_agent_start` overrides stay in sync.
+//!   `set_system_prompt_renderer` closure; the default now calls the real
+//!   `core::system_prompt` builder, and `ctx.getSystemPrompt()` re-renders
+//!   per handler, so chained `before_agent_start` overrides stay in sync.
 //! - **D45 — `KeybindingsConfig` is `ResolvedKeybindings`.** The runner
 //!   takes `BTreeMap<String, Vec<KeyId>>` (action → keys) until
 //!   `core/keybindings.ts` ports.
@@ -433,6 +441,152 @@
 //!   them unchanged by its JS-seam deviation). **D58b** — extension warning
 //!   records carry their text in `LoadRecord::error` (upstream uses a
 //!   `{path, warning}` shape); `None` warnings are treated as empty.
+//! - **D61 — remote catalog provider ([`core::remote_catalog_provider`]).**
+//!   Upstream `withRemoteCatalog` wraps a provider with a persisted pi.dev
+//!   catalog overlay. **D61a** — `AbortSignal` during the catalog fetch
+//!   becomes `race_with_abort_signal`, surfacing as an `Err` from
+//!   `Provider::refresh_models` (upstream's rejected promise). **D61b** —
+//!   catalog entries are strictly deserialized into `AnyModel` and
+//!   unparseable/unsupported entries are dropped instead of spread loosely.
+//!   **D61c** — `Last-Modified` parsing only accepts IMF-fixdate, falling
+//!   back to `0` (JS `Date.parse`'s `NaN` fallback). **D61d** —
+//!   `getBuiltinModelDataGeneratedAt` has no pi-ai data source (the embedded
+//!   generated catalog carries no `generatedAt` field); the pi-ai accessor
+//!   (`providers::all`) returns `None`, so callers pass `None`. **D61e** —
+//!   the management-HTTP `HttpResponse` gained response headers so
+//!   `etag`/`last-modified` revalidation ports 1:1.
+//! - **D59 — system-prompt custom sections render in sorted name order.**
+//!   Upstream `sections` is a JS object (insertion order); the port carries
+//!   `BTreeMap` (D30), so extension-contributed sections are appended sorted
+//!   by name after the built-in ones (`preamble`, `addendum`,
+//!   `project_context`, `skills`, `cwd`).
+//! - **D60 — models-store object semantics become `BTreeMap` + shared
+//!   futures.** Provider maps sort by key (D16 rationale), so rewritten
+//!   files are key-sorted rather than insertion-ordered; persisted entries
+//!   keep the upstream camelCase wire format (pi-ai `ModelsStoreEntry`
+//!   serialization gained the rename to match its lax reader). The
+//!   single-flight reload promise is a `futures::Shared` boxed future raced
+//!   per reader with `raceWithAbortSignal`; reader-count cleanup runs on
+//!   lease drop, and the write/delete path folds the post-lock read-state
+//!   refresh into the file lock. JSON errors carry `serde_json` messages
+//!   (not V8 `SyntaxError` text) and map parsing is strict about non-object
+//!   files that upstream would only trip over when read.
+//! - **D62 — virtual-models router state is JSON.** Upstream's
+//!   `VirtualModelDefinition<TState>`/`ModelRoute<TState>` generics
+//!   ("must be JSON-serializable") collapse to `serde_json::Value` in
+//!   [`core::virtual_models`], and the `route` callback (sync value or
+//!   promise) becomes `Arc<dyn Fn(RouteRequest) ->
+//!   BoxFuture<Result<ModelRoute, ThrownValue>>>` behind a free `route()`. **D62a** —
+//!   `createVirtualModel` takes the full definition and ignores `route`
+//!   (upstream `Omit<VirtualModelDefinition, "route">`). **D62b** —
+//!   `isVirtualModel({ api })` splits into `is_virtual_model_api` (any api
+//!   string) and `is_virtual_model` (chat model). **D62c** —
+//!   `withVirtualModels` object-spread becomes an explicit `Provider`
+//!   wrapper; the `providerId` argument only names the keyless provider,
+//!   exactly like upstream. **D62d** — `findLatestResponse` and
+//!   `getBranchSelection` treat only typed LLM assistant messages as
+//!   responses (upstream's structural check would also admit custom
+//!   `{role: "assistant"}` JSON values).
+//! - **D63 — model-runtime ([`core::model_runtime`]).** Upstream
+//!   `ModelRuntime` implements pi-ai `Models`; the port wraps a
+//!   [`pi_ai::models::ModelsImpl`] and implements the same trait. **D63a** —
+//!   `create()` is async solely for the initial refresh (`ModelConfig::load`
+//!   is a sync file read). **D63b** — catalog `generatedAt` is always `None`
+//!   (embedded pi-ai catalog carries no manifest field, D61d). **D63c** —
+//!   credential operations serialize through a per-provider async mutex and
+//!   check the signal after acquisition (upstream races the queued
+//!   "started" promise with the signal; an already-running operation is
+//!   awaited). **D63d** — the create-time network refresh timeout cancels
+//!   the refresh future directly instead of aborting a linked signal.
+//!   **D63e** — typing replaces runtime model-kind asserts (`stream` takes a
+//!   chat `Model`, image/classifier entry points take their concrete model
+//!   types). **D63f** — snapshot maps are `BTreeMap`/`BTreeSet` (D16
+//!   rationale). **D63g** — `streamSimple` dispatches the physical request;
+//!   virtual-model routing runs through [`core::model_runtime::ModelRuntime::resolve_model`]
+//!   (the JS overload-based recursion collapses into the router seam).
+//!   **D63h** — `refreshProviderAvailability` writes its provider-scoped
+//!   facts (fresh check + credential read, merged into the current
+//!   snapshot) even when a newer availability pass for the provider
+//!   started; upstream drops the whole update on a `providerSeq` mismatch,
+//!   which can lose the post-credential-change visibility guarantee when a
+//!   fire-and-forget registration refresh overlaps synchronization.
+//! - **D64 — model-registry ([`core::model_registry`]).** The synchronous
+//!   extension facade over `ModelRuntime`; the D29 unit stand-in in
+//!   `extensions/types.rs` becomes a re-export. **D64** — upstream
+//!   `getAuth`/`registerProvider` argument overloads split into distinct
+//!   methods (`get_provider_auth`, `register_provider` vs
+//!   `register_native_provider`); `getApiKeyAndHeaders` returns
+//!   [`core::model_registry::ResolvedRequestAuth`] (an enum) instead of a
+//!   discriminated union.
+//! - **D70 — auth-storage locks and reload coalescing
+//!   ([`core::auth_storage`]).** npm `proper-lockfile` becomes std's
+//!   advisory file locks (`File::try_lock` — `flock`/`LockFileEx` on
+//!   `auth.json` itself), released by the kernel on process death, so the
+//!   30 s staleness tracking and `onCompromised` machinery drop; sync
+//!   acquisition keeps the 10 × 20 ms retry budget (sleeping, not
+//!   busy-waiting) and async acquisition keeps exponential backoff with
+//!   jitter to a 30 s deadline, then fails with a timeout message instead
+//!   of rethrowing `ELOCKED`. `mkdirSync(mode: 0o700)` becomes
+//!   `create_dir_all` (umask defaults); `0o600` still applies to
+//!   `auth.json` on creation (unix). **D70a** — backend callbacks are
+//!   typed: `withLock`'s `current` is `Option<String>` and the async lock
+//!   closure is fallible (`Result<LockResult<T>, ThrownValue>`, so parse
+//!   errors reject like JS throws); the backend interface is a
+//!   non-object-safe trait and consumers hold concrete backends, so
+//!   `AuthStorage.fromStorage` narrows to `from_file_backend` (which, like
+//!   upstream's `authPath = undefined`, skips the shared read state).
+//!   **D70b** — the coalesced reload runs as a tokio task to completion
+//!   behind a watch-completed slot; upstream tracks readers and aborts the
+//!   controller when the last one leaves. **D70c** — `parseStorageData`'s
+//!   unchecked TS casts become strict `Credential` deserialization;
+//!   invalid entries error instead of passing through as inert objects.
+//!   **D70d** — the in-memory backend's promise chain serializes through a
+//!   tokio mutex raced only on the lock wait (pi-ai D17 convention).
+//!   **D70e** — `reload()` stays synchronous (upstream `lockSync`), so it
+//!   must not run inside latency-sensitive async contexts.
+//! - **D65 — session-cwd ([`core::session_cwd`]).** Upstream's structural
+//!   `{ getCwd, getSessionFile }` parameter becomes the `SessionCwdSource`
+//!   trait with a blanket impl for `SessionManager`
+//!   (inherent accessors share the upstream names); `MissingSessionCwdError`
+//!   is a `std::error::Error`. The suite's `createAgentSessionRuntime` case
+//!   defers with `AgentSessionRuntime` (module docs list it).
+//! - **D66 — session-export ([`core::session_export`]).** Upstream has no
+//!   direct suite (consumers are `AgentSession.exportSession` and the
+//!   interactive `session-share`/`bug-report` flows), so the module lands
+//!   with a shape test pinning the JSONL output; the `TrailingEntries`
+//!   callback is `FnOnce(Option<String>, String) -> Vec<JsonValue>` (upstream
+//!   returns arbitrary objects).
+//! - **D67 — cache-warmer ([`core::cache_warmer`]).** `Pick<ModelRuntime,
+//!   "streamSimple">` and `Pick<SessionManager, "appendUsage" | "getBranch">`
+//!   become the `CacheWarmStream`/`CacheWarmSessionStore` seams (blanket impl
+//!   for `Mutex<SessionManager>`); the stream seam resolves to the final
+//!   assistant message directly because upstream only consumes
+//!   `streamSimple(...).result()`. **D67a** — the `decide` callback cannot
+//!   fail: `ExtensionRunner::emit_cache_warming_decision` already falls back
+//!   to pi's decision on handler failure, so no try/catch channel exists.
+//!   **D67b** — `setTimeout` + `unref` becomes a tokio sleep task; "now" is
+//!   the tokio clock, so `nextWarmAt` is monotonic rather than wall-clock
+//!   epoch ms, and the fake-timer suites run under tokio's paused clock,
+//!   driving the private `refresh` where upstream reaches into
+//!   `warmer.run`/`warmer.refresh`. **D67c** — `transformHeaders` (no Rust
+//!   counterpart yet) is carried as static `headers` in the test;
+//!   `formatCacheWarmingUsage`'s regex trim is hand-rolled with identical
+//!   keep-≥3-decimals semantics; abort-signal identity is asserted through
+//!   abort propagation instead of reference equality. The D29
+//!   `extensions/types.rs` stand-ins become re-exports.
+//! - **D68 — nested-tool-calls ([`core::nested_tool_calls`]).** The
+//!   structural `NestedToolCallHost` becomes a trait. **D68a** — `emit` is
+//!   synchronous (upstream awaits a promise; the ported event paths are
+//!   synchronous per D57a) and the update forwarder keeps the sync
+//!   `AgentToolUpdateCallback` convention. **D68b** — the `queueTail`
+//!   promise chain becomes a FIFO `tokio::sync::Mutex`; `holdsQueue` scopes
+//!   keep nested calls of the queue holder reentrant. **D68c** —
+//!   `runToolCall` returns the outcome directly (upstream's promise could
+//!   reject; tool failures are `is_error` outcomes here).
+//! - **D69 — auth-guidance ([`core::auth_guidance`]).** Upstream has no
+//!   direct suite; consumers (`core/sdk.ts`, `core/agent-session.ts`,
+//!   `main.ts`, `cli/list-models.ts`) are deferred modules, so the functions
+//!   land with a string-shape test and their suites travel with those ports.
 
 //!
 //! # Tests
@@ -475,7 +629,11 @@
 //! + `test/resource-loader-theme.test.ts` cases that do not execute extension
 //! JS or construct an `AgentSession`/`ExtensionRunner` are ported 1:1 in
 //! [`core::resource_loader`] `resource_loader_tests` module (deferred cases
-//! listed there).
+//! listed there). Upstream `test/virtual-models.test.ts` portable suites
+//! (`getBranchSelection`) plus direct `create_virtual_model` /
+//! `with_virtual_models` catalog, filtering and unrouted-stream coverage live
+//! in [`core::virtual_models::virtual_models_tests`]; its `ModelRuntime` and
+//! `createAgentSession` describe blocks defer with those ports.
 
 pub mod config;
 pub mod core;
@@ -529,3 +687,7 @@ pub use core::settings_manager::{
 	SettingsManagerCreateOptions, SettingsScope, SteeringMode, TuiMode, TerminalCapabilityOverrides, TerminalImages,
 	WheelScrollLines, DEFAULT_HTTP_IDLE_TIMEOUT_MS, DEFAULT_TOOL_NAMES,
 };
+pub use core::models_store_wrapper::{FileModelsStore, InMemoryCodingAgentModelsStore};
+pub use core::auth_storage::read_stored_credential;
+// Upstream `index.ts`: `export { createSyntheticSourceInfo } from "./core/source-info.ts"`.
+pub use core::source_info::create_synthetic_source_info;

@@ -27,12 +27,19 @@ const RETRYABLE_STATUS_CODES: [u16; 7] = [408, 425, 429, 500, 502, 503, 504];
 #[derive(Debug, Clone)]
 pub struct HttpResponse {
 	pub status: u16,
+	/// Response headers, lower-cased names, in wire order.
+	pub headers: Vec<(String, String)>,
 	pub body: Vec<u8>,
 }
 
 impl HttpResponse {
 	pub fn ok(&self) -> bool {
 		self.status >= 200 && self.status < 300
+	}
+
+	/// First value of the named (case-insensitive) header.
+	pub fn header(&self, name: &str) -> Option<&str> {
+		self.headers.iter().find(|(key, _)| key.eq_ignore_ascii_case(name)).map(|(_, value)| value.as_str())
 	}
 }
 
@@ -90,8 +97,13 @@ impl Fetcher for ReqwestFetcher {
 			}
 			let response = request.send().await.map_err(|e| std::io::Error::other(format!("fetch failed ({e})")))?;
 			let status = response.status().as_u16();
+			let headers = response
+				.headers()
+				.iter()
+				.map(|(name, value)| (name.as_str().to_string(), value.to_str().unwrap_or_default().to_string()))
+				.collect();
 			let body = response.bytes().await.map_err(|e| std::io::Error::other(format!("fetch failed ({e})")))?;
-			Ok(HttpResponse { status, body: body.to_vec() })
+			Ok(HttpResponse { status, headers, body: body.to_vec() })
 		})
 	}
 }
@@ -208,7 +220,7 @@ mod tests {
 			Arc::new(MockFetcher {
 				calls: Arc::clone(&calls),
 				fail_times,
-				response: HttpResponse { status, body: b"{}".to_vec() },
+				response: HttpResponse { status, headers: Vec::new(), body: b"{}".to_vec() },
 			}),
 			calls,
 		)

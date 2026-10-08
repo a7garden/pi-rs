@@ -13,8 +13,9 @@
 //! handler-result fields — `emit_tool_call` reads an `input` patch, headers
 //! merge a returned object, boundary entries flow through result `entries`),
 //! D44 (`buildSystemPrompt` is a renderer seam
-//! [`ExtensionRunner::set_system_prompt_renderer`] until the system-prompt
-//! module ports), D45 (`KeybindingsConfig` is
+//! [`ExtensionRunner::set_system_prompt_renderer`]; the default renderer now
+//! calls the real [`crate::core::system_prompt`] builder), D45
+//! (`KeybindingsConfig` is
 //! [`ResolvedKeybindings`]; keybindings.ts ports separately), D46
 //! (`getShortcuts` warns via `eprintln!`; console capture is not portable),
 //! D54 (post-bind provider registration from captured `pi` objects stays
@@ -333,7 +334,7 @@ impl ExtensionRunner {
 			command_diagnostics: Mutex::new(Vec::new()),
 			ui_prompt_depth: Mutex::new(0),
 			active_ui_prompt: Mutex::new(None),
-			system_prompt_renderer: Mutex::new(Arc::new(|_| String::new())),
+			system_prompt_renderer: Mutex::new(Arc::new(crate::core::system_prompt::build_system_prompt_normalized)),
 		}
 	}
 
@@ -2066,7 +2067,7 @@ pub(crate) mod runner_tests {
 
 	pub(crate) fn test_runner(extensions: Vec<Extension>, runtime: super::super::types::ExtensionRuntime) -> ExtensionRunner {
 		let session_manager = Arc::new(SessionManagerType::in_memory(None, None, None).expect("in-memory session"));
-		let model_registry = Arc::new(super::super::types::ModelRegistry::default());
+		let model_registry = super::super::types::offline_registry_for_tests();
 		ExtensionRunner::new(extensions, runtime, "/tmp/pi-runner-test", session_manager, model_registry)
 	}
 
@@ -2187,7 +2188,7 @@ pub(crate) mod runner_tests {
 			runtime,
 		};
 		let event = super::super::types::ProjectTrustEvent { cwd: "/tmp".to_string() };
-		let (result, errors) = emit_project_trust_event(&extensions_result, &event, stub_context("/tmp")).await;
+		let (result, errors) = emit_project_trust_event(&extensions_result, &event, stub_context("/tmp").await).await;
 
 		let result = result.expect("first decision wins");
 		assert_eq!(
@@ -2197,14 +2198,26 @@ pub(crate) mod runner_tests {
 		assert!(errors.is_empty());
 	}
 
-	fn stub_context(cwd: &str) -> ExtensionContext {
+	async fn stub_context(cwd: &str) -> ExtensionContext {
+		// ModelRegistry needs a ModelRuntime since the D64 port replaced the
+		// unit stand-in; the stub runs fully in memory (no network, no files).
+		let runtime = crate::core::model_runtime::ModelRuntime::create(crate::core::model_runtime::CreateModelRuntimeOptions {
+			credentials: Some(Arc::new(pi_ai::InMemoryCredentialStore::new())),
+			models_path: Some(None),
+			models_store: Some(Arc::new(crate::core::models_store_wrapper::InMemoryCodingAgentModelsStore::new())),
+			allow_model_network: false,
+			refresh_on_create: false,
+			..Default::default()
+		})
+		.await
+		.expect("ModelRuntime::create succeeds");
 		ExtensionContext {
 			ui: Arc::new(NoopExtensionUi),
 			mode: ExtensionMode::Tui,
 			has_ui: false,
 			cwd: cwd.to_string(),
 			session_manager: Arc::new(SessionManagerType::in_memory(None, None, None).unwrap()),
-			model_registry: Arc::new(super::super::types::ModelRegistry::default()),
+			model_registry: Arc::new(super::super::types::ModelRegistry::new(runtime)),
 			model: None,
 			scoped_models: Vec::new(),
 			thinking_level: None,

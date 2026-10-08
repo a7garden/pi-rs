@@ -193,7 +193,7 @@ fn noop_context(cwd: &str) -> ExtensionContext {
 		has_ui: false,
 		cwd: cwd.to_string(),
 		session_manager: std::sync::Arc::new(test_session_manager(cwd)),
-		model_registry: std::sync::Arc::new(ModelRegistry),
+		model_registry: crate::core::extensions::types::offline_registry_for_tests(),
 		model: None,
 		scoped_models: Vec::new(),
 		thinking_level: None,

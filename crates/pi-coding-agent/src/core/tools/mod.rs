@@ -7,6 +7,10 @@
 #[path = "tools_tests.rs"]
 mod tools_tests;
 
+#[cfg(test)]
+#[path = "tool_prompt_contributions_tests.rs"]
+mod tool_prompt_contributions_tests;
+
 pub mod bash;
 pub mod edit;
 pub mod edit_diff;

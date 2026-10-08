@@ -164,6 +164,41 @@ pub fn mark_path_ignored_by_cloud_sync(path: &str) {
 	}
 }
 
+/// Cheap file-identity stamp for change detection (upstream `getFileRevision`):
+/// `dev:ino:size:mtimeNs:ctimeNs`; `None` when the file does not exist.
+pub fn get_file_revision(path: &str) -> Option<String> {
+	let metadata = std::fs::metadata(path).ok()?;
+	Some(file_revision_from_metadata(&metadata))
+}
+
+#[cfg(unix)]
+fn file_revision_from_metadata(metadata: &std::fs::Metadata) -> String {
+	use std::os::unix::fs::MetadataExt;
+	format!(
+		"{}:{}:{}:{}:{}",
+		metadata.dev(),
+		metadata.ino(),
+		metadata.size(),
+		metadata.mtime_nsec(),
+		metadata.ctime_nsec()
+	)
+}
+
+/// Best-effort stand-in without unix inode metadata: size plus wall-clock
+/// nanos (upstream's bigint `stat` fields; only used as a cache key).
+#[cfg(not(unix))]
+fn file_revision_from_metadata(metadata: &std::fs::Metadata) -> String {
+	fn epoch_nanos(time: std::io::Result<std::time::SystemTime>) -> u128 {
+		time.ok().and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok()).map(|duration| duration.as_nanos()).unwrap_or(0)
+	}
+	format!(
+		"0:0:{}:{}:{}",
+		metadata.len(),
+		epoch_nanos(metadata.modified()),
+		epoch_nanos(metadata.created())
+	)
+}
+
 /// Lexically remove `.` and resolve `..` segments (node resolve semantics).
 fn lexically_clean(path: impl AsRef<Path>) -> String {
 	let mut cleaned = PathBuf::new();

@@ -365,7 +365,7 @@ mod tests {
 			let headers = headers.to_vec();
 			Box::pin(async move {
 				self.requests.lock().unwrap().push((url, headers));
-				Ok(HttpResponse { status: 200, body: self.body.clone() })
+				Ok(HttpResponse { status: 200, headers: Vec::new(), body: self.body.clone() })
 			})
 		}
 	}

@@ -124,39 +124,10 @@ pub use crate::core::model_resolver::ScopedModel;
 /// ([`crate::core::bash_executor`]), replacing the earlier stand-in (D29).
 pub use crate::core::bash_executor::BashResult;
 
-/// Upstream `core/cache-warmer.ts` `CacheWarmingAction`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum CacheWarmingAction {
-	#[serde(rename = "warm")]
-	Warm,
-	#[serde(rename = "stop")]
-	Stop,
-}
-
-/// Upstream `core/cache-warmer.ts` `CacheWarmingDecisionEvent`.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type", rename = "cache_warming_decision")]
-pub struct CacheWarmingDecisionEvent {
-	/// Price of this refresh: a cache read of the prompt plus one output token.
-	#[serde(rename = "warmCost")]
-	pub warm_cost: f64,
-	/// Extra price of the next real request if the cache entry is lost.
-	#[serde(rename = "missCost")]
-	pub miss_cost: f64,
-	/// Estimated chance that a real request arrives before the entry expires.
-	#[serde(rename = "continuationProbability")]
-	pub continuation_probability: f64,
-	pub action: CacheWarmingAction,
-}
-
-/// Upstream `core/cache-warmer.ts` `CacheWarmingDecisionEventResult`.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
-pub struct CacheWarmingDecisionEventResult {
-	/// Override whether this refresh is sent; `"stop"` ends warming until the
-	/// next real request.
-	#[serde(default, skip_serializing_if = "Option::is_none")]
-	pub action: Option<CacheWarmingAction>,
-}
+/// Upstream `core/cache-warmer.ts` `CacheWarmingAction` — the real port
+/// landed ([`crate::core::cache_warmer`]), replacing the earlier stand-in
+/// (D29, D67).
+pub use crate::core::cache_warmer::{CacheWarmingAction, CacheWarmingDecisionEvent, CacheWarmingDecisionEventResult};
 
 /// Upstream `core/system-prompt.ts` `BuildSystemPromptOptions` (module ported
 /// separately). Plain struct: the `skills` member is [`Skill`], which carries
@@ -292,10 +263,44 @@ impl McpServerRegistry {
 
 /// Upstream `core/model-registry.ts` `ModelRegistry`: a synchronous facade
 /// over `ModelRuntime` (API-key resolution, provider lookup, streaming).
-/// Stays a stand-in until the `core/model-runtime.ts` port lands, which owns
-/// the runtime this facade delegates to (D29).
-#[derive(Debug, Clone, Default)]
-pub struct ModelRegistry;
+/// Real port landed at [`crate::core::model_registry`]; this re-export
+/// replaces the earlier unit stand-in (D29, D64).
+pub use crate::core::model_registry::ModelRegistry;
+
+/// Offline [`ModelRegistry`] for tests: a [`ModelRuntime`] over an in-memory
+/// credential store with no models.json and no refresh (test fixture).
+#[cfg(test)]
+pub(crate) fn offline_registry_for_tests() -> std::sync::Arc<ModelRegistry> {
+	use std::sync::{Arc, OnceLock};
+	static TEST_REGISTRY: OnceLock<Arc<ModelRegistry>> = OnceLock::new();
+	TEST_REGISTRY
+		.get_or_init(|| {
+			// Build off-thread: callers run inside tokio workers.
+			std::thread::spawn(|| {
+				let runtime = tokio::runtime::Builder::new_current_thread()
+					.build()
+					.expect("test runtime");
+				runtime.block_on(async {
+					let rt = crate::core::model_runtime::ModelRuntime::create(
+						crate::core::model_runtime::CreateModelRuntimeOptions {
+							credentials: Some(Arc::new(
+								pi_ai::auth::credential_store::InMemoryCredentialStore::new(),
+							)),
+							models_path: Some(None),
+							refresh_on_create: false,
+							..Default::default()
+						},
+					)
+					.await
+					.expect("offline model runtime");
+					Arc::new(ModelRegistry::new(rt))
+				})
+			})
+			.join()
+			.expect("offline registry builder")
+		})
+		.clone()
+}
 
 // ---------------------------------------------------------------------------
 // TUI stand-ins (the `pi-tui` package and the `modes/interactive` theme layer

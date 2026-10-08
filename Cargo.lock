@@ -1917,6 +1917,7 @@ dependencies = [
 name = "pi-coding-agent"
 version = "1.0.3"
 dependencies = [
+ "async-trait",
  "flate2",
  "futures-util",
  "getrandom 0.2.17",

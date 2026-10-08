@@ -12,16 +12,24 @@ use crate::utils::abort::AbortSignal;
 use crate::utils::thrown::ThrownValue;
 
 /// Persisted model catalog entry (`ModelsStoreEntry`).
+///
+/// Serialization matches the lax reader below and the upstream JSON: camelCase
+/// field names, absent for `None` optionals (JS `undefined` keys are dropped
+/// by `JSON.stringify`).
 #[derive(Debug, Clone, Default, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ModelsStoreEntry {
 	/// Persisted models of every type.
 	pub models: Vec<AnyModel>,
 	/// Unix timestamp from the remote catalog's Last-Modified header.
+	#[serde(skip_serializing_if = "Option::is_none")]
 	pub last_modified: Option<i64>,
 	/// Unix timestamp of the last completed remote check.
+	#[serde(skip_serializing_if = "Option::is_none")]
 	pub checked_at: Option<i64>,
 	/// Opaque validator from the remote catalog's ETag header, stored verbatim
 	/// (quotes included) and echoed back as If-None-Match.
+	#[serde(skip_serializing_if = "Option::is_none")]
 	pub etag: Option<String>,
 }
 

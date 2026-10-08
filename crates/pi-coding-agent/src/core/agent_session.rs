@@ -8,13 +8,14 @@
 //!   are not ported yet, so the class itself is deferred as a unit:
 //!   `Agent`, `SessionManager`, `SettingsManager`, `compaction/`, and
 //!   `messages.ts` are available, but `ResourceLoader`, `ModelRuntime`,
-//!   `ModelRegistry`, `ExtensionRunner`/`extensions/*`, `CacheWarmer`,
-//!   `NestedToolCallRunner`, `tools/*`, `bash-executor.ts`, `bug-report.ts`,
+//!   `ModelRegistry`, `ExtensionRunner`/`extensions/*`, `tools/*`,
+//!   `bug-report.ts`,
 //!   `export-html/`, `system-prompt.ts`, `slash-commands.ts`,
-//!   `source-info.ts`, `virtual-models.ts`, `prompt-templates.ts`,
-//!   `session-export.ts`, and `auth-guidance.ts` are not. Porting a subset
-//!   would change the class's observable contract (extension hooks fire in
-//!   prompt/steer/follow-up/compaction/tree-navigation paths).
+//!   `source-info.ts`, `virtual-models.ts`, `prompt-templates.ts`
+//!   (`session-export.ts` and `auth-guidance.ts` have since landed; see
+//!   [`core::session_export`] and [`core::auth_guidance`]) are not. Porting a
+//!   subset would change the class's observable contract (extension hooks
+//!   fire in prompt/steer/follow-up/compaction/tree-navigation paths).
 //! - `agent-session-runtime.ts` — `AgentSessionRuntime` +
 //!   `SessionImportFileNotFoundError`; depends on `AgentSession`,
 //!   `AgentSessionServices`, `sdk.ts` (`createAgentSession`),

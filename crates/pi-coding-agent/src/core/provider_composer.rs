@@ -168,7 +168,7 @@ const NESTED_COMPAT_KEYS: [&str; 4] =
 /// Shallow-merge compat objects with one-level deep merges for the nested
 /// routing/kwarg keys (`mergeCompat`).
 fn merge_compat(base: Option<&ModelCompat>, over: Option<&ModelCompat>) -> Option<ModelCompat> {
-	let over = over?;
+	let Some(over) = over else { return base.cloned() };
 	let Some(base) = base else { return Some(over.clone()) };
 	let mut merged: serde_json::Map<String, serde_json::Value> = serde_json::to_value(base)
 		.ok()
@@ -976,9 +976,9 @@ fn compose_api_key_auth(
 					return Ok(None);
 				};
 				let mut explicit_env = credential.and_then(|credential| credential.env.clone()).unwrap_or_default();
-				if let Some(env) = result.env.take() {
+				if let Some(env) = result.env.as_ref() {
 					for (key, value) in env {
-						explicit_env.insert(key, value);
+						explicit_env.insert(key.clone(), value.clone());
 					}
 				}
 				let header_values: Vec<String> = raw_headers

@@ -1209,11 +1209,21 @@ where
 	F: Future<Output = T> + Send + 'static,
 {
 	let handle = tokio::spawn(operation);
-	race_with_abort_signal(
-		async move { handle.await.unwrap_or_else(|join_error| std::panic::resume_unwind(join_error.into_panic())) },
-		signal,
-	)
-	.await
+	tokio::select! {
+		biased;
+		reason = signal.aborted_future() => {
+			// `handle` drops here, detaching the spawned operation so it
+			// keeps running to completion (upstream promises continue after
+			// their racer resolves); its result is never observed by this
+			// caller.
+			Err(reason)
+		}
+		outcome = handle => match outcome {
+			Ok(value) => Ok(value),
+			Err(join_error) if join_error.is_cancelled() => Err(AbortReason::Aborted),
+			Err(join_error) => std::panic::resume_unwind(join_error.into_panic()),
+		},
+	}
 }
 
 /// Upstream `mergeHeaders`: case-insensitive header override. Override keys
@@ -2090,10 +2100,23 @@ impl Models for ModelsImpl {
 		// that point), then run it to completion — an abort afterwards must
 		// not discard a credential the store already persisted.
 		let aborted_before_start = loop {
-			let started_already = mutation_started.load(Ordering::SeqCst);
+			// Guard is evaluated lazily per iteration: the store's
+			// `started` notify fires while polling the mutation inside this
+			// select, so a pre-read snapshot would let an abort that arrives
+			// after the mutation started win the race (upstream awaits the
+			// committed mutation once it began).
 			tokio::select! {
 				biased;
-				_ = signal.aborted_future(), if !started_already => break true,
+				_ = signal.aborted_future(), if !mutation_started.load(Ordering::SeqCst) => {
+					// The flag may have been set while the aborted branch was
+					// registered in this same iteration (the store's notify
+					// fires during the mutation's first poll). Only report
+					// cancellation when the mutation truly never started.
+					if mutation_started.load(Ordering::SeqCst) {
+						continue;
+					}
+					break true;
+				}
 				_ = started.notified() => {
 					mutation_started.store(true, Ordering::SeqCst);
 				}

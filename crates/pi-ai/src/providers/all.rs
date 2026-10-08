@@ -131,8 +131,17 @@ pub fn get_builtin_classifier_model(provider: &str, model_id: &str) -> Option<cr
 	}
 }
 
-// Upstream `getBuiltinModelDataGeneratedAt` is not carried: the embedded
-// catalog data has no `generatedAt` manifest field (see models_generated.rs).
+/// Upstream `getBuiltinModelDataGeneratedAt`: the embedded catalog data has
+/// no `generatedAt` manifest field (see `models_generated.rs`), so this is
+/// always `None` today; the signature keeps callers (remote catalog overlay,
+/// model runtime) shaped like upstream.
+pub fn get_builtin_model_data_generated_at() -> Option<u64> {
+	None
+}
+
+/// Upstream `all.ts` also re-exports `radiusProvider`; kept additive here so
+/// callers can reach it next to the other built-in factories.
+pub use crate::providers::radius::radius_provider;
 
 #[cfg(test)]
 mod tests {
