@@ -18,6 +18,7 @@ tracing = "0.1"
 deno_core = "0.412"
 ciborium = "0.2"
 parking_lot = "0.12"
+ignore = "0.4"
 
 [profile.release]
 lto = "thin"

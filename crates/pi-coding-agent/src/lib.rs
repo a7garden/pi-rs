@@ -18,19 +18,28 @@
 //! | `core/usage-totals.ts` | [`core::usage_totals`] | complete |
 //! | `core/compaction/` | [`core::compaction`] (`compaction`, `branch_summarization`, `utils`) | complete (D23) |
 //! | `core/agent-session*.ts` | [`core::agent_session`] (portable surface: `parseSkillBlock`) | partial — `AgentSession`/`AgentSessionRuntime`/`AgentSessionServices` deferred (see [`core::agent_session`] docs) |
+//! | `core/diagnostics.ts` | [`core::diagnostics`] | complete |
+//! | `core/source-info.ts` | [`core::source_info`] (D25) | complete |
+//! | `core/skills.ts` | [`core::skills`] (D24, D26) | complete |
+//! | `core/extensions/types.ts` | [`core::extensions::types`] | complete — type foundation only (D27–D31); runner/loader and `core/tools/*` port against it |
+//! | `core/tools/` (all 16 files) | [`core::tools`] | complete (D32–D35, D37–D39); `renderers/*.ts` + theme-coupled `render-utils` helpers deferred with the excluded interactive mode (D32) |
+//! | `core/bash-executor.ts` | [`core::bash_executor`] | complete (D35) |
+//! | `test/tools.test.ts` | `core::tools::tools_tests` + `tests/tools_image_tests.rs` (85 cases, 1:1; image cases split out for photon-seam process isolation, D36) | complete |
+//! | `core/tools/renderers/` | — | deferred (TUI renderer layer; D32) |
 //!
 //! Not ported yet (next passes), in dependency order:
 //! `core/agent-session.ts` (`AgentSession` class), `core/agent-session-runtime.ts`,
 //! `core/agent-session-services.ts` — blocked on `core/tools/`,
-//! `core/extensions/`, `core/model-registry.ts`, `core/model-runtime.ts`,
+//! `core/extensions/` (loader/runner/API on top of the ported types),
+//! `core/model-registry.ts`, `core/model-runtime.ts`,
 //! `core/resource-loader.ts`, `core/sdk.ts`, `core/session-cwd.ts`,
 //! `core/cache-warmer.ts`, `core/nested-tool-calls.ts`,
 //! `core/bash-executor.ts`, `core/bug-report.ts`, `core/export-html/`,
-//! `core/system-prompt.ts`, `core/slash-commands.ts`, `core/source-info.ts`,
+//! `core/system-prompt.ts`, `core/slash-commands.ts`,
 //! `core/virtual-models.ts`, `core/prompt-templates.ts`,
 //! `core/session-export.ts`, `core/auth-guidance.ts` and the
-//! `modes/interactive` theme layer; then `core/tools/`, `core/extensions/`,
-//! `core/export-html/`, `core/modes/{print,json-event,rpc,interactive}`
+//! `modes/interactive` theme layer; then `core/tools/renderers/` (with the
+//! theme layer), `core/export-html/`, `core/modes/{print,json-event,rpc,interactive}`
 //! (interactive TUI excluded by decision), `core/model-*`,
 //! `core/system-prompt.ts`, `core/slash-commands.ts`,
 //! `extensions/{mcp,tool-search,llama,codemode}/`, `experimental/`,
@@ -144,6 +153,131 @@
 //!   "LLM summarization") stay unported; upstream's `completeSimple` mocks are
 //!   replaced by `StreamFn` captures. `usage-totals.ts` was ported
 //!   ([`core::usage_totals`]) as a required dependency of `compaction.ts`.
+//! - **D24 — skills ignore matching.** The npm `ignore` matcher becomes the
+//!   `ignore` crate's gitignore builder with identical gitignore semantics;
+//!   per-directory rules are accumulated parent-first and the matcher is
+//!   rebuilt at each directory level, matching upstream's shared-matcher
+//!   ordering. Malformed patterns are dropped where upstream swallows
+//!   `ig.add` failures.
+//! - **D25 — `PathMetadata` location.** Upstream `createSourceInfo` takes
+//!   `PathMetadata` from `core/package-manager.ts` (not yet ported); the
+//!   struct lives in [`core::source_info`] and moves when package-manager
+//!   lands.
+//! - **D26 — skills validation message details.** Name/description length
+//!   checks count Unicode scalar values where upstream uses JS
+//!   `String.length` (UTF-16 units), and file read/stat failures surface
+//!   `std::io::Error` display strings instead of Node error messages.
+//! - **D27 — extension generics are erased.** `ToolDefinition<TParams,
+//!   TDetails, TState>` ([`core::extensions::types::ToolDefinition`]) loses
+//!   its type parameters, matching pi-agent's erased [`pi_agent::AgentTool`]:
+//!   params become a JSON Schema `serde_json::Value` (`pi-ai` D6 precedent)
+//!   and validated JSON objects at `execute`, details/state stay erased JSON
+//!   (`AgentToolResult.details` is already JSON in pi-agent), and
+//!   `ExtensionVirtualModel`/`ModelRouteRequest`/`ModelRoute` carry their
+//!   `TState` as JSON. `defineTool` (a TS inference shim) survives as an
+//!   identity function for API parity.
+//! - **D28 — extension contexts are vtable structs.** `ExtensionContext` is a
+//!   struct of data fields plus `Arc<dyn Fn>` action fields with forwarding
+//!   methods (the runner-populated `ExtensionContextActions`);
+//!   "extends" contexts (`ExtensionToolContext`,
+//!   `ExtensionCommandContext`, `ReplacedSessionContext`) embed their base
+//!   and `Deref` to it. `ui` becomes the object-safe
+//!   [`core::extensions::types::ExtensionUi`] trait; `ReadonlySessionManager`
+//!   is carried as `Arc<SessionManager>` (read-only by convention), and
+//!   `ProjectTrustContext.ui` holds the full UI handle where upstream picks
+//!   four methods. Handlers take owned contexts (cheap `Arc` clones) so
+//!   futures stay `'static`.
+//! - **D29 — not-yet-ported dependencies are stand-ins.** Types.ts imports
+//!   from unported modules (`exec`, `system-prompt`, `cache-warmer`,
+//!   `mcp-servers`, `model-registry`, `bash-executor`, `virtual-models`,
+//!   `slash-commands`, `footer-data-provider`, `keybindings`, `event-bus`,
+//!   `tools/*`, and the excluded TUI/theme layers); faithful stand-ins live in
+//!   the *Dependency stand-ins* section of [`core::extensions::types`] and are
+//!   replaced by re-exports when those modules land.
+//! - **D30 — partial serde on extension events.** Event payload structs
+//!   derive serde (camelCase, absent-`undefined` skipped) only where every
+//!   member is wire-representable; structs carrying live handles
+//!   (`AbortSignal`), non-serde compaction types (`CompactionPreparation`,
+//!   `CompactionResult`), `Skill`, or `ProjectedSessionEntry` are plain
+//!   structs the JS bridge will serialize explicitly. `ToolCallEvent`/
+//!   `ToolResultEvent` unions keep the upstream flat wire shape via
+//!   hand-rolled `Serialize` (constant `type` tag, `toolName` discriminator)
+//!   with per-tool input/details payloads erased to JSON until the
+//!   `core/tools` port introduces typed structs; they do not deserialize
+//!   (the host constructs them), so the runtime guards stay name-only
+//!   comparisons, exactly like upstream's.
+//! - **D31 — extension API/handler surface is erased.** The `pi.on(...)`
+//!   overload set collapses to one erased subscription keyed by the upstream
+//!   event-name strings (`Map<string, HandlerFn[]>` storage), `void`
+//!   handler results become `Option<R>`/`Option<JsonValue>`, and callback
+//!   members (`streamSimple`, `refreshModels`, oauth flows,
+//!   `BashOperations`, renderers) are host-side `Arc<dyn Fn>`/trait objects
+//!   skipped by serde — the JS bridge adapts JS functions before constructing
+//!   the structs. `registerProvider`'s two overloads become
+//!   `register_provider` (config) + `register_native_provider`.
+//! - **D32 — tool renderers are deferred with the interactive mode.** The
+//!   per-tool renderers (`core/tools/renderers/*.ts`) and the theme-coupled
+//!   `render-utils` helpers (`linkPath`, `formatToolCallWithArgs`,
+//!   `invalidArgText`, `renderToolPath`, `getTextOutput`) style text through
+//!   the excluded `Theme`/pi-tui layers and are not exercised by
+//!   `tools.test.ts`; the theme-free helpers land in
+//!   [`core::tools::render_utils`]. Built-in `ToolDefinition`s carry
+//!   `render_shell: None` and no renderers (upstream spreads them in); the
+//!   `BASH_UPDATE_THROTTLE_MS` constant moves into [`core::tools::bash`]
+//!   (its home `renderers/bash.ts` is deferred).
+//! - **D33 — file-mutation queue is a registry of sync mutexes.** The
+//!   promise-chaining of `file-mutation-queue.ts` becomes a global registry
+//!   keyed on realpath (resolved path on ENOENT/ENOTDIR) with a
+//!   `tokio::sync::Mutex` per key and registry cleanup on last exit; other
+//!   rethrowable realpath errors fall back to the resolved path so
+//!   operations still serialize.
+//! - **D34 — output accumulator is synchronous.** `OutputAccumulator` mirrors
+//!   Node's synchronous `WriteStream.write` buffering with a `std::fs::File`
+//!   (via `create_output_file_stream_sync`), so tool `onData` callbacks stay
+//!   synchronous and data pushed while `operations.exec` runs is always
+//!   captured before the final snapshot. The streaming `TextDecoder`
+//!   becomes a hand-rolled incremental UTF-8 decoder (holds back incomplete
+//!   trailing sequences, invalid bytes → U+FFFD). `readFullOutput` returns an
+//!   owned-data future so callers never hold the lock across the await.
+//! - **D35 — shell spawn seam and test substitutions.** Node
+//!   `child_process.spawn` options (cwd/env/detached/stdin-transport) that
+//!   [`crate::utils::child_process::spawn_process] does not cover are set
+//!   through `tokio::process::Command` directly in [`core::tools::bash`]
+//!   (process group via `process_group(0)`, `kill_on_drop(false)`,
+//!   `windowsHide` via creation flags); signal exit codes reuse the
+//!   `waitForChildProcess` 128+signal mapping. `getShellConfig` becomes an
+//!   injected resolver closure on `create_local_shell_operations`, replacing
+//!   the test suite's module-function spies; test commands using
+//!   `process.execPath` become `sh` equivalents (`sleep`, `cat` stdin
+//!   echo); the WSL `bash.exe` case keeps upstream's early return on
+//!   non-Windows. `bash-executor.ts` ports with a sync temp-file variant of
+//!   the output-file seam.
+//! - **D36 — image pipeline and photon fixture.** The read tool reuses the
+//!   ported `processImage`/mime seams; BMP→PNG conversion goes through the
+//!   `PhotonEngine` seam (unset by default in production). The three image
+//!   tests register a minimal in-test engine (BMP decode + PNG encode via
+//!   `flate2`) and live in `tests/tools_image_tests.rs` because the engine
+//!   registry is process-global. `ReadToolOptions.resize_options` carries the
+//!   crate `ImageResizeOptions` (what `processImage` accepts); the
+//!   model-provided resize profile maps field-for-field. The optional
+//!   `detectImageMimeType` hook is a required trait method (local ops supply
+//!   the mime seam).
+//! - **D37 — npm `diff` becomes `similar`.** `generateUnifiedPatch` uses
+//!   `similar`'s `UnifiedDiff` (header emits `--- path\n+++ path\n`,
+//!   matching `FILE_HEADERS_ONLY`; hunks are standard unified format that
+//!   the test suite verifies with a local patch applier standing in for npm
+//!   `applyPatch`); `generateDiffString` groups `iter_all_changes` output
+//!   into npm-`diffLines`-style parts. `normalize("NFKC")` uses the
+//!   `unicode-normalization` crate. Edit `access` errors carry
+//!   `Error code: ENOENT/EACCES` from the local ops and unknown errors
+//!   render as `Error: {message}` (upstream `String(new Error(...))`).
+//! - **D38 — rg/fd streaming.** grep/find spawn the real `rg`/`fd`
+//!   binaries through the `ensureTool` seam and stream stdout line-by-line
+//!   with tokio readers (upstream `readline`); `path.relative`/`basename`
+//!   become lexical helpers emitting posix separators on all platforms.
+//! - **D39 — localeCompare sort.** The ls entry sort becomes a
+//!   case-insensitive byte compare (`a.to_lowercase().cmp(...)`) standing in
+//!   for `localeCompare`.
 //!
 //! # Tests
 //!
@@ -160,6 +294,14 @@
 //! in [`core::usage_totals`]; per-utils upstream tests (`ansi-utils`,
 //! `frontmatter`, `changelog`, `clipboard*`, `tool-result-images`,
 //! `image-process`, `syntax-highlight`, …) are ported inline in their modules.
+//! Upstream has no `extensions/types.test.ts`; the
+//! [`core::extensions::types`] runtime functions (guards,
+//! `isToolCallEventType`, `defineTool`) and the hand-rolled event wire shapes
+//! are covered by `types_tests` in that module. Upstream
+//! `test/tools.test.ts` (85 cases) is ported 1:1 in
+//! `core::tools::tools_tests` (82 cases) plus
+//! `tests/tools_image_tests.rs` (3 photon-dependent image cases, split for
+//! process-global engine-registry isolation).
 
 pub mod config;
 pub mod core;

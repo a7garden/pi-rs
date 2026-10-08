@@ -12,8 +12,14 @@ getrandom = "0.2"
 indexmap = { version = "2", features = ["serde"] }
 # Settings storage locks (lock() without poisoning boilerplate).
 parking_lot = "0.12"
+# Gitignore-style skill-path filtering (upstream the npm `ignore` package).
+ignore = "0.4"
 # Process-group termination in utils/shell (upstream process.kill).
 libc = "0.2"
+# Line diffs and unified patches in core/tools/edit-diff (upstream npm `diff`).
+similar = "2"
+# NFD normalization in core/tools/path-utils (upstream String.normalize).
+unicode-normalization = "0.1"
 # DEFLATE streams for utils/zip (upstream fflate).
 flate2 = "1"
 # HTTP fetch in utils/management-http (upstream global fetch).

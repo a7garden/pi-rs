@@ -58,6 +58,15 @@ pub async fn create_output_file_stream(prefix: &str, extension: &str) -> std::io
 	Ok((path, file))
 }
 
+/// Synchronous variant of [`create_output_file_stream`] for output callbacks
+/// that run outside async context (core/bash-executor). Same path and mode
+/// conventions.
+pub fn create_output_file_stream_sync(prefix: &str, extension: &str) -> std::io::Result<(String, std::fs::File)> {
+	let path = create_output_file_path(prefix, extension);
+	let file = open_new_output_file(&path)?;
+	Ok((path, file))
+}
+
 #[cfg(unix)]
 fn open_new_output_file(path: &str) -> std::io::Result<std::fs::File> {
 	use std::os::unix::fs::OpenOptionsExt;

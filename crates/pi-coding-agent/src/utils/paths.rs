@@ -2,8 +2,7 @@
 //! session-manager depends on: [`normalize_path`] and [`resolve_path`] (plus
 //! the [`PathInputOptions`] surface they take).
 //!
-//! Not ported yet (no dependent surface this pass): `canonicalizePath`,
-//! `getFileRevision`, `isLocalPath`, `getCwdRelativePath`,
+//! Not ported yet (no dependent surface this pass): `getFileRevision`, `isLocalPath`, `getCwdRelativePath`,
 //! `formatPathRelativeToCwdOrAbsolute`, `markPathIgnoredByCloudSync`.
 //! `normalizePath`'s `file://` expansion (JS `fileURLToPath`) is a JS URL seam
 //! and is not applied (crate docs, deviation D3).
@@ -100,6 +99,14 @@ pub fn resolve_path(input: &str, base_dir: &str) -> String {
 	} else {
 		lexically_clean(join(&base, &normalized))
 	}
+}
+
+/// Canonicalize a path with symlinks resolved, returning the input unchanged
+/// if canonicalization fails (upstream `canonicalizePath`).
+pub fn canonicalize_path(path: &str) -> String {
+	std::fs::canonicalize(path)
+		.map(|p| p.to_string_lossy().into_owned())
+		.unwrap_or_else(|_| path.to_string())
 }
 
 /// `resolvePath(input)` — base directory defaults to the process cwd.
