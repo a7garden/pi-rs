@@ -389,13 +389,20 @@ fn find_unescaped(text: &str, quote: char) -> Option<usize> {
 	let mut index = 0;
 	while index < bytes.len() {
 		if bytes[index] == b'\\' {
+			// Skip the escaped byte, then re-align to the next char boundary
+			// so `text[index..]` below never slices mid-character.
 			index += 2;
+			while index < bytes.len() && !text.is_char_boundary(index) {
+				index += 1;
+			}
 			continue;
 		}
 		if text[index..].starts_with(quote) {
 			return Some(index);
 		}
-		index += 1;
+		// Advance by one full character; byte-wise +1 would land inside a
+		// multi-byte character and panic on the slice above.
+		index += text[index..].chars().next().unwrap().len_utf8();
 	}
 	None
 }

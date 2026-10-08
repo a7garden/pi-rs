@@ -2,10 +2,11 @@
 //! session-manager depends on: [`normalize_path`] and [`resolve_path`] (plus
 //! the [`PathInputOptions`] surface they take).
 //!
-//! Not ported yet (no dependent surface this pass): `getFileRevision`, `isLocalPath`, `getCwdRelativePath`,
-//! `formatPathRelativeToCwdOrAbsolute`, `markPathIgnoredByCloudSync`.
 //! `normalizePath`'s `file://` expansion (JS `fileURLToPath`) is a JS URL seam
 //! and is not applied (crate docs, deviation D3).
+//!
+//! Also ported here: `isLocalPath` and `markPathIgnoredByCloudSync` (used by
+//! `core/package-manager.ts`).
 
 use std::path::{Component, Path, PathBuf};
 
@@ -125,6 +126,42 @@ pub fn join(base: &str, rest: &str) -> String {
 	let mut path = PathBuf::from(base);
 	path.push(rest);
 	path.to_string_lossy().into_owned()
+}
+
+/// Returns true if the value is NOT a package source (`npm:`, `git:`, etc.),
+/// a built-in extension (`builtin:`), or a remote URL protocol. Bare names,
+/// relative paths, and `file:` URLs are considered local (upstream
+/// `isLocalPath`).
+pub fn is_local_path(value: &str) -> bool {
+	let trimmed = value.trim();
+	// Known non-local prefixes. file: URLs are local paths and are intentionally
+	// resolved by resolvePath().
+	for prefix in ["npm:", "git:", "github:", "http:", "https:", "ssh:", "builtin:"] {
+		if trimmed.starts_with(prefix) {
+			return false;
+		}
+	}
+	true
+}
+
+/// Mark a path as ignored by cloud-sync providers (Dropbox / Apple File
+/// Provider) via platform xattr helpers, ignoring failures (upstream
+/// `markPathIgnoredByCloudSync`).
+pub fn mark_path_ignored_by_cloud_sync(path: &str) {
+	let attrs: &[&str] = if cfg!(target_os = "macos") {
+		&["com.dropbox.ignored", "com.apple.fileprovider.ignore#P"]
+	} else if cfg!(target_os = "linux") {
+		&["user.com.dropbox.ignored"]
+	} else {
+		&[]
+	};
+	for attr in attrs {
+		if cfg!(target_os = "macos") {
+			let _ = crate::utils::child_process::spawn_process_sync("xattr", &["-w", attr, "1", path]);
+		} else {
+			let _ = crate::utils::child_process::spawn_process_sync("setfattr", &["-n", attr, "-v", "1", path]);
+		}
+	}
 }
 
 /// Lexically remove `.` and resolve `..` segments (node resolve semantics).

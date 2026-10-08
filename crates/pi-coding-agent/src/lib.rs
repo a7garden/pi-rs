@@ -21,16 +21,37 @@
 //! | `core/diagnostics.ts` | [`core::diagnostics`] | complete |
 //! | `core/source-info.ts` | [`core::source_info`] (D25) | complete |
 //! | `core/skills.ts` | [`core::skills`] (D24, D26) | complete |
-//! | `core/extensions/types.ts` | [`core::extensions::types`] | complete — type foundation only (D27–D31); runner/loader and `core/tools/*` port against it |
+//! | `core/package-manager.ts` | [`core::package_manager`] | complete (D55; `isStdoutTakenOver` stand-in lands with `core/output-guard.ts`) |
+//! | `core/pi-manifest.ts` | [`core::pi_manifest`] | complete |
+//! | `core/prompt-templates.ts` | [`core::prompt_templates`] | complete (D57, D57b) |
+//! | `core/event-bus.ts` | [`core::event_bus`] | complete (D57a) |
+//! | `core/timings.ts` | [`core::timings`] | complete (D57c) |
+//! | `core/footer-data-provider.ts` | [`core::footer_data_provider`] | minimal — `findGitPaths` only (D57d); the interactive `FooterDataProvider` defers with the TUI mode |
+//! | `core/resource-loader.ts` | [`core::resource_loader`] | complete (D58); upstream cases executing extension JS or constructing `AgentSession`/`ExtensionRunner` defer with those slices |
+//! | `modes/interactive/theme/` (`theme.ts`, `theme-json.ts`, `system-theme.ts`) | [`theme`] | complete — portable surface (D56, D56d); TUI component themes, cli-highlight bridge, and HTML-export helpers defer with the interactive mode (D56d) |
+//! | `@earendil-works/pi-tui` (capability detection) | [`utils::tui_compat`] | minimal (D56); moves to a future `pi-tui` crate |
+//! | `core/extensions/types.ts` | [`core::extensions::types`] | complete — type foundation (D27–D31) plus runner-driven additions (D40–D42, D46) |
+//! | `core/extensions/loader.ts` | [`core::extensions::loader`] | stand-in layer complete (D40, D43, D52–D54; jiti/TS module seam lands with pi-runtime) |
+//! | `core/extensions/runner.ts` | [`core::extensions::runner`] | complete — portable surface (D40–D45; session/agent integration dispatches land with AgentSession) |
+//! | `core/extensions/wrapper.ts` | [`core::extensions::wrapper`] | complete |
+//! | `core/extensions/index.ts` | [`core::extensions::index`] | complete (runtime re-exports; type-only re-exports stay in [`core::extensions::types`]) |
+//! | `core/extensions/virtual-modules.ts` | [`core::extensions::virtual_modules`] | complete as specifier data (D40; module values are JS namespaces behind the loader seam) |
 //! | `core/tools/` (all 16 files) | [`core::tools`] | complete (D32–D35, D37–D39); `renderers/*.ts` + theme-coupled `render-utils` helpers deferred with the excluded interactive mode (D32) |
 //! | `core/bash-executor.ts` | [`core::bash_executor`] | complete (D35) |
+//! | `core/resolve-config-value.ts` | [`core::resolve_config_value`] | complete (sync child-process seams, module docs) |
+//! | `core/model-config.ts` | [`core::model_config`] (D51) | complete |
+//! | `core/model-resolver.ts` | [`core::model_resolver`] (D47, D48) | complete |
+//! | `core/provider-composer.ts` | [`core::provider_composer`] (D49, D50) | complete |
+//! | `test/model-resolver.test.ts` | [`core::model_resolver::model_resolver_tests`] (portable suites 1:1; the persisted-default suite constructs `AgentSession`/`AuthStorage`/`ModelRuntime` and follows those ports) | complete |
+//! | `test/resolve-config-value.test.ts` | [`core::resolve_config_value::resolve_config_value_tests`] (1:1; the platform-mock case drives the stdin-transport path through the shell-config override seam) | complete |
 //! | `test/tools.test.ts` | `core::tools::tools_tests` + `tests/tools_image_tests.rs` (85 cases, 1:1; image cases split out for photon-seam process isolation, D36) | complete |
 //! | `core/tools/renderers/` | — | deferred (TUI renderer layer; D32) |
 //!
 //! Not ported yet (next passes), in dependency order:
 //! `core/agent-session.ts` (`AgentSession` class), `core/agent-session-runtime.ts`,
 //! `core/agent-session-services.ts` — blocked on `core/tools/`,
-//! `core/extensions/` (loader/runner/API on top of the ported types),
+//! `core/extensions/` JS module loading (jiti seam, D40) and the session/agent
+//! dispatch integration,
 //! `core/model-registry.ts`, `core/model-runtime.ts`,
 //! `core/resource-loader.ts`, `core/sdk.ts`, `core/session-cwd.ts`,
 //! `core/cache-warmer.ts`, `core/nested-tool-calls.ts`,
@@ -40,7 +61,9 @@
 //! `core/session-export.ts`, `core/auth-guidance.ts` and the
 //! `modes/interactive` theme layer; then `core/tools/renderers/` (with the
 //! theme layer), `core/export-html/`, `core/modes/{print,json-event,rpc,interactive}`
-//! (interactive TUI excluded by decision), `core/model-*`,
+//! (interactive TUI excluded by decision), `core/model-runtime.ts` +
+//! `core/model-registry.ts` (the registry is a facade over the runtime and
+//! ports with it, D47),
 //! `core/system-prompt.ts`, `core/slash-commands.ts`,
 //! `extensions/{mcp,tool-search,llama,codemode}/`, `experimental/`,
 //! `services/`, `plugins/`, `durable/`, `migrations/`, `rpc-entry`,
@@ -278,6 +301,139 @@
 //! - **D39 — localeCompare sort.** The ls entry sort becomes a
 //!   case-insensitive byte compare (`a.to_lowercase().cmp(...)`) standing in
 //!   for `localeCompare`.
+//! - **D47 — model-resolver `ModelRuntime` is an injected seam trait.**
+//!   `core/model-runtime.ts` is not ported yet; the resolver functions take
+//!   [`core::model_resolver::ModelRuntimeSource`], an object-safe trait with
+//!   exactly the five read methods they use (`getModels`,
+//!   `getAvailableSnapshot`, `getAvailable`, `getModel`,
+//!   `hasConfiguredAuth`). The future `core::model_runtime` port implements
+//!   it; tests inject fakes mirroring upstream's duck-typed registries.
+//! - **D48 — async signatures without awaits collapse.** Upstream
+//!   `findInitialModel` and `restoreModelFromSession` are `async` but never
+//!   await; the ported functions are synchronous.
+//! - **D49 — `ProviderConfigInput` aliases the extension `ProviderConfig`.**
+//!   Upstream declares structurally identical interfaces in
+//!   `provider-composer.ts` and `extensions/types.ts`; the port keeps one
+//!   type ([`core::extensions::types::ProviderConfig`], aliased in
+//!   [`core::provider_composer`]). The only interface delta — composer chat
+//!   model configs carry `samplingParamsByThinkingLevel` — is unreachable
+//!   through the extension interface upstream too.
+//! - **D50 — provider-composer throws, state, and capability presence.**
+//!   Synchronous throws return `Err` with exact upstream strings and
+//!   `composeModelProvider` still validates eagerly; refresh-path captured
+//!   state lives in a mutex, with the `context.publish` update validating
+//!   the refreshed list and dropping the publication on failure (upstream
+//!   throws inside the update callback). Trait objects cannot report base
+//!   provider capability overrides (`refreshModels`/`generateImages`/
+//!   `classify`), so the composed provider exposes them whenever a base
+//!   provider exists; extension `refreshToken` receives a crate abort signal
+//!   bridged from the pi-ai signal by a watcher task; extension stream
+//!   dispatch wraps `StreamOptions` into `SimpleStreamOptions` where
+//!   upstream casts.
+//! - **D51 — TypeBox validation becomes serde + explicit checks.**
+//!   `model-config.ts` schemas compile to one validator; the port
+//!   deserializes with serde, then checks `minLength: 1`/`oauth: "radius"`
+//!   constraints, producing the same error bucket with serde-style messages.
+//!   `Type.Number()` fields carried as `u64` (context windows, token counts,
+//!   cache lifetimes, image limits) reject floats/negatives; the
+//!   `ProviderCompat` union becomes pi-ai's merged `ModelCompat` (pi-ai D7).
+//! - **D40 — in-place event mutation becomes explicit handler results.**
+//!   Upstream handlers mutate shared event objects in place (tool-call args,
+//!   provider headers, boundary entry arrays). The erased handler channel
+//!   ([`core::extensions::types::HandlerFn`]) passes owned JSON, so patches
+//!   flow through handler results: `emit_tool_call` reads an `input` key,
+//!   header patches shallow-merge, boundary entries flow through result
+//!   `entries` (pi-agent D8 precedent). `ExtensionRuntime` additionally
+//!   carries a shared [`core::extensions::types::RuntimeCore`] bind cell so
+//!   `bindCore` reaches runtimes extensions already hold.
+//! - **D41 — handler failures are an explicit `Err`.** Upstream throws
+//!   across the `await`; [`core::extensions::types::HandlerFn`] returns
+//!   `Result<Option<JsonValue>, String>`, surfacing through
+//!   `ExtensionRunner::on_error`.
+//! - **D42 — `Extension.handlers` is a shared live registry.** Upstream the
+//!   `Extension` object *is* the live handler map; the port stores
+//!   `Arc<Mutex<HashMap<...>>>` so loader-API subscriptions and
+//!   unsubscriptions after commit stay visible to the runner.
+//! - **D43 — the loader is a stand-in until pi-runtime lands.** No TS/JS
+//!   module resolution: `load_extensions_cached` walks the upstream pipeline
+//!   (resolve, `(path, mtime)` cache, error records with upstream texts)
+//!   without jiti, and provider/virtual-model registrations queue exactly
+//!   like upstream's pre-bind runtime. Deep MCP config validation lands
+//!   with the mcp-servers module port (name-shape, ownership, and
+//!   namespace-clash checks run in the loader). The `operations.exec`
+//!   function check of `user_bash` results is bridge work.
+//! - **D44 — `buildSystemPrompt` is a renderer seam.** The runner takes a
+//!   `set_system_prompt_renderer` closure until the system-prompt module
+//!   ports; `ctx.getSystemPrompt()` re-renders per handler, so chained
+//!   `before_agent_start` overrides stay in sync.
+//! - **D45 — `KeybindingsConfig` is `ResolvedKeybindings`.** The runner
+//!   takes `BTreeMap<String, Vec<KeyId>>` (action → keys) until
+//!   `core/keybindings.ts` ports.
+//! - **D46 — minimal stand-in surfaces.** `McpServerRegistry` exposes
+//!   register/unregister/list with extension-path ownership (change
+//!   listeners and connection lifecycle land with the module port); the
+//!   loader ships an in-crate [`core::extensions::loader::ChannelEventBus`];
+//!   shortcut conflict fallbacks use `eprintln!` where upstream
+//!   `console.warn`s.
+//! - **D52 — extension `exec` runs through the bash executor.** Upstream
+//!   `execCommand` (core/exec.ts) is not ported; `pi.exec` shells out via
+//!   [`core::bash_executor`] and maps [`core::extensions::types::ExecResult`]
+//!   (command + args join into one command line). The timings-module
+//!   `time()` probes are omitted.
+//! - **D53 — `pi.extensions` package manifests are read inline.** The
+//!   loader parses the `pi.extensions` field of `package.json` directly;
+//!   the pi-manifest module port replaces `read_pi_manifest_extensions`.
+//! - **D54 — post-bind provider registration from captured `pi` objects
+//!   stays queued.** Upstream `pi.registerProvider` after `bindCore` takes
+//!   effect immediately; the loader stand-in's API keeps its private queue,
+//!   so immediate-effect registration lands with the pi-runtime loader seam.
+//! - **D55 — package-manager dependency stand-ins and seams.**
+//!   `isStdoutTakenOver` (upstream `core/output-guard.ts`, unported) is a
+//!   stand-in returning `false`; test mocks of private methods become the
+//!   [`core::package_manager::CommandRunner`] seam (`with_runner`); and
+//!   `resolve`'s `onMissing` callback is synchronous. **D55a** — npm
+//!   `minimatch` is approximated with the `glob` crate's `Pattern` (no brace
+//!   expansion; `*` also matches `/` under default options). **D55b** —
+//!   npm/git commands run synchronously-through-async via `tokio::process`
+//!   (no `cross-spawn` `.cmd`/`.bat` shim; utils D13 rationale).
+//! - **D56 — theme capability detection lives in
+//!   [`utils::tui_compat`].** A minimal port of npm
+//!   `@earendil-works/pi-tui` (`PI_TRUE_COLOR`/`PI_HYPERLINKS`/
+//!   `PI_IMAGE_PROTOCOL` semantics identical) that lands in a future
+//!   `pi-tui` crate. **D56a** — JS module statics become explicit
+//!   mutex-protected statics. **D56b** — theme-json typebox validation
+//!   becomes a hand-written validator with 1:1 accepted grammar and
+//!   error-message shape (per-error wording approximated). **D56c** —
+//!   built-in `dark.json`/`light.json` are embedded via `include_str!`.
+//!   **D56d** — TUI/interactive-only theme surface (global `theme` proxy,
+//!   custom-theme watcher, cli-highlight bridge, TUI component themes,
+//!   HTML-export helpers, `ThinkingLevel`-typed accessors) defers with the
+//!   interactive mode. **D56e** — chalk text decorators are not ported;
+//!   use [`utils::ansi`].
+//! - **D57 — prompt-template substitution scanner.** Upstream's substitution
+//!   regex is a hand-rolled scanner with identical match semantics.
+//!   **D57a** — the event bus wraps synchronous JSON callbacks (upstream
+//!   `EventEmitter` allows async handlers); the API surface
+//!   (`create_event_bus`, `publish`, `subscribe`) is preserved. **D57b** —
+//!   diagnostics/truncation messages use Rust strings: I/O failures surface
+//!   `std::io::Error` display strings and lengths use Unicode scalar counts
+//!   where upstream uses UTF-16 units (interacts with D10: the minimal
+//!   frontmatter parser accepts upstream's #9354 invalid-YAML fixture as a
+//!   plain scalar, so that regression uses a non-mapping frontmatter). 
+//!   **D57c** — `timings` namespace arguments are explicit with `*_main`
+//!   convenience wrappers (JS default parameters). **D57d** — only
+//!   `findGitPaths` is ported from `footer-data-provider.ts`; the
+//!   interactive `FooterDataProvider` defers with the TUI mode.
+//! - **D58 — resource-loader passes run synchronously.** Upstream `reload()`
+//!   is async (settings/package processes, awaited module compilation); the
+//!   port drives the same passes (pre-trust extension load, project-trust
+//!   resolution, package resolution, resource loading) synchronously on a
+//!   throwaway current-thread runtime. **D58a** — `file://` resource URLs
+//!   are expanded by the loader's path resolution (`utils::paths` returns
+//!   them unchanged by its JS-seam deviation). **D58b** — extension warning
+//!   records carry their text in `LoadRecord::error` (upstream uses a
+//!   `{path, warning}` shape); `None` warnings are treated as empty.
+
 //!
 //! # Tests
 //!
@@ -301,10 +457,29 @@
 //! `test/tools.test.ts` (85 cases) is ported 1:1 in
 //! `core::tools::tools_tests` (82 cases) plus
 //! `tests/tools_image_tests.rs` (3 photon-dependent image cases, split for
-//! process-global engine-registry isolation).
+//! process-global engine-registry isolation). The model layer ships upstream
+//! `test/model-resolver.test.ts` (portable suites) and
+//! `test/resolve-config-value.test.ts` 1:1 in
+//! [`core::model_resolver::model_resolver_tests`] and
+//! [`core::resolve_config_value::resolve_config_value_tests`]; upstream has
+//! no direct `model-config.ts` tests (its behavior is exercised through the
+//! unported `model-runtime` suites), so [`core::model_config`] carries
+//! load/parse/schema/ordering cases mirroring the migration-suite
+//! expectations; `provider-composer.ts` has no upstream test file of its own
+//! (its coverage arrives with `model-runtime.ts`).
+//!
+//! Upstream `test/prompt-templates.test.ts` is ported 1:1 in
+//! [`core::prompt_templates`]; `test/package-manager.test.ts` (portable,
+//! network-free cases over the `CommandRunner` seam) lives in
+//! `core::package_manager_tests`; and upstream `test/resource-loader.test.ts`
+//! + `test/resource-loader-theme.test.ts` cases that do not execute extension
+//! JS or construct an `AgentSession`/`ExtensionRunner` are ported 1:1 in
+//! [`core::resource_loader`] `resource_loader_tests` module (deferred cases
+//! listed there).
 
 pub mod config;
 pub mod core;
+pub mod theme;
 pub mod utils;
 
 pub use config::{

@@ -14,6 +14,16 @@ indexmap = { version = "2", features = ["serde"] }
 parking_lot = "0.12"
 # Gitignore-style skill-path filtering (upstream the npm `ignore` package).
 ignore = "0.4"
+# npm semver comparisons in core/package-manager (upstream npm `semver`).
+semver = "1"
+# Glob expansion and pattern matching in core/package-manager (upstream
+# node:fs globSync + npm minimatch).
+glob = "0.3"
+# Temp-dir name hashing in core/package-manager (upstream node:crypto).
+sha2 = "0.10"
+# Ordered concurrent task execution in core/package-manager (upstream
+# Promise.all worker pools).
+futures-util = { version = "0.3", default-features = false, features = ["std", "async-await"] }
 # Process-group termination in utils/shell (upstream process.kill).
 libc = "0.2"
 # Line diffs and unified patches in core/tools/edit-diff (upstream npm `diff`).

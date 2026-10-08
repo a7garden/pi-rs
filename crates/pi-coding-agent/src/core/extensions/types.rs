@@ -116,13 +116,9 @@ pub struct ExecResult {
 	pub killed: bool,
 }
 
-/// Upstream `core/model-resolver.ts` `ScopedModel` (module ported separately).
-#[derive(Debug, Clone, PartialEq)]
-pub struct ScopedModel {
-	pub model: Model,
-	/// Thinking level if explicitly specified in the pattern (`"model:high"`).
-	pub thinking_level: Option<ModelThinkingLevel>,
-}
+/// Upstream `core/model-resolver.ts` `ScopedModel` — the real port landed
+/// ([`crate::core::model_resolver`]), replacing the earlier stand-in (D29).
+pub use crate::core::model_resolver::ScopedModel;
 
 /// Upstream `core/bash-executor.ts` `BashResult` — the real port landed
 /// ([`crate::core::bash_executor`]), replacing the earlier stand-in (D29).
@@ -257,13 +253,47 @@ pub struct RegisteredMcpServer {
 }
 
 /// Upstream `core/mcp-servers.ts` `McpServerRegistry` (module ported
-/// separately): name → registered-server map owned by the runner. Opaque
-/// until then.
-#[derive(Debug, Clone, Default)]
-pub struct McpServerRegistry;
+/// separately): name → registered-server map owned by the runner. Minimal
+/// in-crate storage for the loader/runner (register/unregister/list with
+/// extension-path ownership); change listeners and connection lifecycle land
+/// with the full module port (D46).
+#[derive(Debug, Default)]
+pub struct McpServerRegistry {
+	servers: parking_lot::Mutex<Vec<RegisteredMcpServer>>,
+}
 
-/// Upstream `core/model-registry.ts` `ModelRegistry` (module ported
-/// separately): API-key resolution and provider lookup. Opaque until then.
+impl Clone for McpServerRegistry {
+	fn clone(&self) -> Self {
+		McpServerRegistry { servers: parking_lot::Mutex::new(self.servers.lock().clone()) }
+	}
+}
+
+impl McpServerRegistry {
+	pub fn register(&self, server: RegisteredMcpServer) {
+		self.servers.lock().push(server);
+	}
+
+	/// Removes the server; `true` when it was registered by `extension_path`.
+	pub fn unregister(&self, name: &str, extension_path: &str) -> bool {
+		let mut servers = self.servers.lock();
+		let before = servers.len();
+		servers.retain(|server| !(server.name == name && server.extension_path == extension_path));
+		servers.len() != before
+	}
+
+	pub fn get(&self, name: &str) -> Option<RegisteredMcpServer> {
+		self.servers.lock().iter().find(|s| s.name == name).cloned()
+	}
+
+	pub fn list(&self) -> Vec<RegisteredMcpServer> {
+		self.servers.lock().clone()
+	}
+}
+
+/// Upstream `core/model-registry.ts` `ModelRegistry`: a synchronous facade
+/// over `ModelRuntime` (API-key resolution, provider lookup, streaming).
+/// Stays a stand-in until the `core/model-runtime.ts` port lands, which owns
+/// the runtime this facade delegates to (D29).
 #[derive(Debug, Clone, Default)]
 pub struct ModelRegistry;
 
@@ -2305,6 +2335,26 @@ impl ToolCallEvent {
 		}
 	}
 
+	fn base_mut(&mut self) -> &mut ToolCallEventBase {
+		match self {
+			ToolCallEvent::Bash(event)
+			| ToolCallEvent::PowerShell(event)
+			| ToolCallEvent::Read(event)
+			| ToolCallEvent::Edit(event)
+			| ToolCallEvent::Write(event)
+			| ToolCallEvent::Grep(event)
+			| ToolCallEvent::Find(event)
+			| ToolCallEvent::Ls(event)
+			| ToolCallEvent::Custom(event) => event,
+		}
+	}
+
+	/// Patch the call arguments (runner port D40; upstream handlers mutate
+	/// the shared `input` in place).
+	pub fn set_input(&mut self, input: JsonValue) {
+		self.base_mut().input = input;
+	}
+
 	/// A `bash` tool call event.
 	pub fn bash(tool_call_id: impl Into<String>, input: JsonValue) -> Self {
 		ToolCallEvent::Bash(ToolCallEventBase {
@@ -2434,6 +2484,67 @@ impl ToolResultEvent {
 			| ToolResultEvent::Ls(event)
 			| ToolResultEvent::Custom(event) => event,
 		}
+	}
+
+	fn base_mut(&mut self) -> &mut ToolResultEventBase {
+		match self {
+			ToolResultEvent::Bash(event)
+			| ToolResultEvent::PowerShell(event)
+			| ToolResultEvent::Read(event)
+			| ToolResultEvent::Edit(event)
+			| ToolResultEvent::Write(event)
+			| ToolResultEvent::Grep(event)
+			| ToolResultEvent::Find(event)
+			| ToolResultEvent::Ls(event)
+			| ToolResultEvent::Custom(event) => event,
+		}
+	}
+
+	/// Result content (`tool_result` chaining; runner port D40).
+	pub fn content(&self) -> &[pi_ai::types::UserContent] {
+		&self.base().content
+	}
+
+	pub fn set_content(&mut self, content: Vec<pi_ai::types::UserContent>) {
+		self.base_mut().content = content;
+	}
+
+	pub fn structured_content(&self) -> Option<&JsonValue> {
+		self.base().structured_content.as_ref()
+	}
+
+	pub fn set_structured_content(&mut self, structured_content: Option<JsonValue>) {
+		self.base_mut().structured_content = structured_content;
+	}
+
+	/// Clears structured content (replacing `content` without a replacement
+	/// drops it — upstream semantics).
+	pub fn clear_structured_content(&mut self) {
+		self.base_mut().structured_content = None;
+	}
+
+	pub fn is_error(&self) -> bool {
+		self.base().is_error
+	}
+
+	pub fn set_is_error(&mut self, is_error: bool) {
+		self.base_mut().is_error = is_error;
+	}
+
+	pub fn usage(&self) -> Option<&Usage> {
+		self.base().usage.as_ref()
+	}
+
+	pub fn set_usage(&mut self, usage: Option<Usage>) {
+		self.base_mut().usage = usage;
+	}
+
+	pub fn details(&self) -> &JsonValue {
+		&self.base().details
+	}
+
+	pub fn set_details(&mut self, details: JsonValue) {
+		self.base_mut().details = details;
 	}
 }
 
@@ -2856,8 +2967,11 @@ pub type ExtensionHandler<E, R> = Arc<dyn Fn(E, ExtensionContext) -> BoxFuture<'
 /// Erased handler stored by the runtime (`HandlerFn`): the event payload is
 /// its serialized form and the result its serialized result (or `None` for
 /// `void`). Upstream overloads collapse to this single erased form, matching
-/// the `Map<string, HandlerFn[]>` storage (D31).
-pub type HandlerFn = Arc<dyn Fn(JsonValue, ExtensionContext) -> BoxFuture<'static, Option<JsonValue>> + Send + Sync>;
+/// the `Map<string, HandlerFn[]>` storage (D31). Handler failures are an
+/// explicit `Err` — upstream throws across the `await` (D41).
+pub type HandlerFn = Arc<
+	dyn Fn(JsonValue, ExtensionContext) -> BoxFuture<'static, Result<Option<JsonValue>, String>> + Send + Sync,
+>;
 
 /// The `pi` object passed to extension factories (`ExtensionAPI`).
 ///
@@ -3432,18 +3546,22 @@ pub type SetLabelHandler = Arc<dyn Fn(&str, Option<String>) + Send + Sync>;
 
 /// Shared state created by the loader (`ExtensionRuntimeState`); flag values
 /// default during registration and CLI values arrive after. Vtable members
-/// are populated by the loader/runner (D28).
-#[derive(Clone)]
+/// are populated by the loader/runner (D28). Runtime clones share the
+/// data fields through interior mutability so drains after load are visible
+/// to the caller's handle (D40).
 pub struct ExtensionRuntimeState {
 	/// Registered flag values.
-	pub flag_values: HashMap<String, FlagValue>,
+	pub flag_values: parking_lot::RwLock<HashMap<String, FlagValue>>,
 	/// Legacy provider-config registrations queued during load, processed when
 	/// the runner binds.
-	pub pending_provider_registrations: Vec<PendingProviderRegistration>,
+	pub pending_provider_registrations: parking_lot::RwLock<Vec<PendingProviderRegistration>>,
 	/// Native pi-ai provider registrations queued during load.
-	pub pending_native_provider_registrations: Vec<PendingNativeProviderRegistration>,
+	pub pending_native_provider_registrations: parking_lot::RwLock<Vec<PendingNativeProviderRegistration>>,
 	/// Virtual model registrations queued during load.
-	pub pending_virtual_model_registrations: Vec<PendingVirtualModelRegistration>,
+	pub pending_virtual_model_registrations: parking_lot::RwLock<Vec<PendingVirtualModelRegistration>>,
+	// NOTE: the closure/Arc fields follow; `Clone` is derived via the shared
+	// `Arc`s — see the explicit derive-able tail below. (parking_lot locks are
+	// cloned by value through their guards above.)
 	/// Create an extension context; panics before the runner binds.
 	pub create_context: Arc<dyn Fn() -> ExtensionContext + Send + Sync>,
 	/// Panics via `Err` message when this instance is stale after runtime
@@ -3464,15 +3582,78 @@ pub struct ExtensionRuntimeState {
 	pub unregister_virtual_model: Arc<dyn Fn(String, String) + Send + Sync>,
 }
 
+impl Clone for ExtensionRuntimeState {
+	fn clone(&self) -> Self {
+		ExtensionRuntimeState {
+			flag_values: parking_lot::RwLock::new(self.flag_values.read().clone()),
+			pending_provider_registrations: parking_lot::RwLock::new(self.pending_provider_registrations.read().clone()),
+			pending_native_provider_registrations: parking_lot::RwLock::new(
+				self.pending_native_provider_registrations.read().clone(),
+			),
+			pending_virtual_model_registrations: parking_lot::RwLock::new(
+				self.pending_virtual_model_registrations.read().clone(),
+			),
+			create_context: Arc::clone(&self.create_context),
+			assert_active: Arc::clone(&self.assert_active),
+			invalidate: Arc::clone(&self.invalidate),
+			track_event_bus_subscription: Arc::clone(&self.track_event_bus_subscription),
+			register_provider: Arc::clone(&self.register_provider),
+			register_native_provider: Arc::clone(&self.register_native_provider),
+			unregister_provider: Arc::clone(&self.unregister_provider),
+			mcp_servers: Arc::clone(&self.mcp_servers),
+			register_virtual_model: Arc::clone(&self.register_virtual_model),
+			unregister_virtual_model: Arc::clone(&self.unregister_virtual_model),
+		}
+	}
+}
+
 impl std::fmt::Debug for ExtensionRuntimeState {
 	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
 		f.debug_struct("ExtensionRuntimeState")
-			.field("flag_values", &self.flag_values.keys().collect::<Vec<_>>())
+			.field("flag_values", &self.flag_values.read().keys().collect::<Vec<_>>())
 			.field(
 				"pending_provider_registrations",
-				&self.pending_provider_registrations.len(),
+				&self.pending_provider_registrations.read().len(),
 			)
 			.finish_non_exhaustive()
+	}
+}
+
+impl ExtensionRuntimeState {
+	/// `flagValues.get(name)`.
+	pub fn get_flag_value(&self, name: &str) -> Option<FlagValue> {
+		self.flag_values.read().get(name).cloned()
+	}
+
+	/// Whether a flag has any value (`flagValues.has(name)`).
+	pub fn has_flag_value(&self, name: &str) -> bool {
+		self.flag_values.read().contains_key(name)
+	}
+
+	/// `flagValues.set(name, value)`.
+	pub fn set_flag_value(&self, name: &str, value: FlagValue) {
+		self.flag_values.write().insert(name.to_string(), value);
+	}
+
+	/// Queued legacy provider registrations (drained on bind).
+	pub fn pending_providers(&self) -> Vec<PendingProviderRegistration> {
+		self.pending_provider_registrations.read().clone()
+	}
+
+	/// Drops the queued legacy provider/native registrations.
+	pub fn clear_pending_providers(&self) {
+		*self.pending_provider_registrations.write() = Vec::new();
+		*self.pending_native_provider_registrations.write() = Vec::new();
+	}
+
+	/// Queued virtual-model registrations (drained on bind).
+	pub fn pending_virtual_models(&self) -> Vec<PendingVirtualModelRegistration> {
+		self.pending_virtual_model_registrations.read().clone()
+	}
+
+	/// Drops the queued virtual-model registrations.
+	pub fn clear_pending_virtual_models(&self) {
+		*self.pending_virtual_model_registrations.write() = Vec::new();
 	}
 }
 
@@ -3589,12 +3770,15 @@ impl std::fmt::Debug for ExtensionCommandContextActions {
 	}
 }
 
-/// Full runtime = state + actions (`ExtensionRuntime`). Created by the loader
-/// with throwing action stubs, completed by `runner.initialize()`.
+/// Full runtime = state + actions + bind core (`ExtensionRuntime`). Created
+/// by the loader with throwing action stubs, completed by
+/// `runner.bind_core()`.
 #[derive(Debug, Clone)]
 pub struct ExtensionRuntime {
-	pub state: ExtensionRuntimeState,
+	pub state: Arc<ExtensionRuntimeState>,
 	pub actions: ExtensionActions,
+	/// Shared bind state the runner fills via `bind_core` (D40).
+	pub core: Arc<RuntimeCore>,
 }
 
 impl std::ops::Deref for ExtensionRuntime {
@@ -3602,6 +3786,50 @@ impl std::ops::Deref for ExtensionRuntime {
 
 	fn deref(&self) -> &Self::Target {
 		&self.state
+	}
+}
+
+/// Provider registration callbacks a mode can install via `bind_core`
+/// (upstream `providerActions`). When absent, queued registrations are
+/// drained without a registry call (the model registry is an opaque stub
+/// until that module ports).
+#[derive(Clone, Default)]
+pub struct ProviderActions {
+	pub register_provider: Option<Arc<dyn Fn(&str, &ProviderConfig) + Send + Sync>>,
+	pub register_native_provider: Option<Arc<dyn Fn(&Arc<dyn pi_ai::Provider>) + Send + Sync>>,
+	pub unregister_provider: Option<Arc<dyn Fn(&str) + Send + Sync>>,
+	pub register_virtual_model: Option<Arc<dyn Fn(&VirtualModelDefinition) + Send + Sync>>,
+	pub unregister_virtual_model: Option<Arc<dyn Fn(&str, &str) + Send + Sync>>,
+}
+
+impl std::fmt::Debug for ProviderActions {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		f.debug_struct("ProviderActions").finish_non_exhaustive()
+	}
+}
+
+/// The action set `bind_core` installs (`bindCore`'s arguments), readable by
+/// the loader closures and the runner's context builders.
+#[derive(Clone, Default)]
+pub struct BoundCore {
+	pub actions: ExtensionActions,
+	pub context_actions: ExtensionContextActions,
+	pub command_actions: ExtensionCommandContextActions,
+	pub provider_actions: ProviderActions,
+	pub create_context: Option<Arc<dyn Fn() -> Result<ExtensionContext, String> + Send + Sync>>,
+}
+
+/// Shared bind state behind every [`ExtensionRuntime`] clone (D40).
+#[derive(Default)]
+pub struct RuntimeCore {
+	pub bound: parking_lot::RwLock<Option<BoundCore>>,
+}
+
+impl std::fmt::Debug for RuntimeCore {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		f.debug_struct("RuntimeCore")
+			.field("bound", &self.bound.read().is_some())
+			.finish()
 	}
 }
 
@@ -3615,7 +3843,9 @@ pub struct Extension {
 	pub replaceable: Option<bool>,
 	pub source_info: SourceInfo,
 	/// Erased handlers by event name (`Map<string, HandlerFn[]>`; D31).
-	pub handlers: HashMap<String, Vec<HandlerFn>>,
+	/// Shared with the loader API so subscriptions/unsubscriptions after
+	/// commit are visible to the runner (D40).
+	pub handlers: Arc<parking_lot::Mutex<HashMap<String, Vec<HandlerFn>>>>,
 	pub tools: HashMap<String, RegisteredTool>,
 	pub message_renderers: HashMap<String, MessageRenderer>,
 	pub tool_renderers: Option<Vec<ToolRendererResolver>>,
@@ -3631,7 +3861,7 @@ impl std::fmt::Debug for Extension {
 		f.debug_struct("Extension")
 			.field("path", &self.path)
 			.field("resolved_path", &self.resolved_path)
-			.field("handlers", &self.handlers.keys().collect::<Vec<_>>())
+			.field("handlers", &self.handlers.lock().keys().collect::<Vec<_>>())
 			.field("tools", &self.tools.keys().collect::<Vec<_>>())
 			.field("commands", &self.commands.keys().collect::<Vec<_>>())
 			.finish_non_exhaustive()

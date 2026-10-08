@@ -25,6 +25,7 @@ pub mod photon;
 pub mod syntax_highlight;
 pub mod tool_result_images;
 pub mod tools_manager;
+pub mod tui_compat;
 pub mod open_browser;
 pub mod output_files;
 pub mod paths;

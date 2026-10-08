@@ -55,7 +55,7 @@ impl Settings {
 	/// Parsed-settings constructor (used by tests and callers holding a
 	/// `Value`).
 	#[allow(dead_code)]
-	fn from_value(value: Value) -> Self {
+	pub(crate) fn from_value(value: Value) -> Self {
 		match value {
 			Value::Object(map) => Self(map),
 			_ => Self::new(),
