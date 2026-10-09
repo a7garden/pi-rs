@@ -16,9 +16,15 @@
 //! - **D58b — warnings shape.** Upstream `LoadExtensionsResult.warnings`
 //!   entries are `{path, warning}`; the Rust `LoadRecord` carries the text in
 //!   its `error` field. `None` warnings are treated as empty.
+//! - **D58c — unparseable extension manifests panic.** Upstream lets the
+//!   manifest `SyntaxError` reject `reload()`; the port's `reload` returns
+//!   `()`, so the parse failure propagates as a panic from
+//!   `collect_extension_package_warnings`.
 //!
-//! Upstream cases that construct a full `AgentSession`/`ExtensionRunner` are
-//! deferred with the AgentSession slice (see the test module footer).
+//! Upstream cases that construct a full `AgentSession` defer with that
+//! slice; every other case — including the extension-JS-dependent suites,
+//! which execute real `.ts` fixtures through the embedded JS host since
+//! D107 — is ported in `resource_loader_tests`.
 
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
@@ -3090,21 +3096,459 @@ mod resource_loader_tests {
 		assert_eq!(theme.bg("userMessageBg", "x").unwrap(), "\x1b[48;2;60;53;68mx\x1b[49m");
 	}
 
-	// Upstream cases deferred — they execute `.ts` extension modules through
-	// the JS runtime or construct an ExtensionRunner over loaded extensions
-	// (AgentSession slice / extensions runner slice):
-	// - "should not treat a project manifest as the owner of a project extension"
-	// - "should warn about host dependencies in an extension package manifest"
-	// - "should fail when an extension package manifest cannot be parsed"
-	// - "should load symlinked user and project extensions once"
-	// - "should load user extensions before trust and reuse them after trust resolves"
-	// - "should keep both extensions loaded when command names collide"
-	// - "should detect tool conflicts between extensions"
-	// - "should prefer explicit CLI extensions over discovered extensions when
-	//   commands and tools conflict"
-	// - "should leave out replaceable extensions whose names another extension
-	//   registers"
-	// - "should load built-in extensions after file extensions with and without
-	//   trust resolution" (expects a loaded user.ts file extension)
+	// Upstream cases that execute `.ts` extension modules through the JS
+	// runtime — ported below now that the loader bridges to the embedded
+	// host (D107). Cases constructing a full `AgentSession` defer with that
+	// port.
+
+	fn write_extension(path: &Path, name: &str, body: &str) -> String {
+		write_file(&path.join(name), body);
+		path.join(name).to_string_lossy().to_string()
+	}
+
+	/// Runner over a loaded extension set plus its runtime (upstream
+	/// `new ExtensionRunner(extensionsResult.extensions,
+	/// extensionsResult.runtime, cwd, ...)`).
+	async fn runner_for(ws: &Workspace, loader: &DefaultResourceLoader) -> crate::core::extensions::runner::ExtensionRunner {
+		let extensions_result = loader.get_extensions().clone();
+		let session_manager = Arc::new(Mutex::new(
+			crate::core::session_manager::SessionManager::in_memory(None, None, None).unwrap(),
+		));
+		let model_runtime = crate::core::model_runtime::ModelRuntime::create(Default::default()).await.unwrap();
+		let model_registry = Arc::new(crate::core::model_registry::ModelRegistry::new(model_runtime));
+		crate::core::extensions::runner::ExtensionRunner::new(
+			extensions_result.extensions,
+			extensions_result.runtime,
+			&ws.cwd,
+			session_manager,
+			model_registry,
+		)
+	}
+
+	#[test]
+	fn does_not_treat_a_project_manifest_as_the_owner_of_a_project_extension() {
+		let ws = Workspace::new();
+		write_file(
+			&ws._root.join("project/package.json"),
+			&serde_json::to_string(
+				&serde_json::json!({ "dependencies": { "@earendil-works/pi-coding-agent": "1.0.0" } }),
+			)
+			.unwrap(),
+		);
+		write_extension(&ws._root.join("project/.pi/extensions"), "project-extension.ts", "export default function() {}");
+
+		let mut loader = ws.loader(|_| {});
+		loader.reload(Default::default());
+
+		let extensions = loader.get_extensions();
+		assert_eq!(extensions.extensions.len(), 1);
+		assert!(extensions.warnings.clone().unwrap_or_default().is_empty());
+	}
+
+	#[test]
+	fn warns_about_host_dependencies_in_an_extension_package_manifest() {
+		// Regression for #9863.
+		let ws = Workspace::new();
+		let package_root = ws.str("extension-package");
+		write_file(
+			&Path::new(&package_root).join("package.json"),
+			&serde_json::to_string(
+				&serde_json::json!({ "dependencies": { "@earendil-works/pi-coding-agent": "1.0.0" } }),
+			)
+			.unwrap(),
+		);
+		write_extension(
+			&Path::new(&package_root).join("extensions"),
+			"package-extension.ts",
+			"export default function() {}",
+		);
+
+		let settings_manager = SettingsManager::in_memory(
+			&Settings::from_value(serde_json::json!({ "packages": [package_root] })),
+			SettingsManagerCreateOptions::default(),
+		);
+		let mut loader = ws.loader(|options| {
+			options.settings_manager = Some(settings_manager);
+		});
+		loader.reload(Default::default());
+
+		let extensions = loader.get_extensions();
+		assert_eq!(extensions.extensions.len(), 1);
+		assert_eq!(
+			extensions.warnings.clone().unwrap_or_default(),
+			vec![LoadRecord {
+				path: Path::new(&package_root).join("package.json").to_string_lossy().to_string(),
+				error: "Host-provided extension packages must be declared in peerDependencies with a \"*\" range, \
+					not dependencies: @earendil-works/pi-coding-agent. Installed copies can bypass the extension \
+					loader and create duplicate runtime modules."
+					.to_string(),
+			}]
+		);
+	}
+
+	#[test]
+	#[should_panic(expected = "Failed to parse")]
+	fn fails_when_an_extension_package_manifest_cannot_be_parsed() {
+		let ws = Workspace::new();
+		let package_root = ws.str("invalid-extension-package");
+		write_file(&Path::new(&package_root).join("package.json"), "{");
+		write_extension(
+			&Path::new(&package_root).join("extensions"),
+			"package-extension.ts",
+			"export default function() {}",
+		);
+
+		let settings_manager = SettingsManager::in_memory(
+			&Settings::from_value(serde_json::json!({ "packages": [package_root] })),
+			SettingsManagerCreateOptions::default(),
+		);
+		let mut loader = ws.loader(|options| {
+			options.settings_manager = Some(settings_manager);
+		});
+		// Upstream `reload()` rejects with the manifest SyntaxError; the port
+		// lets the parse failure propagate as a panic (D58 note).
+		loader.reload(Default::default());
+	}
+
+	#[test]
+	fn loads_symlinked_user_and_project_extensions_once() {
+		let ws = Workspace::new();
+		let shared_ext_dir = ws.str("shared-extensions");
+		std::fs::create_dir_all(&shared_ext_dir).unwrap();
+		write_extension(
+			&Path::new(&shared_ext_dir),
+			"shared.ts",
+			"export default function(pi) {\n\tpi.registerCommand(\"shared\", {\n\t\tdescription: \"shared command\",\n\t\thandler: async () => {},\n\t});\n}\n",
+		);
+
+		std::fs::create_dir_all(&ws.agent_dir).unwrap();
+		std::fs::create_dir_all(ws.str("project/.pi")).unwrap();
+		std::os::unix::fs::symlink(&shared_ext_dir, ws.str("agent/extensions")).unwrap();
+		std::os::unix::fs::symlink(&shared_ext_dir, ws.str("project/.pi/extensions")).unwrap();
+
+		let mut loader = ws.loader(|_| {});
+		loader.reload(Default::default());
+
+		let extensions = loader.get_extensions();
+		assert_eq!(extensions.extensions.len(), 1);
+		assert!(extensions.errors.is_empty());
+
+		// mergePaths processes project paths before user paths, so the project
+		// alias is the canonical survivor.
+		assert_eq!(
+			extensions.extensions[0].path,
+			ws.str("project/.pi/extensions/shared.ts")
+		);
+	}
+
+	#[test]
+	fn loads_user_extensions_before_trust_and_reuses_them_after_trust_resolves() {
+		let ws = Workspace::new();
+		let user_ext_dir = ws.str("agent/extensions");
+		let project_ext_dir = ws.str("project/.pi/extensions");
+		std::fs::create_dir_all(&user_ext_dir).unwrap();
+		std::fs::create_dir_all(&project_ext_dir).unwrap();
+		// Unique per run: the embedded host shares one JS globalThis across
+		// tests (upstream seeds its counter key the same way).
+		static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+		let load_count_key = format!(
+			"__piTrustPreloadCount_{}_{}",
+			std::process::id(),
+			SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+		);
+		let counter_literal = serde_json::to_string(&load_count_key).unwrap();
+
+		let user_path = write_extension(
+			&Path::new(&user_ext_dir),
+			"user.ts",
+			&format!(
+				"globalThis[{counter_literal}] = (globalThis[{counter_literal}] ?? 0) + 1;\n\
+				 export default function(pi) {{\n\
+				 \tpi.on(\"project_trust\", () => ({{ trusted: \"yes\" }}));\n\
+				 \tpi.registerCommand(\"user-trust\", {{\n\
+				 \t\tdescription: \"user trust\",\n\
+				 \t\thandler: async () => {{}},\n\
+				 \t}});\n\
+				 }}\n"
+			),
+		);
+		write_extension(
+			&Path::new(&project_ext_dir),
+			"project.ts",
+			"export default function(pi) {\n\tpi.registerCommand(\"project-trusted\", {\n\t\tdescription: \"project trusted\",\n\t\thandler: async () => {},\n\t});\n}\n",
+		);
+
+		let pre_trust_paths: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+		let pre_trust_capture = Arc::clone(&pre_trust_paths);
+		let user_path_for_closure = user_path.clone();
+		let mut loader = ws.loader(|_| {});
+		loader.reload(ResourceLoaderReloadOptions {
+			resolve_project_trust: Some(Box::new(move |extensions_result: &LoadExtensionsResult| {
+				let paths: Vec<String> =
+					extensions_result.extensions.iter().map(|extension| extension.path.clone()).collect();
+				assert_eq!(paths, vec![user_path_for_closure.clone()]);
+				*pre_trust_capture.lock() = paths;
+				true
+			})),
+		});
+
+		let extensions = loader.get_extensions();
+		let paths: Vec<String> = extensions.extensions.iter().map(|extension| extension.path.clone()).collect();
+		assert_eq!(paths, vec![ws.str("project/.pi/extensions/project.ts"), user_path.clone()]);
+
+		// Upstream asserts the module-level `globalThis` counter is 1 — the
+		// module must not re-import after trust resolves. The embedded host
+		// exposes no eval seam, so the bridge's own import counter stands in
+		// (same observable).
+		assert_eq!(
+			crate::core::extensions::loader::bridge_import_count(&user_path),
+			1,
+			"user extension must load exactly once"
+		);
+	}
+
+	#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+	async fn keeps_both_extensions_loaded_when_command_names_collide() {
+		let ws = Workspace::new();
+		let user_ext_dir = ws.str("agent/extensions");
+		let project_ext_dir = ws.str("project/.pi/extensions");
+		std::fs::create_dir_all(&user_ext_dir).unwrap();
+		std::fs::create_dir_all(&project_ext_dir).unwrap();
+
+		write_extension(
+			&Path::new(&project_ext_dir),
+			"project.ts",
+			"export default function(pi) {\n\tpi.registerCommand(\"deploy\", {\n\t\tdescription: \"project deploy\",\n\t\thandler: async () => {},\n\t});\n\tpi.registerCommand(\"project-only\", {\n\t\tdescription: \"project only\",\n\t\thandler: async () => {},\n\t});\n}\n",
+		);
+		write_extension(
+			&Path::new(&user_ext_dir),
+			"user.ts",
+			"export default function(pi) {\n\tpi.registerCommand(\"deploy\", {\n\t\tdescription: \"user deploy\",\n\t\thandler: async () => {},\n\t});\n\tpi.registerCommand(\"user-only\", {\n\t\tdescription: \"user only\",\n\t\thandler: async () => {},\n\t});\n}\n",
+		);
+
+		let cwd = ws.cwd.clone();
+		let agent_dir = ws.agent_dir.clone();
+		let loader = tokio::task::spawn_blocking(move || {
+			let mut loader = DefaultResourceLoader::new(DefaultResourceLoaderOptions {
+				cwd,
+				agent_dir,
+				..Default::default()
+			});
+			loader.reload(Default::default());
+			loader
+		})
+		.await
+		.unwrap();
+
+		let extensions = loader.get_extensions();
+		assert_eq!(extensions.extensions.len(), 2);
+		assert!(!extensions
+			.errors
+			.iter()
+			.any(|error| error.error.contains("Command \"/deploy\" conflicts")));
+
+		let runner = runner_for(&ws, &loader).await;
+		assert_eq!(runner.get_command("deploy:1").unwrap().description.as_deref(), Some("project deploy"));
+		assert_eq!(runner.get_command("deploy:2").unwrap().description.as_deref(), Some("user deploy"));
+		assert_eq!(runner.get_command("project-only").unwrap().description.as_deref(), Some("project only"));
+		assert_eq!(runner.get_command("user-only").unwrap().description.as_deref(), Some("user only"));
+
+		let commands = runner.get_registered_commands();
+		let invocation_names: Vec<String> =
+			commands.iter().map(|command| command.invocation_name.clone()).collect();
+		assert_eq!(invocation_names, vec!["deploy:1", "project-only", "deploy:2", "user-only"]);
+	}
+
+	#[test]
+	fn detects_tool_conflicts_between_extensions() {
+		let ws = Workspace::new();
+		let ext1_dir = ws.str("agent/extensions/ext1");
+		let ext2_dir = ws.str("agent/extensions/ext2");
+		std::fs::create_dir_all(&ext1_dir).unwrap();
+		std::fs::create_dir_all(&ext2_dir).unwrap();
+
+		write_extension(
+			&Path::new(&ext1_dir),
+			"index.ts",
+			"import type { ExtensionAPI } from \"@earendil-works/pi-coding-agent\";\nimport { Type } from \"typebox\";\nexport default function(pi: ExtensionAPI) {\n  pi.registerTool({\n    name: \"duplicate-tool\",\n    description: \"First\",\n    parameters: Type.Object({}),\n    execute: async () => ({ result: \"1\" }),\n  });\n}\n",
+		);
+		write_extension(
+			&Path::new(&ext2_dir),
+			"index.ts",
+			"import type { ExtensionAPI } from \"@earendil-works/pi-coding-agent\";\nimport { Type } from \"typebox\";\nexport default function(pi: ExtensionAPI) {\n  pi.registerTool({\n    name: \"duplicate-tool\",\n    description: \"Second\",\n    parameters: Type.Object({}),\n    execute: async () => ({ result: \"2\" }),\n  });\n}\n",
+		);
+
+		let mut loader = ws.loader(|_| {});
+		loader.reload(Default::default());
+
+		let errors = loader.get_extensions().errors.clone();
+		assert!(
+			errors
+				.iter()
+				.any(|error| error.error.contains("duplicate-tool") && error.error.contains("conflicts")),
+			"expected a duplicate-tool conflict, got {errors:?}"
+		);
+	}
+
+	#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+	async fn prefers_explicit_cli_extensions_over_discovered_extensions_when_commands_and_tools_conflict() {
+		let ws = Workspace::new();
+		let global_ext_dir = ws.str("agent/extensions");
+		std::fs::create_dir_all(&global_ext_dir).unwrap();
+		let explicit_ext_path = ws.str("explicit-extension.ts");
+
+		write_extension(
+			&Path::new(&global_ext_dir),
+			"global.ts",
+			"import type { ExtensionAPI } from \"@earendil-works/pi-coding-agent\";\nimport { Type } from \"typebox\";\nexport default function(pi: ExtensionAPI) {\n  pi.registerTool({\n    name: \"duplicate-tool\",\n    description: \"global tool\",\n    parameters: Type.Object({}),\n    execute: async () => ({ result: \"global\" }),\n  });\n  pi.registerCommand(\"deploy\", {\n    description: \"global command\",\n    handler: async () => {},\n  });\n}\n",
+		);
+		write_extension(
+			&ws._root.0,
+			"explicit-extension.ts",
+			"import type { ExtensionAPI } from \"@earendil-works/pi-coding-agent\";\nimport { Type } from \"typebox\";\nexport default function(pi: ExtensionAPI) {\n  pi.registerTool({\n    name: \"duplicate-tool\",\n    description: \"explicit tool\",\n    parameters: Type.Object({}),\n    execute: async () => ({ result: \"explicit\" }),\n  });\n  pi.registerCommand(\"deploy\", {\n    description: \"explicit command\",\n    handler: async () => {},\n  });\n}\n",
+		);
+
+		let cwd = ws.cwd.clone();
+		let agent_dir = ws.agent_dir.clone();
+		let explicit_for_options = explicit_ext_path.clone();
+		let loader = tokio::task::spawn_blocking(move || {
+			let mut loader = DefaultResourceLoader::new(DefaultResourceLoaderOptions {
+				cwd,
+				agent_dir,
+				additional_extension_paths: vec![explicit_for_options],
+				..Default::default()
+			});
+			loader.reload(Default::default());
+			loader
+		})
+		.await
+		.unwrap();
+
+		let extensions = loader.get_extensions();
+		assert_eq!(extensions.extensions[0].path, ws.str("explicit-extension.ts"));
+
+		let runner = runner_for(&ws, &loader).await;
+		assert_eq!(runner.get_command("deploy:1").unwrap().description.as_deref(), Some("explicit command"));
+		assert_eq!(runner.get_command("deploy:2").unwrap().description.as_deref(), Some("global command"));
+		assert_eq!(
+			runner.get_tool_definition("duplicate-tool").unwrap().description,
+			"explicit tool"
+		);
+	}
+
+	#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+	async fn leaves_out_replaceable_extensions_whose_names_another_extension_registers() {
+		// A third-party MCP extension registering /mcp replaces the built-in
+		// one instead of both running.
+		let ws = Workspace::new();
+		let global_ext_dir = ws.str("agent/extensions");
+		std::fs::create_dir_all(&global_ext_dir).unwrap();
+		write_extension(
+			&Path::new(&global_ext_dir),
+			"other-mcp.ts",
+			"import type { ExtensionAPI } from \"@earendil-works/pi-coding-agent\";\nexport default function(pi: ExtensionAPI) {\n  pi.registerCommand(\"mcp\", { description: \"other mcp\", handler: async () => {} });\n}\n",
+		);
+
+		let cwd = ws.cwd.clone();
+		let agent_dir = ws.agent_dir.clone();
+		let extension_factories = vec![
+			InlineExtension::Named {
+				name: "mcp".to_string(),
+				factory: Arc::new(|pi: crate::core::extensions::types::ExtensionApiHandle| {
+					Box::pin(async move {
+						pi.register_command(
+							"mcp",
+							RegisteredCommandOptions {
+								description: Some("built-in mcp".to_string()),
+								..no_pause()
+							},
+						);
+						Ok(())
+					}) as std::pin::Pin<Box<dyn Future<Output = Result<(), String>> + Send>>
+				}),
+				hidden: None,
+				replaceable: Some(true),
+				builtin: None,
+			},
+			InlineExtension::Named {
+				name: "llama".to_string(),
+				factory: Arc::new(|pi: crate::core::extensions::types::ExtensionApiHandle| {
+					Box::pin(async move {
+						pi.register_command(
+							"llama",
+							RegisteredCommandOptions {
+								description: Some("built-in llama".to_string()),
+								..no_pause()
+							},
+						);
+						Ok(())
+					}) as std::pin::Pin<Box<dyn Future<Output = Result<(), String>> + Send>>
+				}),
+				hidden: None,
+				replaceable: Some(true),
+				builtin: None,
+			},
+		];
+		let loader = tokio::task::spawn_blocking(move || {
+			let mut loader = DefaultResourceLoader::new(DefaultResourceLoaderOptions {
+				cwd,
+				agent_dir,
+				extension_factories,
+				..Default::default()
+			});
+			loader.reload(Default::default());
+			loader
+		})
+		.await
+		.unwrap();
+
+		let extensions = loader.get_extensions();
+		let paths: Vec<String> = extensions.extensions.iter().map(|extension| extension.path.clone()).collect();
+		assert_eq!(paths, vec![ws.str("agent/extensions/other-mcp.ts"), "<inline:llama>".to_string()]);
+		assert!(extensions.errors.is_empty());
+
+		let runner = runner_for(&ws, &loader).await;
+		assert_eq!(runner.get_command("mcp").unwrap().description.as_deref(), Some("other mcp"));
+		assert_eq!(runner.get_command("llama").unwrap().description.as_deref(), Some("built-in llama"));
+	}
+
+	#[test]
+	fn loads_builtin_extensions_after_file_extensions_with_and_without_trust_resolution() {
+		let ws = Workspace::new();
+		let user_ext_dir = ws.str("agent/extensions");
+		std::fs::create_dir_all(&user_ext_dir).unwrap();
+		write_extension(&Path::new(&user_ext_dir), "user.ts", "export default function() {}");
+		std::fs::create_dir_all(ws.str("project/.pi")).unwrap();
+		// A project override gives the built-in project scope, which must not
+		// move it ahead.
+		write_file(
+			&ws._root.join("project/.pi/settings.json"),
+			&serde_json::to_string(&serde_json::json!({ "extensions": ["+builtin:mcp"] })).unwrap(),
+		);
+		let mut loader = ws.loader(|options| {
+			options.extension_factories = vec![InlineExtension::Named {
+				name: "mcp".to_string(),
+				factory: Arc::new(|_pi: crate::core::extensions::types::ExtensionApiHandle| {
+					Box::pin(async { Ok(()) })
+						as std::pin::Pin<Box<dyn Future<Output = Result<(), String>> + Send>>
+				}),
+				hidden: None,
+				replaceable: None,
+				builtin: Some(true),
+			}];
+		});
+		let expected = vec![ws.str("agent/extensions/user.ts"), "builtin:mcp".to_string()];
+
+		loader.reload(ResourceLoaderReloadOptions {
+			resolve_project_trust: Some(Box::new(|_extensions_result: &LoadExtensionsResult| true)),
+		});
+		let paths: Vec<String> =
+			loader.get_extensions().extensions.iter().map(|extension| extension.path.clone()).collect();
+		assert_eq!(paths, expected);
+		loader.reload(Default::default());
+		let paths: Vec<String> =
+			loader.get_extensions().extensions.iter().map(|extension| extension.path.clone()).collect();
+		assert_eq!(paths, expected);
+	}
 }
 

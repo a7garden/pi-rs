@@ -57,8 +57,8 @@ impl ExtensionHostError {
 /// discoverable surface (paths, event subscriptions, tools, commands).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LoadedExtension {
-    /// Stable handle for further calls (distinct per load, so reloading the
-    /// same path creates a fresh generation).
+    /// Stable handle for further calls; chosen by the caller per load, so
+    /// reloading the same path under a new key creates a fresh generation.
     pub key: String,
     /// The resolved entry path that was imported.
     pub path: PathBuf,
@@ -103,8 +103,17 @@ pub trait ExtensionBackend: Send + Sync {
 #[async_trait]
 pub trait ExtensionHost: Send + Sync {
     /// Import a JS/TS extension entry from disk and run its default-export
-    /// factory against a `pi` API object backed by `backend`.
-    async fn load(&self, entry: &Path) -> Result<LoadedExtension, ExtensionHostError>;
+    /// factory against a `pi` API object backed by `backend`. `key` is the
+    /// caller-chosen stable handle for the resulting registrations; reloading
+    /// the same path under a new key creates a fresh generation.
+    async fn load(&self, entry: &Path, key: &str) -> Result<LoadedExtension, ExtensionHostError>;
+
+    /// Re-run one previously loaded extension's stored default-export factory
+    /// against a fresh `pi` API under `new_key` (upstream's cached-factory
+    /// re-invocation: the module is *not* re-imported, so module-level side
+    /// effects run only once). The returned summary carries `new_key`; its
+    /// `path` is empty because no import happened — the caller owns the path.
+    async fn reload(&self, key: &str, new_key: &str) -> Result<LoadedExtension, ExtensionHostError>;
 
     /// Invoke one extension's handlers for an event, in registration order.
     /// A handler's methods on `ctx` route to the backend with the `ctx.`
@@ -137,11 +146,21 @@ pub struct DenoExtensionHostOptions {
     /// runtime ships none by default — no node/npm compat beyond what the
     /// embedder registers.
     pub node_modules: BTreeMap<String, Value>,
+    /// JS virtual modules registered under bare specifiers. Unlike the JSON
+    /// `node_modules` shims these carry real code (functions), e.g. the
+    /// extension bridge's `typebox` schema shim.
+    pub virtual_sources: Vec<(String, String)>,
 }
 
 enum Request {
     Load {
         entry: PathBuf,
+        key: String,
+        reply: tokio::sync::oneshot::Sender<Result<LoadedExtension, String>>,
+    },
+    Reload {
+        key: String,
+        new_key: String,
         reply: tokio::sync::oneshot::Sender<Result<LoadedExtension, String>>,
     },
     Dispatch {
@@ -184,7 +203,7 @@ impl DenoExtensionHost {
             .expect("pi-runtime: failed to spawn extension request forwarder");
 
         let worker = spawn_js_thread(move || async move {
-            extension_runtime_loop(options.node_modules, backend, &mut async_rx).await;
+            extension_runtime_loop(options.node_modules, options.virtual_sources, backend, &mut async_rx).await;
         });
 
         Self {
@@ -196,10 +215,25 @@ impl DenoExtensionHost {
 
 #[async_trait]
 impl ExtensionHost for DenoExtensionHost {
-    async fn load(&self, entry: &Path) -> Result<LoadedExtension, ExtensionHostError> {
+    async fn load(&self, entry: &Path, key: &str) -> Result<LoadedExtension, ExtensionHostError> {
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
         self.requests
-            .send(Request::Load { entry: entry.to_path_buf(), reply: reply_tx })
+            .send(Request::Load { entry: entry.to_path_buf(), key: key.to_string(), reply: reply_tx })
+            .map_err(|_| ExtensionHostError::new("Extension host is no longer running"))?;
+        reply_rx
+            .await
+            .map_err(|_| ExtensionHostError::new("Extension host stopped before answering"))?
+            .map_err(ExtensionHostError::new)
+    }
+
+    async fn reload(&self, key: &str, new_key: &str) -> Result<LoadedExtension, ExtensionHostError> {
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        self.requests
+            .send(Request::Reload {
+                key: key.to_string(),
+                new_key: new_key.to_string(),
+                reply: reply_tx,
+            })
             .map_err(|_| ExtensionHostError::new("Extension host is no longer running"))?;
         reply_rx
             .await
@@ -258,6 +292,7 @@ impl ExtensionHost for DenoExtensionHost {
 
 async fn extension_runtime_loop(
     node_modules: BTreeMap<String, serde_json::Value>,
+    virtual_sources: Vec<(String, String)>,
     backend: Arc<dyn ExtensionBackend>,
     requests: &mut tokio::sync::mpsc::UnboundedReceiver<Request>,
 ) {
@@ -272,6 +307,9 @@ async fn extension_runtime_loop(
             crate::loader::VirtualSource::Js(crate::host::esm_facade_from_json(&exports, &names)),
         );
     }
+    for (specifier, source) in virtual_sources {
+        loader.register_virtual(specifier, crate::loader::VirtualSource::Js(source));
+    }
     let mut runtime = make_runtime(vec![pi_extension_ops::init()], Some(Rc::clone(&loader)));
     {
         let op_state = runtime.op_state();
@@ -281,7 +319,6 @@ async fn extension_runtime_loop(
         tracing::error!(target: "pi::js", "extension bootstrap failed: {e}");
         return;
     }
-    let mut next_key: u64 = 0;
 
     loop {
         tokio::select! {
@@ -289,9 +326,12 @@ async fn extension_runtime_loop(
             request = requests.recv() => {
                 let Some(request) = request else { break };
                 match request {
-                    Request::Load { entry, reply } => {
-                        next_key += 1;
-                        let result = load_extension(&mut runtime, &entry, next_key).await;
+                    Request::Load { entry, key, reply } => {
+                        let result = load_extension(&mut runtime, &entry, &key).await;
+                        let _ = reply.send(result);
+                    }
+                    Request::Reload { key, new_key, reply } => {
+                        let result = reload_extension(&mut runtime, &key, &new_key).await;
                         let _ = reply.send(result);
                     }
                     Request::Dispatch { key, event, payload, reply } => {
@@ -320,9 +360,9 @@ async fn extension_runtime_loop(
 async fn load_extension(
     runtime: &mut deno_core::JsRuntime,
     entry: &Path,
-    key: u64,
+    key: &str,
 ) -> Result<LoadedExtension, String> {
-    let key = format!("e{key}");
+    let key = key.to_string();
     // Import the entry dynamically from the runtime's bootstrap script: the
     // dynamic-import path drives every extension's dependency graph through
     // the event loop, for the first and all later loads.
@@ -380,9 +420,14 @@ async fn load_extension(
         global_object.set(scope, target_key, default_value);
     }
 
-    // Build the pi API for this extension and invoke the factory. The factory
-    // may be async: drive its completion through the event loop.
-    let create = format!("globalThis.__piApi = __piCreateApi({});", crate::host::js_string_literal(&key));
+    // Build the pi API for this extension (the record keeps the factory so
+    // `reload` can re-run it without re-importing the module) and invoke the
+    // factory. The factory may be async: drive its completion through the
+    // event loop.
+    let create = format!(
+        "__piCreateApi({}, globalThis.__piFactory);",
+        crate::host::js_string_literal(&key)
+    );
     runtime
         .execute_script("pi-extension-api.js", create)
         .map_err(|e| e.to_string())?;
@@ -409,6 +454,29 @@ async fn load_extension(
         .map_err(|e| format!("Extension summary is not valid JSON: {e}"))?;
     summary.key = key;
     summary.path = entry.to_path_buf();
+    Ok(summary)
+}
+
+async fn reload_extension(
+    runtime: &mut deno_core::JsRuntime,
+    key: &str,
+    new_key: &str,
+) -> Result<LoadedExtension, String> {
+    let script = format!(
+        "__piReload({}, {});",
+        crate::host::js_string_literal(key),
+        crate::host::js_string_literal(new_key)
+    );
+    runtime
+        .execute_script("pi-extension-reload.js", script)
+        .map_err(|e| e.to_string())?;
+    wait_for_done(runtime, "__piReloadDone")
+        .await
+        .map_err(|e| format!("factory: {e}"))?;
+    let summary_json = execute_json(runtime, "globalThis.__piReloadResult", "the reload summary")?;
+    let mut summary: LoadedExtension = serde_json::from_str(&summary_json)
+        .map_err(|e| format!("Extension summary is not valid JSON: {e}"))?;
+    summary.key = new_key.to_string();
     Ok(summary)
 }
 
@@ -625,14 +693,16 @@ const REGISTER_METHOD_SET = new Set([
 	"registerProvider",
 ]);
 
-globalThis.__piCreateApi = (key) => {
+globalThis.__piCreateApi = (key, factory) => {
 	globalThis.__piExts.set(key, {
 		events: [],
 		tools: [],
 		commands: [],
 		handlers: {},
+		factory,
 	});
-	return makeProxy(key, "");
+	globalThis.__piApi = makeProxy(key, "");
+	return globalThis.__piApi;
 };
 
 // Context passed to handlers and slots: methods route to the backend with a
@@ -706,6 +776,36 @@ globalThis.__piRunFactory = (key) => {
 		},
 		(error) => {
 			globalThis.__piFactoryDone = error instanceof Error ? error.message : String(error);
+		},
+	);
+};
+
+// Re-run a previously loaded extension's stored factory under a new key with
+// a fresh API object. The module is not re-imported (upstream's cached
+// factory path: module side effects run once per cache generation).
+globalThis.__piReload = (oldKey, newKey) => {
+	globalThis.__piReloadDone = undefined;
+	(async () => {
+		const old = globalThis.__piExts.get(oldKey);
+		if (!old || typeof old.factory !== "function") {
+			throw new Error("Extension " + oldKey + " has no factory to reload");
+		}
+		const record = globalThis.__piCreateApi(newKey, old.factory);
+		await old.factory(globalThis.__piApi);
+		return JSON.stringify({
+			key: newKey,
+			path: "",
+			events: record.events,
+			tools: record.tools,
+			commands: record.commands,
+		});
+	})().then(
+		(result) => {
+			globalThis.__piReloadResult = result;
+			globalThis.__piReloadDone = "ok";
+		},
+		(error) => {
+			globalThis.__piReloadDone = error instanceof Error ? error.message : String(error);
 		},
 	);
 };

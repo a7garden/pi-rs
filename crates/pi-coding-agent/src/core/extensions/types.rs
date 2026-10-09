@@ -37,6 +37,8 @@ use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use indexmap::IndexMap;
+
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 
@@ -3851,14 +3853,16 @@ pub struct Extension {
 	/// Shared with the loader API so subscriptions/unsubscriptions after
 	/// commit are visible to the runner (D40).
 	pub handlers: Arc<parking_lot::Mutex<HashMap<String, Vec<HandlerFn>>>>,
-	pub tools: HashMap<String, RegisteredTool>,
+	/// Insertion-ordered like upstream's `Map` (tools, commands, flags, and
+	/// shortcuts are listed in registration order).
+	pub tools: IndexMap<String, RegisteredTool>,
 	pub message_renderers: HashMap<String, MessageRenderer>,
 	pub tool_renderers: Option<Vec<ToolRendererResolver>>,
 	pub markdown_transformer: Option<MarkdownTransformer>,
 	pub entry_renderers: Option<HashMap<String, EntryRenderer>>,
-	pub commands: HashMap<String, RegisteredCommand>,
-	pub flags: HashMap<String, ExtensionFlag>,
-	pub shortcuts: HashMap<KeyId, ExtensionShortcut>,
+	pub commands: IndexMap<String, RegisteredCommand>,
+	pub flags: IndexMap<String, ExtensionFlag>,
+	pub shortcuts: IndexMap<KeyId, ExtensionShortcut>,
 }
 
 impl std::fmt::Debug for Extension {

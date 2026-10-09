@@ -233,13 +233,17 @@ pub async fn run_rpc_mode_with_io(
 	// per line (upstream: `void handleInputLine(line)`).
 	let (line_tx, mut line_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
 	let end_state = Arc::clone(&state);
+	// The production `StdinInput` reader thread invokes the closures outside
+	// any runtime context; spawn the end-of-stdin shutdown through the
+	// handle captured here (mode loop's runtime).
+	let end_runtime = tokio::runtime::Handle::current();
 	let detach = input.attach(
 		Arc::new(move |line: String| {
 			let _ = line_tx.send(line);
 		}),
 		Arc::new(move || {
 			let state = Arc::clone(&end_state);
-			tokio::spawn(async move { state.shutdown(0, false).await });
+			end_runtime.spawn(async move { state.shutdown(0, false).await });
 		}),
 	);
 	*state.detach_input.lock() = Some(detach);

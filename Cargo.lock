@@ -1930,6 +1930,7 @@ dependencies = [
  "pi-ai",
  "pi-codemode",
  "pi-mcp",
+ "pi-runtime",
  "reqwest",
  "semver",
  "serde",

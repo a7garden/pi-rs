@@ -2023,8 +2023,8 @@ pub async fn emit_project_trust_event(
 // ============================================================================
 // Tests — ported from `test/extensions-runner.test.ts` and the runner halves
 // of `test/suite/regressions/`. Extensions load through in-process factories
-// (`load_extension_from_factory`); the jiti/file suites run against the
-// loader seam in pi-runtime.
+// (`load_extension_from_factory`); the file-backed `.ts` suites run against
+// the loader's JS-host bridge (D107) in resource_loader_tests.
 // ============================================================================
 
 #[cfg(test)]

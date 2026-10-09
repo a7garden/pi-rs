@@ -4,7 +4,9 @@
 //! Spawns the agent in RPC mode and provides a typed API for all operations.
 //!
 //! Deviation **D94** — upstream spawns `node <cliPath>`; the client keeps
-//! that default (`program: "node"`) but the program is configurable. The
+//! that default (`program: "node"`) but the program is configurable. A
+//! custom program with no `cli_path` is spawned directly (no script
+//! argument; D109 — the live-CLI suite runs the built `pi` binary). The
 //! private-`send` test seam becomes a crate-internal transport override
 //! (upstream tests poke `privateClient.send`); aggregates without a
 //! `Deserialize` port (compaction, tree, commands) surface as
@@ -246,9 +248,19 @@ impl RpcClient {
 
 		*self.core.exit_error.lock() = None;
 
-		let cli_path = self.core.options.cli_path.clone().unwrap_or_else(|| "dist/cli.js".to_string());
+		let cli_path = self.core.options.cli_path.clone();
 		let program = self.core.options.program.clone().unwrap_or_else(|| "node".to_string());
-		let mut args: Vec<String> = vec![cli_path, "--mode".to_string(), "rpc".to_string()];
+		// D109: a custom program with no explicit script path is the CLI
+		// itself (the live-CLI tests spawn the built `pi` binary directly);
+		// the default `node` program keeps the upstream script default.
+		let script = match cli_path {
+			Some(path) => Some(path),
+			None if self.core.options.program.is_some() => None,
+			None => Some("dist/cli.js".to_string()),
+		};
+		let mut args: Vec<String> = script.into_iter().collect();
+		args.push("--mode".to_string());
+		args.push("rpc".to_string());
 
 		if let Some(provider) = &self.core.options.provider {
 			args.push("--provider".to_string());
@@ -262,6 +274,9 @@ impl RpcClient {
 
 		let mut command = tokio::process::Command::new(&program);
 		command.args(&args).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
+		// A client dropped without `stop` kills the agent instead of
+		// orphaning it (upstream teardown relies on vitest process cleanup).
+		command.kill_on_drop(true);
 		if let Some(cwd) = &self.core.options.cwd {
 			command.current_dir(cwd);
 		}

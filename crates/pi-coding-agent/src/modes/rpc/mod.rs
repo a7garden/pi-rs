@@ -6,6 +6,12 @@
 //! upstream `pi-server`/`pi-chord` socket protocol is a different, unrelated
 //! surface — `modes/rpc` is a direct JSONL protocol, so no pi-protocol/
 //! pi-chord types participate (mapping note, PORT_MAP rule 3).
+//!
+//! Tests: the upstream `test/rpc-client-*.test.ts` suites live in the
+//! module tests ([`rpc_client`], [`jsonl`]); the `test/rpc.test.ts`
+//! live-CLI suite (18 cases, credential-gated upstream via
+//! `describe.skipIf`) is ported 1:1 in `tests/rpc_live_cli_tests.rs`
+//! against the built `pi` binary (D94/D109/D110).
 
 pub mod jsonl;
 pub mod rpc_client;

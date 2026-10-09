@@ -1140,7 +1140,7 @@ pub async fn compact(
 
 	// Compute file lists and append to summary
 	let lists = compute_file_lists(file_ops);
-	let summary = summary + &format_file_operations(&lists.read_files, &lists.modified_files);
+	let summary = summary + format_file_operations(&lists.read_files, &lists.modified_files).as_str();
 
 	if first_kept_entry_id.is_empty() {
 		return Err("First kept entry has no UUID - session may need migration".to_string());

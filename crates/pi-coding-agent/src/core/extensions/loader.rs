@@ -1,17 +1,17 @@
 //! Port of `packages/coding-agent/src/core/extensions/loader.ts` — the
-//! extension loader. **Stand-in layer (D43).**
+//! extension loader.
 //!
 //! Upstream loads TypeScript/JavaScript extension modules through `jiti` and
-//! invokes their default-exported factory with a `pi` API object. Loading
-//! arbitrary TS/JS is impossible in Rust until the pi-runtime JS bridge
-//! exists, so this module ports the *host-side shell* of the loader: the
-//! module cache registry, the shared runtime construction with throwing
-//! action stubs, the `Extension` record shape, and the load pipeline —
-//! without any JS execution.
+//! invokes their default-exported factory with a `pi` API object. The
+//! host-side shell landed first as a stand-in (D43); the module seam is now
+//! bridged to pi-runtime's embedded deno_core host (D107): file-backed
+//! `.ts`/`.js` extensions are imported by [`pi_runtime::extensions::DenoExtensionHost`]
+//! and their factory's registration calls route back into the same loader
+//! API inline factories use, so file extensions produce real
+//! [`Extension`] records (handlers, tools, commands, flags, shortcuts).
 //!
-//! ## D43 — the loader is a stand-in until pi-runtime lands
+//! ## D43 — host-side shell (pre-bridge)
 //!
-//! What the stand-in does:
 //! - `create_extension_runtime()` mirrors upstream
 //!   `createExtensionRuntime()`: a shared [`ExtensionRuntime`] whose action
 //!   methods panic with upstream's "not initialized" message, whose
@@ -26,13 +26,10 @@
 //! - `load_extensions_cached()` walks the paths with upstream's pipeline:
 //!   resolve against the cwd, consult the cache by `(path, mtime)`, and
 //!   collect [`Extension`] records and [`LoadRecord`] errors. A path that
-//!   does not exist yields the stand-in error
-//!   `Extension path does not exist: <path>` (upstream surfaces the failure
-//!   as `Failed to load extension: Cannot find module …` from the jiti
-//!   import; the stand-in detects it earlier with the same `{ path, error }`
-//!   record shape). An existing file yields a stand-in [`Extension`] record
-//!   with empty handler/tool/command collections — upstream's shape after a
-//!   factory that registers nothing.
+//!   does not exist yields `Extension path does not exist: <path>` (upstream
+//!   surfaces the failure as `Failed to load extension: Cannot find module …`
+//!   from the jiti import; the port detects it earlier with the same
+//!   `{ path, error }` record shape).
 //! - `load_extension_from_factory()` mirrors upstream: it builds the
 //!   [`Extension`] skeleton (path, resolved path, synthetic source info,
 //!   empty collections) and invokes the factory through an
@@ -46,45 +43,61 @@
 //!   `discard()`); a later call on a failed API panics with upstream's
 //!   "failed to load" message.
 //!
-//! What the stand-in does *not* do (lands with pi-runtime):
-//! - No TS/JS module resolution, compilation, or import; cached factories
-//!   are stored as `Option<ExtensionFactory>` (`None` until the bridge can
-//!   produce real factories from files).
-//! - Action methods (`sendMessage`, `getSettings`, …) are throwing stubs;
-//!   `exec` returns a failed [`ExecResult`], `setModel` a future resolving
-//!   `false` (upstream rejects the promise).
-//! - `registerMcpServer`/`unregisterMcpServer`/`getMcpServers` are no-ops —
-//!   [`McpServerRegistry`] is an opaque stand-in (D29).
-//! - Queued registrations accumulate in the load-owned
-//!   [`RuntimeQueues`] block and are drained into
-//!   `ExtensionRuntimeState.pending_*` by `load_extensions_cached`; the
-//!   runner port consumes them from there.
-//! - An extension's `registerVirtualModel` route is context-aware; the
-//!   pending queue's context-free [`VirtualModelDefinition`] carries a
-//!   route stub that panics like the other pre-bind stubs until the runner
-//!   supplies a bound context.
+//! ## D107 — the module seam bridges to the JS host
+//!
+//! - A cache miss imports the file through the shared [`DenoExtensionHost`]
+//!   (`ExtensionHost::load`) and runs its default-exported factory. The JS
+//!   `pi` proxy's registration calls (`on`, `registerTool`,
+//!   `registerCommand`, `registerShortcut`, `registerFlag`,
+//!   `registerProvider`, `unregisterProvider`, `registerMcpServer`,
+//!   `unregisterMcpServer`) cross the JSON boundary as slot references and
+//!   route into the loader API, so the resulting [`Extension`] record is
+//!   indistinguishable from an inline factory's. A cache hit re-runs the
+//!   stored factory via `ExtensionHost::reload` without re-importing the
+//!   module (upstream's jiti `moduleCache: false` + path-keyed factory
+//!   cache).
+//! - Load failures wrap as `Failed to load extension: <message>` like
+//!   upstream's `loadExtension` catch.
+//! - Function- or component-valued registrations cannot cross the JSON
+//!   boundary and error the load: renderer registrations (TUI `Component`
+//!   pipeline, D56), `registerVirtualModel`/`registerNativeProvider`
+//!   (context-bound route/AbortSignal values, runner-bind work), and
+//!   `getArgumentCompletions`/`prepareArguments`/`namespace`/`annotations`.
+//!   Tool `execute` maps the upstream `AgentToolResult` JSON shape; the
+//!   abort signal / update callback / tool context arguments arrive `None`
+//!   until the runner binds them.
+//! - Action methods from JS (`sendMessage`, `getSettings`, …) report
+//!   upstream's "not initialized" error pre-bind; `getFlag` works (it reads
+//!   load state). The `pi.events` bus property and `ctx.*` proxies route
+//!   through the same channel and land with the runner-bind work.
+//! - The bare `typebox` specifier resolves to a minimal schema shim (the
+//!   embedded runtime has no npm installs; D108).
 
 use std::collections::HashMap;
+use std::path::Path;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::LazyLock;
 use std::time::SystemTime;
 
-use parking_lot::{Mutex, MutexGuard};
-use pi_agent::{AgentThinkingLevel, BoxFuture};
+use indexmap::IndexMap;
+use parking_lot::Mutex;
+use pi_agent::{AgentThinkingLevel, AgentToolResult, BoxFuture, ToolExecutionMode};
 use pi_ai::types::Model;
 use pi_ai::Provider as AiProvider;
+use pi_runtime::extensions::{DenoExtensionHost, DenoExtensionHostOptions, ExtensionBackend, ExtensionHost, ExtensionHostError};
 use serde_json::Value as JsonValue;
 
 use super::types::{
 	CustomMessageDraft, EntryRenderer, EventBus,
-	EventBusHandler, ExecOptions, ExecResult, Extension, ExtensionApi, ExtensionApiHandle, ExtensionFactory,
-	ExtensionFlag, ExtensionFlagType, ExtensionRuntime, ExtensionRuntimeState, ExtensionShortcut,
+	EventBusHandler, ExecOptions, ExecResult, Extension, ExtensionApi, ExtensionApiHandle, ExtensionContext, ExtensionFactory,
+	ExtensionFlag, ExtensionFlagType, ExtensionRuntime, ExtensionRuntimeState, ExtensionShortcut, ExtensionToolContext,
 	ExtensionVirtualModel, FlagOptions, FlagValue, HandlerFn, InlineExtension, KeyId, LoadExtensionsResult,
 	LoadRecord, MarkdownTransformer, McpServerConfig, McpServerRegistry, MessageRenderer, ModelRoute,
 	ModelRouteRequest, PendingNativeProviderRegistration, PendingProviderRegistration,
 	PendingVirtualModelRegistration, ProviderConfig, RegisteredCommand, RegisteredCommandOptions,
 	RegisteredMcpServer, RegisteredTool, SendMessageOptions, SendUserMessageContent, SendUserMessageOptions,
-	ShortcutOptions, SlashCommandInfo, ToolDefinition, ToolInfo, ToolRendererResolver, Unsubscribe,
+	ShortcutOptions, SlashCommandInfo, ToolDefinition, ToolExecute, ToolExposure, ToolInfo, ToolRendererResolver, Unsubscribe,
 	VirtualModelDefinition,
 };
 use crate::core::settings_manager::Settings;
@@ -739,6 +752,513 @@ impl ExtensionApi for LoaderApi {
 }
 
 // ============================================================================
+// JS host bridge (D107): file-backed extension modules load through
+// pi_runtime's embedded deno_core host. Registration calls from JS cross the
+// JSON boundary as slot references (`{"__piSlot": n}`) and route into the
+// same loader API inline factories use.
+// ============================================================================
+
+/// Bare-specifier JS shim for the `typebox` schema toolkit (upstream
+/// extensions import it as a real npm dependency; the embedded runtime has no
+/// npm installs — D108). Covers the schema combinators ported extensions use.
+const TYPEBOX_SHIM: &str = r#"
+const Optional = (schema) => schema;
+export const Type = {
+	Unknown: () => ({}),
+	Any: () => ({}),
+	Optional,
+	String: (options) => ({ type: "string", ...(options ?? {}) }),
+	Number: (options) => ({ type: "number", ...(options ?? {}) }),
+	Boolean: (options) => ({ type: "boolean", ...(options ?? {}) }),
+	Literal: (value) => ({ const: value }),
+	Array: (items, options) => ({ type: "array", items, ...(options ?? {}) }),
+	Object: (properties, options) => ({
+		type: "object",
+		properties: properties ?? {},
+		...(options ?? {}),
+	}),
+	Record: (_keys, values) => ({ type: "object", additionalProperties: values }),
+	Union: (options) => ({ anyOf: options ?? [] }),
+};
+export default { Type };
+"#;
+
+/// One live bridge binding: the loader API a host key's JS registration calls
+/// route into, plus the unsubscribes its `on` calls returned.
+struct BridgeTarget {
+	extension_path: String,
+	api: ExtensionApiHandle,
+	unsubscribers: Mutex<HashMap<u32, Unsubscribe>>,
+}
+
+/// Live bridge bindings (host key → target). The host serializes requests on
+/// its dedicated thread, so a key has at most one binding at a time.
+static BRIDGE_TARGETS: LazyLock<Mutex<HashMap<String, Arc<BridgeTarget>>>> = LazyLock::new(Mutex::default);
+
+static BRIDGE_KEY_SEQ: AtomicU64 = AtomicU64::new(0);
+
+fn bridge_next_key() -> String {
+	format!("bridge-{}", BRIDGE_KEY_SEQ.fetch_add(1, Ordering::Relaxed))
+}
+
+fn bridge_bind_target(key: &str, extension_path: &str, api: ExtensionApiHandle) {
+	BRIDGE_TARGETS.lock().insert(
+		key.to_string(),
+		Arc::new(BridgeTarget {
+			extension_path: extension_path.to_string(),
+			api,
+			unsubscribers: Mutex::new(HashMap::new()),
+		}),
+	);
+}
+
+fn bridge_unbind_target(key: &str) {
+	BRIDGE_TARGETS.lock().remove(key);
+}
+
+/// Test-only module-import counter (resolved path → host `load` count).
+/// Upstream counts module-level side effects through a `globalThis` key; the
+/// embedded host exposes no eval seam, so the bridge counts its own imports —
+/// the same observable (one import per path per cache generation).
+#[cfg(test)]
+static BRIDGE_IMPORT_COUNTS: LazyLock<Mutex<HashMap<String, u32>>> = LazyLock::new(Mutex::default);
+
+/// Read [`BRIDGE_IMPORT_COUNTS`] for one resolved path.
+#[cfg(test)]
+pub(crate) fn bridge_import_count(resolved_path: &str) -> u32 {
+	BRIDGE_IMPORT_COUNTS.lock().get(resolved_path).copied().unwrap_or(0)
+}
+
+fn bridge_target(key: &str) -> Result<Arc<BridgeTarget>, String> {
+	BRIDGE_TARGETS
+		.lock()
+		.get(key)
+		.cloned()
+		.ok_or_else(|| format!("No extension is loading under host key {key}"))
+}
+
+/// Run a loader-API call arriving from JS, mapping a Rust panic (upstream
+/// throws) to an op error so the JS factory rejects with the same message.
+fn bridge_catch<R>(f: impl FnOnce() -> R) -> Result<R, String> {
+	std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).map_err(|payload| {
+		payload
+			.downcast_ref::<String>()
+			.cloned()
+			.or_else(|| payload.downcast_ref::<&str>().map(|message| message.to_string()))
+			.unwrap_or_else(|| "extension registration failed".to_string())
+	})
+}
+
+/// The `{"__piSlot": n}` slot reference of a slotified function argument.
+fn bridge_slot(value: Option<&JsonValue>) -> Option<u32> {
+	value
+		.and_then(|value| value.get("__piSlot"))
+		.and_then(JsonValue::as_u64)
+		.and_then(|slot| u32::try_from(slot).ok())
+}
+
+/// Upstream `typeof` names for flag-default mismatch errors.
+fn bridge_json_type(value: &JsonValue) -> &'static str {
+	match value {
+		JsonValue::Bool(_) => "boolean",
+		JsonValue::Number(_) => "number",
+		JsonValue::String(_) => "string",
+		JsonValue::Array(_) | JsonValue::Object(_) | JsonValue::Null => "object",
+	}
+}
+
+/// Event handler crossing the bridge: the payload serializes into the host
+/// slot and the JSON result comes back (the `ctx` argument stays on the JS
+/// side, which supplies its own live proxy).
+fn bridge_event_handler(host: Arc<dyn ExtensionHost>, key: String, slot: u32) -> HandlerFn {
+	Arc::new(move |event: JsonValue, _ctx: ExtensionContext| {
+		let (host, key) = (Arc::clone(&host), key.clone());
+		Box::pin(async move { host.call_slot(&key, slot, event).await.map_err(|error| error.message) })
+	})
+}
+
+/// Command handler crossing the bridge (`handler(args, ctx)`); handler
+/// failures log like upstream's unhandled rejection.
+fn bridge_command_handler(
+	host: Arc<dyn ExtensionHost>,
+	key: String,
+	slot: u32,
+) -> super::types::CommandHandler {
+	Arc::new(move |args: String, _ctx: super::types::ExtensionCommandContext| {
+		let (host, key) = (Arc::clone(&host), key.clone());
+		Box::pin(async move {
+			if let Err(error) = host.call_slot(&key, slot, JsonValue::String(args)).await {
+				eprintln!("pi: extension command handler failed: {}", error.message);
+			}
+		})
+	})
+}
+
+/// Shortcut handler crossing the bridge (`handler(ctx)`).
+fn bridge_shortcut_handler(
+	host: Arc<dyn ExtensionHost>,
+	key: String,
+	slot: u32,
+) -> Arc<dyn Fn(ExtensionContext) -> BoxFuture<'static, ()> + Send + Sync> {
+	Arc::new(move |_ctx: ExtensionContext| {
+		let (host, key) = (Arc::clone(&host), key.clone());
+		Box::pin(async move {
+			if let Err(error) = host.call_slot(&key, slot, JsonValue::Null).await {
+				eprintln!("pi: extension shortcut handler failed: {}", error.message);
+			}
+		})
+	})
+}
+
+/// Tool `execute` crossing the bridge; the abort signal, update callback, and
+/// tool-context arguments arrive `None` until the runner binds them (D107).
+fn bridge_tool_execute(host: Arc<dyn ExtensionHost>, key: String, slot: u32) -> ToolExecute {
+	Arc::new(
+		move |_tool_call_id: String, args: JsonValue, _signal, _on_update, _ctx: Option<ExtensionToolContext>| {
+			let (host, key) = (Arc::clone(&host), key.clone());
+			Box::pin(async move {
+				let value = host.call_slot(&key, slot, args).await.map_err(|error| error.message)?;
+				bridge_tool_result(value)
+			})
+		},
+	)
+}
+
+/// Map a JS execute result onto [`AgentToolResult`] (upstream
+/// `AgentToolResult` object shape; other shapes error the tool call).
+fn bridge_tool_result(value: Option<JsonValue>) -> Result<AgentToolResult, String> {
+	let Some(object) = value.filter(|value| !value.is_null()) else {
+		return Ok(AgentToolResult::new(Vec::new(), JsonValue::Null));
+	};
+	if !object.is_object() {
+		return Err("Tool execute must return an AgentToolResult object.".to_string());
+	}
+	let content = match object.get("content") {
+		Some(value) => serde_json::from_value::<Vec<pi_ai::types::UserContent>>(value.clone())
+			.map_err(|error| format!("Tool result content is not valid content: {error}"))?,
+		None => Vec::new(),
+	};
+	Ok(AgentToolResult {
+		content,
+		details: object.get("details").cloned().unwrap_or(JsonValue::Null),
+		structured_content: object.get("structuredContent").filter(|value| !value.is_null()).cloned(),
+		usage: object
+			.get("usage")
+			.filter(|value| !value.is_null())
+			.and_then(|value| serde_json::from_value(value.clone()).ok()),
+		is_error: object.get("isError").and_then(JsonValue::as_bool),
+		terminate: object.get("terminate").and_then(JsonValue::as_bool),
+	})
+}
+
+/// Rust side of the bridge ([`ExtensionBackend`]): routes JS `pi` calls into
+/// the loader API bound to the extension's host key.
+struct BridgeBackend;
+
+/// `registerCommand`-style methods arrive as a JSON argument array.
+fn bridge_args(payload: &JsonValue, method: &str) -> Result<Vec<JsonValue>, String> {
+	let Ok(args) = serde_json::from_value::<Vec<JsonValue>>(payload.clone()) else {
+		return Err(format!("{method} registration must carry an argument array."));
+	};
+	Ok(args)
+}
+
+#[async_trait::async_trait]
+impl ExtensionBackend for BridgeBackend {
+	async fn call(&self, ext: &str, method: &str, args: JsonValue) -> Result<JsonValue, String> {
+		let target = bridge_target(ext)?;
+		match method {
+			"getFlag" => {
+				let name = args.as_str().ok_or("getFlag requires a string name")?;
+				let value = bridge_catch(|| target.api.get_flag(name))?;
+				Ok(value
+					.map(|value| serde_json::to_value(value).unwrap_or(JsonValue::Null))
+					.unwrap_or(JsonValue::Null))
+			}
+			_ => Err(NOT_INITIALIZED.to_string()),
+		}
+	}
+
+	fn register(&self, ext: &str, method: &str, payload: JsonValue) -> Result<JsonValue, String> {
+		let target = bridge_target(ext)?;
+		match method {
+			"on" => {
+				let event = payload
+					.get("event")
+					.and_then(JsonValue::as_str)
+					.ok_or("on() requires an event name")?
+					.to_string();
+				let slot = bridge_slot(payload.get("handler"))
+					.ok_or_else(|| format!("Event handler for \"{event}\" must be a function."))?;
+				let host = extension_host();
+				let key = ext.to_string();
+				let unsubscribe = bridge_catch(|| target.api.on(&event, bridge_event_handler(host, key, slot)))?;
+				target.unsubscribers.lock().insert(slot, unsubscribe);
+				Ok(JsonValue::Null)
+			}
+			"unsubscribe" => {
+				let slot =
+					bridge_slot(payload.get("handler")).ok_or("unsubscribe() requires a handler slot")?;
+				if let Some(unsubscribe) = target.unsubscribers.lock().remove(&slot) {
+					bridge_catch(move || unsubscribe())?;
+				}
+				Ok(JsonValue::Null)
+			}
+			"registerTool" => {
+				let name = payload
+					.get("name")
+					.and_then(JsonValue::as_str)
+					.filter(|name| !name.is_empty())
+					.ok_or_else(|| {
+						format!("Tool registered by extension \"{}\" must have a non-empty string name.", target.extension_path)
+					})?
+					.to_string();
+				let label = payload.get("label").and_then(JsonValue::as_str).unwrap_or(&name).to_string();
+				let description =
+					payload.get("description").and_then(JsonValue::as_str).unwrap_or_default().to_string();
+				let parameters = payload.get("parameters").cloned().unwrap_or(JsonValue::Null);
+				let mut tool = ToolDefinition::new(name.clone(), label, description, parameters);
+				tool.prompt_snippet = payload.get("promptSnippet").and_then(JsonValue::as_str).map(str::to_string);
+				tool.prompt_guidelines = payload
+					.get("promptGuidelines")
+					.and_then(JsonValue::as_array)
+					.map(|items| items.iter().filter_map(JsonValue::as_str).map(str::to_string).collect::<Vec<_>>());
+				tool.output_schema = payload.get("outputSchema").filter(|value| !value.is_null()).cloned();
+				tool.exposure = match payload.get("exposure").filter(|value| !value.is_null()) {
+					Some(value) => Some(serde_json::from_value::<ToolExposure>(value.clone())
+						.map_err(|error| format!("Invalid exposure for tool \"{name}\": {error}"))?),
+					None => None,
+				};
+				tool.execution_mode = match payload.get("executionMode").and_then(JsonValue::as_str) {
+					Some("sequential") => Some(ToolExecutionMode::Sequential),
+					Some("parallel") => Some(ToolExecutionMode::Parallel),
+					Some(other) => {
+						return Err(format!("Invalid executionMode \"{other}\" for tool \"{name}\"."))
+					}
+					None => None,
+				};
+				tool.default_active = payload.get("defaultActive").and_then(JsonValue::as_bool);
+				if let Some(slot) = bridge_slot(payload.get("execute")) {
+					tool.execute = bridge_tool_execute(extension_host(), ext.to_string(), slot);
+				}
+				bridge_catch(move || target.api.register_tool(tool))?;
+				Ok(JsonValue::Null)
+			}
+			"registerCommand" => {
+				let args = bridge_args(&payload, method)?;
+				let name = args
+					.first()
+					.and_then(JsonValue::as_str)
+					.ok_or_else(|| {
+						format!(
+							"Command registered by extension \"{}\" must have a non-empty string name. Use pi.registerCommand(\"name\", {{ description, handler }}).",
+							target.extension_path
+						)
+					})?
+					.to_string();
+				let options = args.get(1).cloned().unwrap_or(JsonValue::Null);
+				let slot = bridge_slot(options.get("handler")).ok_or_else(|| {
+					format!("Command \"/{name}\" registered by extension \"{}\" must define handler().", target.extension_path)
+				})?;
+				let description = options.get("description").and_then(JsonValue::as_str).map(str::to_string);
+				let host = extension_host();
+				let key = ext.to_string();
+				let handler = bridge_command_handler(host, key, slot);
+				bridge_catch(move || {
+					target
+						.api
+						.register_command(&name, RegisteredCommandOptions { description, get_argument_completions: None, handler })
+				})?;
+				Ok(JsonValue::Null)
+			}
+			"registerShortcut" => {
+				let args = bridge_args(&payload, method)?;
+				let shortcut = args
+					.first()
+					.and_then(JsonValue::as_str)
+					.ok_or("registerShortcut requires a key id")?
+					.to_string();
+				let options = args.get(1).cloned().unwrap_or(JsonValue::Null);
+				let slot = bridge_slot(options.get("handler"))
+					.ok_or_else(|| format!("Shortcut \"{shortcut}\" must define handler()."))?;
+				let description = options.get("description").and_then(JsonValue::as_str).map(str::to_string);
+				let host = extension_host();
+				let key = ext.to_string();
+				let handler = bridge_shortcut_handler(host, key, slot);
+				bridge_catch(move || {
+					target.api.register_shortcut(shortcut.clone(), ShortcutOptions { description, handler })
+				})?;
+				Ok(JsonValue::Null)
+			}
+			"registerFlag" => {
+				let args = bridge_args(&payload, method)?;
+				let name = args
+					.first()
+					.and_then(JsonValue::as_str)
+					.ok_or("registerFlag requires a flag name")?
+					.to_string();
+				let options = args.get(1).cloned().unwrap_or(JsonValue::Null);
+				let flag_type = options
+					.get("type")
+					.and_then(JsonValue::as_str)
+					.ok_or_else(|| format!("Flag \"{name}\" must declare type \"boolean\" or \"string\"."))?;
+				let description = options.get("description").and_then(JsonValue::as_str).map(str::to_string);
+				let default = options.get("default").filter(|value| !value.is_null());
+				let flag_options = match flag_type {
+					"boolean" => {
+						if let Some(value) = default {
+							if !value.is_boolean() {
+								return Err(format!(
+									"Invalid default for flag \"{name}\": expected boolean, got {}",
+									bridge_json_type(value)
+								));
+							}
+						}
+						FlagOptions::Boolean { description, default: default.and_then(JsonValue::as_bool) }
+					}
+					"string" => {
+						if let Some(value) = default {
+							if !value.is_string() {
+								return Err(format!(
+									"Invalid default for flag \"{name}\": expected string, got {}",
+									bridge_json_type(value)
+								));
+							}
+						}
+						FlagOptions::String { description, default: default.and_then(JsonValue::as_str).map(str::to_string) }
+					}
+					other => {
+						return Err(format!(
+							"Invalid type \"{other}\" for flag \"{name}\": expected \"boolean\" or \"string\"."
+						))
+					}
+				};
+				bridge_catch(move || target.api.register_flag(&name, flag_options))?;
+				Ok(JsonValue::Null)
+			}
+			"registerProvider" => {
+				let args = bridge_args(&payload, method)?;
+				let name = args
+					.first()
+					.and_then(JsonValue::as_str)
+					.ok_or("registerProvider requires a provider name")?
+					.to_string();
+				let config: ProviderConfig =
+					serde_json::from_value(args.get(1).cloned().unwrap_or(JsonValue::Null))
+						.map_err(|error| format!("Invalid provider config for \"{name}\": {error}"))?;
+				bridge_catch(move || target.api.register_provider(&name, config))?;
+				Ok(JsonValue::Null)
+			}
+			"unregisterProvider" => {
+				let name = payload.as_str().ok_or("unregisterProvider requires a provider name")?;
+				bridge_catch(|| target.api.unregister_provider(name))?;
+				Ok(JsonValue::Null)
+			}
+			"registerMcpServer" => {
+				let args = bridge_args(&payload, method)?;
+				let name = args
+					.first()
+					.and_then(JsonValue::as_str)
+					.ok_or("registerMcpServer requires a server name")?
+					.to_string();
+				let config = McpServerConfig(args.get(1).cloned().unwrap_or(JsonValue::Null));
+				bridge_catch(move || target.api.register_mcp_server(&name, config))?;
+				Ok(JsonValue::Null)
+			}
+			"unregisterMcpServer" => {
+				let name = payload.as_str().ok_or("unregisterMcpServer requires a server name")?;
+				bridge_catch(|| target.api.unregister_mcp_server(name))?;
+				Ok(JsonValue::Null)
+			}
+			// Function- or component-valued registrations cannot cross the
+			// JSON boundary (D107).
+			"registerMessageRenderer" | "registerEntryRenderer" | "registerMarkdownTransformer"
+			| "registerToolRenderer" => Err(
+				"Renderer registration from file-backed extensions is not supported over the JSON bridge (D107): the renderer pipeline is TUI-bound (D56)."
+					.to_string(),
+			),
+			"registerVirtualModel" => Err(
+				"registerVirtualModel from file-backed extensions is not supported over the JSON bridge (D107): the route callback carries a live context (runner-bind work)."
+					.to_string(),
+			),
+			"registerNativeProvider" => Err(
+				"registerProvider(provider) from file-backed extensions is not supported over the JSON bridge (D107): native provider objects cannot cross the JSON boundary."
+					.to_string(),
+			),
+			other => Err(format!("Unknown extension API method \"{other}\".")),
+		}
+	}
+}
+
+/// The shared bridge host: one embedded JS runtime per process; loads
+/// serialize on its dedicated thread. Registers the `typebox` shim (D108).
+static EXTENSION_HOST: LazyLock<Arc<dyn ExtensionHost>> = LazyLock::new(|| {
+	let options = DenoExtensionHostOptions {
+		virtual_sources: vec![("typebox".to_string(), TYPEBOX_SHIM.to_string())],
+		..Default::default()
+	};
+	Arc::new(DenoExtensionHost::new(Arc::new(BridgeBackend), options))
+});
+
+fn extension_host() -> Arc<dyn ExtensionHost> {
+	Arc::clone(&*EXTENSION_HOST)
+}
+
+/// Import `resolved_path` through the JS host and run its default-exported
+/// factory against a fresh loader API. Returns the extension plus the cached
+/// factory that re-runs the same JS factory without re-importing the module
+/// (upstream `extensionCache.set(path, factory)`).
+async fn load_extension_via_host(
+	resolved_path: &str,
+	extension_path: &str,
+	event_bus: Arc<dyn EventBus>,
+	runtime: Option<ExtensionRuntime>,
+) -> Result<(Extension, ExtensionFactory), String> {
+	let host = extension_host();
+	let source_key = bridge_next_key();
+	let load_factory: ExtensionFactory = {
+		let host = Arc::clone(&host);
+		let entry = resolved_path.to_string();
+		let source_key = source_key.clone();
+		let extension_path = extension_path.to_string();
+		Arc::new(move |api: ExtensionApiHandle| {
+			let host = Arc::clone(&host);
+			let (entry, key, extension_path) = (entry.clone(), source_key.clone(), extension_path.clone());
+			Box::pin(async move {
+				bridge_bind_target(&key, &extension_path, api);
+				let result = host.load(Path::new(&entry), &key).await;
+				bridge_unbind_target(&key);
+				result.map(|_| ()).map_err(|error: ExtensionHostError| error.message)
+			}) as BoxFuture<'static, Result<(), String>>
+		})
+	};
+	// Count the module import (upstream counts module-level side effects;
+	// the host exposes no eval seam, so the bridge counts its own imports).
+	#[cfg(test)]
+	{
+		*BRIDGE_IMPORT_COUNTS.lock().entry(resolved_path.to_string()).or_insert(0) += 1;
+	}
+	let extension = initialize_extension(load_factory, extension_path, resolved_path, event_bus, runtime).await?;
+	let cached_factory: ExtensionFactory = {
+		let host = Arc::clone(&host);
+		let source_key = source_key.clone();
+		let extension_path = extension_path.to_string();
+		Arc::new(move |api: ExtensionApiHandle| {
+			let host = Arc::clone(&host);
+			let (source_key, key, extension_path) =
+				(source_key.clone(), bridge_next_key(), extension_path.clone());
+			Box::pin(async move {
+				bridge_bind_target(&key, &extension_path, api);
+				let result = host.reload(&source_key, &key).await;
+				bridge_unbind_target(&key);
+				result.map(|_| ()).map_err(|error: ExtensionHostError| error.message)
+			}) as BoxFuture<'static, Result<(), String>>
+		})
+	};
+	Ok((extension, cached_factory))
+}
+
+// ============================================================================
 // Extension records and the load pipeline
 // ============================================================================
 
@@ -760,14 +1280,14 @@ fn create_extension(extension_path: &str, resolved_path: &str) -> Extension {
 		replaceable: None,
 		source_info: create_synthetic_source_info(extension_path, &source, None, None, base_dir.as_deref()),
 		handlers: Arc::new(Mutex::new(HashMap::new())),
-		tools: HashMap::new(),
+		tools: IndexMap::new(),
 		message_renderers: HashMap::new(),
 		tool_renderers: None,
 		markdown_transformer: None,
 		entry_renderers: None,
-		commands: HashMap::new(),
-		flags: HashMap::new(),
-		shortcuts: HashMap::new(),
+		commands: IndexMap::new(),
+		flags: IndexMap::new(),
+		shortcuts: IndexMap::new(),
 	}
 }
 
@@ -777,12 +1297,14 @@ struct LoadedExtension {
 	error: Option<String>,
 }
 
-/// Stand-in `loadExtension`: resolve the path, fail with the stand-in
-/// missing-path error, reuse the cached factory entry by `(path, mtime)`,
-/// and produce a stand-in `Extension` record — no JS execution (D43).
-fn load_extension(
+/// `loadExtension`: resolve the path, fail early on a missing path, reuse
+/// the cached factory entry by `(path, mtime)`, and otherwise import the
+/// module through the JS host bridge (D107).
+async fn load_extension(
 	extension_path: &str,
 	cwd: &str,
+	event_bus: Arc<dyn EventBus>,
+	runtime: Option<ExtensionRuntime>,
 	cache_token: Option<&CacheToken>,
 ) -> LoadedExtension {
 	let resolved_path = resolve_path(extension_path, cwd);
@@ -795,35 +1317,51 @@ fn load_extension(
 
 	let mtime = file_mtime(&resolved_path);
 	if let Some(token) = cache_token {
-		// A cache hit skips the (stand-in) module import, exactly like
-		// upstream's cached-factory path.
-		let _factory = cached_factory(&resolved_path, mtime, token);
-		store_cache_entry(&resolved_path, mtime, None, token);
+		// A cache hit re-runs the cached factory without re-importing the
+		// module (upstream `loadExtensionModule`'s cached-factory path).
+		if let Some(factory) = cached_factory(&resolved_path, mtime, token) {
+			return match initialize_extension(factory, extension_path, &resolved_path, event_bus, runtime).await {
+				Ok(extension) => LoadedExtension { extension: Some(extension), error: None },
+				Err(message) => LoadedExtension {
+					extension: None,
+					error: Some(format!("Failed to load extension: {message}")),
+				},
+			};
+		}
 	}
 
-	// Stand-in: no module to import, hence no factory to run — the record is
-	// upstream's `Extension` shape with empty collections (D43).
-	LoadedExtension { extension: Some(create_extension(extension_path, &resolved_path)), error: None }
+	// Cache miss: import the module through the JS host and run its
+	// default-exported factory (D107).
+	match load_extension_via_host(&resolved_path, extension_path, event_bus, runtime).await {
+		Ok((extension, cached_factory)) => {
+			if let Some(token) = cache_token {
+				store_cache_entry(&resolved_path, mtime, Some(cached_factory), token);
+			}
+			LoadedExtension { extension: Some(extension), error: None }
+		}
+		Err(message) => LoadedExtension {
+			extension: None,
+			error: Some(format!("Failed to load extension: {message}")),
+		},
+	}
 }
 
-/// Create an `Extension` from a factory function
-/// (`loadExtensionFromFactory`). Builds the skeleton, invokes the factory
-/// through an [`ExtensionApiHandle`], and maps a factory `Err` to
-/// `Err(message)`.
-pub async fn load_extension_from_factory(
+/// Invoke `factory` against a fresh loader API and collect the resulting
+/// extension (`initializeExtension`). A factory `Err` — or panic — maps to
+/// `Err(message)` and marks the API failed (`discard`).
+async fn initialize_extension(
 	factory: ExtensionFactory,
-	cwd: &str,
+	extension_path: &str,
+	resolved_path: &str,
 	event_bus: Arc<dyn EventBus>,
 	runtime: Option<ExtensionRuntime>,
-	extension_path: &str,
 ) -> Result<Extension, String> {
-	let resolved_cwd = resolve_path_cwd(cwd);
 	let (runtime, queues) = match runtime {
 		Some(runtime) => (runtime, Arc::new(Mutex::new(RuntimeQueues::default()))),
 		None => create_extension_runtime_shared(),
 	};
 
-	let extension = create_extension(extension_path, extension_path);
+	let extension = create_extension(extension_path, resolved_path);
 	let handlers = Arc::clone(&extension_handlers(&extension));
 	let api = Arc::new(LoaderApi {
 		inner: Mutex::new(ApiInner {
@@ -877,6 +1415,23 @@ pub async fn load_extension_from_factory(
 	}
 }
 
+/// Create an `Extension` from a factory function
+/// (`loadExtensionFromFactory`). Builds the skeleton, invokes the factory
+/// through an [`ExtensionApiHandle`], and maps a factory `Err` to
+/// `Err(message)`.
+pub async fn load_extension_from_factory(
+	factory: ExtensionFactory,
+	cwd: &str,
+	event_bus: Arc<dyn EventBus>,
+	runtime: Option<ExtensionRuntime>,
+	extension_path: &str,
+) -> Result<Extension, String> {
+	// Upstream resolves the cwd and passes it as initializeExtension's `cwd`;
+	// the port's loader API carries no cwd (D43 scope note).
+	let _resolved_cwd = resolve_path_cwd(cwd);
+	initialize_extension(factory, extension_path, extension_path, event_bus, runtime).await
+}
+
 /// Load extensions from paths, reusing cached module factories
 /// (`loadExtensionsCached`).
 pub async fn load_extensions_cached(
@@ -887,7 +1442,7 @@ pub async fn load_extensions_cached(
 ) -> LoadExtensionsResult {
 	let resolved_cwd = resolve_path_cwd(cwd);
 	let cache_token = use_extension_cache_cwd(&resolved_cwd);
-	let (mut runtime, queues) = match runtime {
+	let (runtime, queues) = match runtime {
 		Some(runtime) => (runtime, Arc::new(Mutex::new(RuntimeQueues::default()))),
 		None => create_extension_runtime_shared(),
 	};
@@ -895,7 +1450,14 @@ pub async fn load_extensions_cached(
 	let mut extensions = Vec::new();
 	let mut errors = Vec::new();
 	for extension_path in paths {
-		let loaded = load_extension(extension_path, &resolved_cwd, Some(&cache_token));
+		let loaded = load_extension(
+			extension_path,
+			&resolved_cwd,
+			Arc::clone(&event_bus),
+			Some(runtime.clone()),
+			Some(&cache_token),
+		)
+		.await;
 		if let Some(error) = loaded.error {
 			errors.push(LoadRecord { path: extension_path.clone(), error });
 			continue;

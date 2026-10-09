@@ -4,7 +4,8 @@
 //! `InteractiveMode`/`runPrintMode`/`runRpcMode` from `modes/`. The modes
 //! module ports separately; this module consumes it through the
 //! [`ModeDispatcher`] trait installed with [`set_mode_dispatcher`]. Without
-//! a dispatcher, print/json/rpc modes exit with an error naming the seam.
+//! a dispatcher, print/json/rpc modes exit with an error naming the seam;
+//! the `pi` binary target (D109) installs the production runners.
 //!
 //! Further documented omissions (see crate docs D103/D104):
 //! - `takeOverStdout`/`restoreStdout`, http dispatcher/proxy configuration,
@@ -93,12 +94,14 @@ pub struct PrintModeOptions {
 	pub initial_images: Vec<pi_ai::types::ImageContent>,
 }
 
-/// Installed print/rpc mode runners (**D102** seam).
+/// Installed print/rpc mode runners (**D102** seam). The runtime is passed
+/// by value: the production installer (the `pi` binary, D109) wraps it in
+/// the owning [`crate::modes::AgentSessionRuntimeHandle`].
 pub trait ModeDispatcher: Send + Sync {
 	/// Run print mode; returns the process exit code (`runPrintMode`).
-	fn run_print_mode(&self, runtime: &AgentSessionRuntime, options: PrintModeOptions) -> i32;
+	fn run_print_mode(&self, runtime: AgentSessionRuntime, options: PrintModeOptions) -> i32;
 	/// Run RPC mode until the connection closes (`runRpcMode`).
-	fn run_rpc_mode(&self, runtime: &AgentSessionRuntime);
+	fn run_rpc_mode(&self, runtime: AgentSessionRuntime);
 }
 
 static MODE_DISPATCHER: OnceLock<Box<dyn ModeDispatcher>> = OnceLock::new();
@@ -1115,7 +1118,7 @@ pub async fn main(args: Vec<String>, _options: Option<MainOptions>) {
 
 	match app_mode {
 		AppMode::Rpc => match mode_dispatcher() {
-			Some(dispatcher) => dispatcher.run_rpc_mode(&runtime),
+			Some(dispatcher) => dispatcher.run_rpc_mode(runtime),
 			None => print_mode_unavailable(AppMode::Rpc),
 		},
 		AppMode::Interactive => {
@@ -1131,7 +1134,7 @@ pub async fn main(args: Vec<String>, _options: Option<MainOptions>) {
 				initial_images,
 			};
 			let exit_code = mode_dispatcher()
-				.map(|dispatcher| dispatcher.run_print_mode(&runtime, options))
+				.map(|dispatcher| dispatcher.run_print_mode(runtime, options))
 				.unwrap_or_else(|| print_mode_unavailable(app_mode));
 			if exit_code != 0 {
 				std::process::exit(exit_code);

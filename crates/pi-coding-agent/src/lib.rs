@@ -33,7 +33,7 @@
 //! | `modes/interactive/theme/` (`theme.ts`, `theme-json.ts`, `system-theme.ts`) | [`theme`] | complete — portable surface (D56, D56d); TUI component themes, cli-highlight bridge, and HTML-export helpers defer with the interactive mode (D56d) |
 //! | `@earendil-works/pi-tui` (capability detection) | [`utils::tui_compat`] | minimal (D56); moves to a future `pi-tui` crate |
 //! | `core/extensions/types.ts` | [`core::extensions::types`] | complete — type foundation (D27–D31) plus runner-driven additions (D40–D42, D46) |
-//! | `core/extensions/loader.ts` | [`core::extensions::loader`] | stand-in layer complete (D40, D43, D52–D54; jiti/TS module seam lands with pi-runtime) |
+//! | `core/extensions/loader.ts` | [`core::extensions::loader`] | complete (D40, D43, D52–D54, D107/D108; the TS/JS module seam bridges to the embedded JS host) |
 //! | `core/extensions/runner.ts` | [`core::extensions::runner`] | complete — portable surface (D40–D45; session/agent integration dispatches land with AgentSession) |
 //! | `core/extensions/wrapper.ts` | [`core::extensions::wrapper`] | complete |
 //! | `core/extensions/index.ts` | [`core::extensions::index`] | complete (runtime re-exports; type-only re-exports stay in [`core::extensions::types`]) |
@@ -65,6 +65,7 @@
 //! | `test/tools.test.ts` | `core::tools::tools_tests` + `tests/tools_image_tests.rs` (85 cases, 1:1; image cases split out for photon-seam process isolation, D36) | complete |
 //! | `core/tools/renderers/` | — | deferred (TUI renderer layer; D32) |
 //! | `extensions/` (mcp, tool-search, llama, codemode) | [`extensions`] | see [`extensions`] module docs (D80+) |
+//! | `src/cli.ts` (`bin: pi` entry) | `src/bin/pi.rs` binary target | complete (D109; dispatcher over print/rpc runners, interactive excluded) |
 //!
 //! Not ported yet (next passes), in dependency order:
 //! `core/agent-session.ts` (`AgentSession` class), `core/agent-session-runtime.ts`,
@@ -81,8 +82,9 @@
 //! ports with it, D47),
 //! `core/system-prompt.ts`, `core/slash-commands.ts`,
 //! `extensions/{mcp,tool-search,llama,codemode}/`, `experimental/`,
-//! `services/`, `plugins/`, `durable/`, `migrations/`, `rpc-entry`,
-//! `main.ts`, and TUI-only utils (`modes/interactive/**`).
+//! `services/`, `plugins/`, `durable/`, `migrations/`, and TUI-only utils
+//! (`modes/interactive/**`). `rpc-entry`, `main.ts`, and the `pi` binary
+//! target (`src/cli.ts` upstream) have since landed (D102/D109).
 //!
 //! # Deviations from upstream
 //!
@@ -371,14 +373,14 @@
 //!   `Extension` object *is* the live handler map; the port stores
 //!   `Arc<Mutex<HashMap<...>>>` so loader-API subscriptions and
 //!   unsubscriptions after commit stay visible to the runner.
-//! - **D43 — the loader is a stand-in until pi-runtime lands.** No TS/JS
-//!   module resolution: `load_extensions_cached` walks the upstream pipeline
-//!   (resolve, `(path, mtime)` cache, error records with upstream texts)
-//!   without jiti, and provider/virtual-model registrations queue exactly
-//!   like upstream's pre-bind runtime. Deep MCP config validation lands
-//!   with the mcp-servers module port (name-shape, ownership, and
-//!   namespace-clash checks run in the loader). The `operations.exec`
-//!   function check of `user_bash` results is bridge work.
+//! - **D43 — loader shell before the JS bridge.** The loader's host-side
+//!   shell (runtime construction, `(path, mtime)` cache, error records with
+//!   upstream texts) landed as a stand-in while pi-runtime was pending; D107
+//!   bridges the module seam itself. Provider/virtual-model registrations
+//!   queue exactly like upstream's pre-bind runtime. Deep MCP config
+//!   validation lands with the mcp-servers module port (name-shape,
+//!   ownership, and namespace-clash checks run in the loader). The
+//!   `operations.exec` function check of `user_bash` results is bridge work.
 //! - **D44 — `buildSystemPrompt` is a renderer seam.** The runner takes a
 //!   `set_system_prompt_renderer` closure; the default now calls the real
 //!   `core::system_prompt` builder, and `ctx.getSystemPrompt()` re-renders
@@ -402,8 +404,9 @@
 //!   the pi-manifest module port replaces `read_pi_manifest_extensions`.
 //! - **D54 — post-bind provider registration from captured `pi` objects
 //!   stays queued.** Upstream `pi.registerProvider` after `bindCore` takes
-//!   effect immediately; the loader stand-in's API keeps its private queue,
-//!   so immediate-effect registration lands with the pi-runtime loader seam.
+//!   effect immediately; the loader API keeps its private queue, so
+//!   immediate-effect registration lands with the runner-bind work (D107
+//!   scopes).
 //! - **D55 — package-manager dependency stand-ins and seams.**
 //!   `isStdoutTakenOver` (upstream `core/output-guard.ts`, unported) is a
 //!   stand-in returning `false`; test mocks of private methods become the
@@ -657,10 +660,9 @@
 //! - **D94 — RPC client spawn ([`modes::rpc::rpc_client`]).** Spawns
 //!   `node <cliPath>` by default with a configurable program; the
 //!   private-`send` test seam is a crate-internal transport override. The
-//!   upstream `test/rpc.test.ts` live-CLI suite (17 cases) is deferred: it
-//!   requires the built CLI process (`dist/cli.js` upstream; no Rust CLI
-//!   binary exists yet) on top of the upstream credential gate — port it
-//!   with the CLI entry point.
+//!   upstream `test/rpc.test.ts` live-CLI suite (18 cases) is ported as
+//!   `tests/rpc_live_cli_tests.rs` against the built `pi` binary
+//!   (`CARGO_BIN_EXE_pi`; D109/D110).
 //! - **D80 — export-html assets and theme export helpers
 //!   ([`core::export_html`]).** Template assets (`template.html/css/js`,
 //!   `vendor/marked.min.js`, `vendor/highlight.min.js`) are embedded verbatim
@@ -764,11 +766,12 @@
 //! [`core::prompt_templates`]; `test/package-manager.test.ts` (portable,
 //! network-free cases over the `CommandRunner` seam) lives in
 //! `core::package_manager_tests`; and upstream `test/resource-loader.test.ts`
-//! + `test/resource-loader-theme.test.ts` cases that do not execute extension
-//! JS or construct an `AgentSession`/`ExtensionRunner` are ported 1:1 in
-//! [`core::resource_loader`] `resource_loader_tests` module (deferred cases
-//! listed there). Upstream `test/virtual-models.test.ts` portable suites
-//! (`getBranchSelection`) plus direct `create_virtual_model` /
+//! + `test/resource-loader-theme.test.ts` cases that do not construct an
+//! `AgentSession` are ported 1:1 in [`core::resource_loader`]
+//! `resource_loader_tests` — the extension-JS-dependent cases execute real
+//! `.ts` fixtures through the embedded host since D107 (only full
+//! `AgentSession` constructions defer). Upstream `test/virtual-models.test.ts`
+//! portable suites (`getBranchSelection`) plus direct `create_virtual_model` /
 //! `with_virtual_models` catalog, filtering and unrouted-stream coverage live
 //! in [`core::virtual_models::virtual_models_tests`]; its `ModelRuntime` and
 //! `createAgentSession` describe blocks defer with those ports.
@@ -818,6 +821,66 @@
 //!   `KeybindingsManager` and default-key tables stay behind the pi-tui
 //!   exclusion, and output ordering covers the ported key list with unknown
 //!   keys sorted alphabetically afterwards.
+//! - **D107 — extension module bridge
+//!   ([`core::extensions::loader`]).** File-backed `.ts`/`.js` extensions
+//!   load through a process-global
+//!   [`pi_runtime::extensions::DenoExtensionHost`]: the host imports the
+//!   entry (swc transpile), runs its default-exported factory against a JS
+//!   `pi` proxy whose registration calls cross the JSON boundary as
+//!   `{"__piSlot": n}` slot references and route into the loader API, so
+//!   file extensions produce the same [`core::extensions::types::Extension`]
+//!   records inline factories do. `ExtensionHost::load` takes a
+//!   caller-chosen key (upstream jiti has no equivalent handle), and the new
+//!   `ExtensionHost::reload` re-runs a stored factory without re-importing
+//!   the module (upstream jiti `moduleCache: false` + path-keyed factory
+//!   cache). Cache hits re-run factories through that reload path.
+//!   Registration-side surface bridged: `on`, `registerTool`,
+//!   `registerCommand`, `registerShortcut`, `registerFlag`,
+//!   `registerProvider`/`unregisterProvider` (config overload),
+//!   `registerMcpServer`/`unregisterMcpServer`, and `getFlag`; loader-API
+//!   panics map to op errors so the JS factory rejects with the upstream
+//!   message. Not bridgeable over JSON and erroring the load: renderer
+//!   registrations (TUI `Component` pipeline, D56),
+//!   `registerVirtualModel` (context-aware route), native
+//!   `registerProvider`, `getArgumentCompletions`, `prepareArguments`;
+//!   tool `execute` maps the upstream `AgentToolResult` JSON shape with
+//!   `None` signal/update/tool-context arguments until the runner binds
+//!   them; `ctx.*`/`pi.events`/action methods report the upstream pre-bind
+//!   error until runner-bind work routes them to a live context. Command/
+//!   shortcut handler failures log like upstream's unhandled rejections.
+//!   `Extension.tools`/`commands`/`flags`/`shortcuts` became `IndexMap`s to
+//!   preserve upstream `Map` registration order (invocation-name suffixing
+//!   and conflict checks are order-observable).
+//! - **D108 — `typebox` schema shim ([`core::extensions::loader`]).** The
+//!   embedded runtime resolves no npm packages; the bridge registers a
+//!   minimal virtual `typebox` module (`Type.Object`/`Array`/`String`/…)
+//!   so upstream-style extensions importing TypeBox for parameter schemas
+//!   load. `import type` specifiers are erased by transpilation.
+//! - **D109 — CLI binary target (`src/bin/pi.rs`).** Upstream's `bin` entry is
+//!   `src/cli.ts`: `setupCli(); main(process.argv.slice(2))`. The port adds
+//!   the `pi` bin target, which installs a [`cli::main_dispatch::
+//!   ModeDispatcher`] over [`modes::print_mode::run_print_mode`]/
+//!   [`modes::rpc::run_rpc_mode`] (D102) and calls
+//!   [`cli::setup::setup_cli`] + `main`. The dispatcher receives the
+//!   `AgentSessionRuntime` by value so the production
+//!   [`modes::AgentSessionRuntimeHandle`] can own it; interactive mode is
+//!   never dispatched (excluded with the TUI). Upstream's RPC-mode
+//!   background model-catalog refresh (`modelRuntime.refresh` with a 15s
+//!   abort timeout) is not re-fired here — the ported `ModelRuntime`
+//!   refreshes during creation (D63) — and the timing probes remain
+//!   omitted with D103. The [`RpcClient`] spawns a custom `program`
+//!   without a script argument when no `cli_path` is given (the live-CLI
+//!   suite runs the built binary directly).
+//! - **D110 — live-CLI RPC suite port ([`tests/rpc_live_cli_tests.rs`]).**
+//!   Upstream `test/rpc.test.ts` (18 cases; the D94 note said 17 — the
+//!   upstream checkout has grown one since) runs against the real CLI.
+//!   Ported 1:1 against `CARGO_BIN_EXE_pi`: same prompts, commands,
+//!   assertions, and per-case vitest timeouts (as a body timeout). The
+//!   `describe.skipIf` credential gate becomes a runtime early-return, the
+//!   per-test `cwd` is a fresh empty temp dir instead of the package dir
+//!   (sessions still live under `PI_CODING_AGENT_DIR`), and cases within
+//!   the file run sequentially behind a shared permit (vitest's in-file
+//!   ordering).
 
 pub mod cli;
 pub mod config;

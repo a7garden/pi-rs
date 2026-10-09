@@ -22,13 +22,16 @@
 //! coding-agent implements [`extensions::ExtensionBackend`] and drives the
 //! host through [`extensions::DenoExtensionHost::new`].
 //!
-//! - **Loading.** `load(entry)` imports a `.js`/`.ts` entry as an ES module
-//!   (relative imports resolve against the entry; TypeScript/JSX transpile via
-//!   swc; bare specifiers resolve only to registered node-module shims), then
-//!   calls its default export — the factory `ExtensionFactory` — with a `pi`
-//!   object. The factory may be async; a rejected factory surfaces as a load
-//!   error. Each load gets a fresh `key`; re-loading a path creates a new
-//!   generation without touching the old one.
+//! - **Loading.** `load(entry, key)` imports a `.js`/`.ts` entry as an ES
+//!   module (relative imports resolve against the entry; TypeScript/JSX
+//!   transpile via swc; bare specifiers resolve only to registered
+//!   node-module shims), then calls its default export — the factory
+//!   `ExtensionFactory` — with a `pi` object. The factory may be async; a
+//!   rejected factory surfaces as a load error. `key` is chosen by the
+//!   caller; re-loading a path under a new key creates a new generation
+//!   without touching the old one. `reload(key, new_key)` re-runs a stored
+//!   factory against a fresh `pi` object without re-importing the module
+//!   (upstream's cached-factory path: module side effects run once).
 //! - **The `pi` object.** `pi.on(event, handler)` subscribes a handler and
 //!   returns an unsubscribe function. Every other `pi.register*` method
 //!   (`registerTool`, `registerCommand`, `registerShortcut`, `registerFlag`,
@@ -64,10 +67,12 @@
 //! - No node/npm compatibility shims are provided. Extensions that need
 //!   `node:path` etc. work only when the embedder registers a shim via
 //!   `DenoExtensionHostOptions::node_modules` (JSON exports, exposed as an
-//!   ESM facade with named exports) or `FacetRuntimeOptions::externals`
-//!   (facet external imports). deno_core resolves bare specifiers internally
-//!   before the module loader is consulted; unregistered ones load unbound,
-//!   so extensions must only import registered shims.
+//!   ESM facade with named exports), `DenoExtensionHostOptions::virtual_sources`
+//!   (raw JS modules, e.g. the extension bridge's `typebox` shim), or
+//!   `FacetRuntimeOptions::externals` (facet external imports). deno_core
+//!   resolves bare specifiers internally before the module loader is
+//!   consulted; unregistered ones load unbound, so extensions must only
+//!   import registered shims.
 //! - deno_core defaults apply: no permissions model, no timers beyond
 //!   deno_core's built-ins, `console` routed to `tracing` as above.
 //!

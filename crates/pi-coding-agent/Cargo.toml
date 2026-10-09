@@ -50,6 +50,9 @@ pi-agent = { path = "../pi-agent" }
 pi-mcp = { path = "../pi-mcp" }
 # extensions/codemode builds on the codemode declarations/runtime traits.
 pi-codemode = { path = "../pi-codemode" }
+# core/extensions/loader bridge: real .ts/.js extension modules load through
+# the embedded DenoExtensionHost (D107).
+pi-runtime = { path = "../pi-runtime" }
 
 [dev-dependencies]
 # `tokio::time::advance` / `start_paused` in ported async tests (`full` excludes `test-util`).

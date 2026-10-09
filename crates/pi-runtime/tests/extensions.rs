@@ -105,7 +105,7 @@ async fn loads_a_js_extension_and_dispatches_events_and_tools() {
     let entry = dir.path().join("greet.js");
     std::fs::write(&entry, JS_EXTENSION).unwrap();
 
-    let loaded = host.load(&entry).await.unwrap();
+    let loaded = host.load(&entry, "test-ext").await.unwrap();
     assert_eq!(loaded.tools, vec!["greet".to_string()]);
     assert_eq!(loaded.events, vec!["session_start".to_string(); 2]);
 
@@ -163,7 +163,7 @@ async fn loads_a_typescript_extension_and_routes_actions() {
     std::fs::write(&entry, TS_EXTENSION).unwrap();
 
     // TypeScript transpiles through the module loader chain (swc).
-    let loaded = host.load(&entry).await.unwrap();
+    let loaded = host.load(&entry, "test-ext").await.unwrap();
     assert_eq!(loaded.tools, vec!["double".to_string()]);
 
     let registrations = backend.registrations();
@@ -215,7 +215,7 @@ export default function (pi) {
 "#,
     )
     .unwrap();
-    let loaded = host.load(&entry).await.unwrap();
+    let loaded = host.load(&entry, "test-ext").await.unwrap();
 
     let outcomes = host
         .dispatch_event(&loaded.key, "session_start", json!({}))
@@ -246,7 +246,7 @@ export default function (pi) {
 "#,
     )
     .unwrap();
-    let loaded = host.load(&entry).await.unwrap();
+    let loaded = host.load(&entry, "test-ext").await.unwrap();
 
     let outcomes = host
         .dispatch_event(&loaded.key, "session_start", json!({}))
@@ -268,7 +268,7 @@ async fn non_factory_exports_fail_the_load() {
     let dir = tempfile::tempdir().unwrap();
     let entry = dir.path().join("bad.js");
     std::fs::write(&entry, "export default 42;").unwrap();
-    let error = host.load(&entry).await.unwrap_err();
+    let error = host.load(&entry, "test-ext").await.unwrap_err();
     assert!(
         error.to_string().contains("factory function"),
         "unexpected error: {error}"
@@ -316,7 +316,7 @@ async fn node_module_shims_resolve_registered_bare_specifiers() {
     shims.insert("node:path".to_string(), json!({ "join": "shimmed" }));
     let host = DenoExtensionHost::new(
         Arc::clone(&backend) as Arc<dyn ExtensionBackend>,
-        DenoExtensionHostOptions { node_modules: shims },
+        DenoExtensionHostOptions { node_modules: shims, virtual_sources: Vec::new() },
     );
 
     let dir = tempfile::tempdir().unwrap();
@@ -332,7 +332,7 @@ export default function (pi) {
 "#,
     )
     .unwrap();
-    let loaded = host.load(&entry).await.unwrap();
+    let loaded = host.load(&entry, "test-ext").await.unwrap();
     let outcomes = host
         .dispatch_event(&loaded.key, "session_start", json!({}))
         .await
@@ -356,7 +356,7 @@ export default function (pi) {
         "export const marker = 7;\nexport default { marker };",
     )
     .unwrap();
-    let loaded2 = host2.load(&graphed).await.unwrap();
+    let loaded2 = host2.load(&graphed, "graphed-ext").await.unwrap();
     let outcomes = host2
         .dispatch_event(&loaded2.key, "session_start", json!({}))
         .await
@@ -373,7 +373,7 @@ export default function (pi) {
         "\nimport pkg from \"./does-not-exist.js\";\nexport default () => typeof pkg;",
     )
     .unwrap();
-    match host2.load(&miss).await {
+    match host2.load(&miss, "missing-ext").await {
         Err(error) => assert!(
             error.to_string().contains("does-not-exist"),
             "unexpected: {error}"

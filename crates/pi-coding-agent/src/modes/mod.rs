@@ -15,6 +15,13 @@
 //! - **D92 — bounded mode loop.** Upstream modes terminate with
 //!   `process.exit`; the Rust loops return the exit code and the production
 //!   wrappers perform the exit, so tests can drive a mode in-process.
+//!
+//! Production wiring: the `pi` binary target (D109) installs a
+//! `ModeDispatcher` (cli D102 seam) over [`print_mode::run_print_mode`] and
+//! [`rpc::run_rpc_mode`], wrapping the runtime in
+//! [`AgentSessionRuntimeHandle`]. The upstream `test/rpc.test.ts` live-CLI
+//! suite runs the real binary through [`rpc::RpcClient`]
+//! (`tests/rpc_live_cli_tests.rs`, D110).
 
 pub mod json_event;
 pub mod print_mode;

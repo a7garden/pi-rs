@@ -270,7 +270,7 @@ impl OutputAccumulator {
 			// decoder (holding back an incomplete trailing sequence), and the
 			// tail skips leading continuation bytes.
 			let mut decoder = StreamingUtf8::default();
-			let head_text = decoder.decode(head) + &decoder.flush();
+			let head_text = decoder.decode(head) + decoder.flush().as_str();
 			let mut tail_start = 0;
 			while tail_start < tail.len() && (tail[tail_start] & 0xc0) == 0x80 {
 				tail_start += 1;
