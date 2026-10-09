@@ -433,7 +433,7 @@ impl TaskScheduler {
 					}
 					let invocation = scheduler.inner.lock().invocations.get(&id).cloned();
 					if invocation.is_none() && current.state.status != TaskStateStatus::Completing {
-						scheduler.load_scopes_on(tx, Vec::new())?;
+						scheduler.load_scopes_on(tx, Vec::new(), None)?;
 						if !scheduler.owned_live_on(tx).contains_key(&id) {
 							let snapshot = scheduler.registry.snapshot();
 							let resolution = scheduler.resolve(&current, snapshot.as_ref());
@@ -528,7 +528,7 @@ impl TaskScheduler {
 					let scheduler = scheduler;
 					let background = background;
 					let conversation_id = conversation_id;
-					scheduler.load_scopes_on(tx, queued.clone())?;
+					scheduler.load_scopes_on(tx, queued.clone(), None)?;
 					let mut reached = Vec::new();
 					for record in scheduler.live_snapshot() {
 						if record.background && !background {
@@ -767,7 +767,7 @@ impl TaskScheduler {
 					if scheduler.inner.lock().closing {
 						return Ok(());
 					}
-					scheduler.load_scopes_on(tx, if cascade { cascade_queued.clone() } else { Vec::new() })?;
+					scheduler.load_scopes_on(tx, if cascade { cascade_queued.clone() } else { Vec::new() }, None)?;
 					let mut marked: BTreeSet<TaskId> = BTreeSet::new();
 					for record in scheduler.live_snapshot() {
 						if !record.background && below_cancelled(&*scheduler.inner.lock(), parent_of(&record), None) {
@@ -881,11 +881,26 @@ impl TaskScheduler {
 	/// Load the owner chains of every live task and, with `queued`, the
 	/// pre-captured queued conversations, on the Session line; returns the
 	/// queued list handed in (D5: captured by an async storage scan before
-	/// the commit, since the erased `Tx` has no submission scan).
-	fn load_scopes_on(&self, tx: &Tx<'_>, queued: Vec<ConversationId>) -> Result<Vec<ConversationId>, String> {
+	/// the commit, since the erased `Tx` has no submission scan). With the
+	/// commit's overlay (upstream `#commitState`'s terminal branch), also
+	/// loads the candidates' chains against the overlay, so same-commit work
+	/// counts for the owned-live decision.
+	fn load_scopes_on(
+		&self,
+		tx: &Tx<'_>,
+		queued: Vec<ConversationId>,
+		overlay: Option<&Overlay>,
+	) -> Result<Vec<ConversationId>, String> {
 		for record in self.live_snapshot() {
 			if !chain_known(&*self.inner.lock(), parent_of(&record), None) {
 				self.load_chain_on(tx, parent_of(&record), None)?;
+			}
+		}
+		if let Some(overlay) = overlay {
+			for record in overlay.tasks.values() {
+				if !chain_known(&*self.inner.lock(), parent_of(record), Some(overlay)) {
+					self.load_chain_on(tx, parent_of(record), Some(overlay))?;
+				}
 			}
 		}
 		for id in &queued {
@@ -1197,7 +1212,7 @@ impl TaskScheduler {
 					if !enabled {
 						return Ok(());
 					}
-					scheduler.load_scopes_on(tx, Vec::new())?;
+					scheduler.load_scopes_on(tx, Vec::new(), None)?;
 					#[cfg(test)]
 					for record in scheduler.live_snapshot() {
 						if record.kind == "pi.compaction" {
@@ -1675,7 +1690,7 @@ impl TaskScheduler {
 	/// waits for the final commit (spec §5.5, rule 4); otherwise it is
 	/// terminal with its cleanup.
 	fn terminate_on(&self, tx: &Tx<'_>, record: &TaskRecord, outcome: SchedulerOutcome) -> Result<(), String> {
-		self.load_scopes_on(tx, Vec::new())?;
+		self.load_scopes_on(tx, Vec::new(), None)?;
 		if self.owned_live_on(tx).contains_key(&record.id) {
 			tx.set_task(with_state(record, TaskState {
 				status: TaskStateStatus::Completing,
@@ -1953,9 +1968,29 @@ impl TaskRuntime for SchedulerRuntime {
 		let id = self.invocation.conversation_id;
 		let snapshot = self.snapshot();
 		let cell = self.phase.lock().agent.clone();
-		cell.get_or_init(|| async move { (scheduler.agent)(id, snapshot.as_ref(), context).await })
-			.await
-			.clone()
+		// Upstream `agent: (context) => awaitWithContext(agent(), context)`:
+		// the phase's shared resolution starts at first use with the
+		// invocation's context (upstream passes `invocation.context` into
+		// `#agent`), fixed for the phase; `awaitWithContext` races only the
+		// caller's wait, so a cancelled caller rejects with its own reason
+		// without observing — or poisoning — the shared resolution (whose
+		// failure stays shared for later callers, upstream
+		// `phase.agent.catch(() => {})`). Timing deviation: a pre-cancelled
+		// caller rejects before polling the cell, so the shared resolution
+		// starts at the next caller rather than eagerly with the rejected
+		// one (upstream evaluates `agent()` eagerly); it runs at most once
+		// per phase with the same invocation context, so the outcome is the
+		// same.
+		let invocation_context = self.invocation.context.clone();
+		match pi_chord::context::await_with_context(
+			cell.get_or_init(|| async move { (scheduler.agent)(id, snapshot.as_ref(), &invocation_context).await }),
+			context,
+		)
+		.await
+		{
+			Ok(agent) => agent.clone(),
+			Err(error) => Err(error.to_string()),
+		}
 	}
 
 	fn settings(&self) -> Settings { (self.scheduler.settings)() }
@@ -2010,9 +2045,18 @@ impl TaskRuntime for SchedulerRuntime {
 				};
 				tx.set_task(updated).map_err(|error| error.to_string())?;
 			}
-			// A staged terminal outcome finalizes in this commit when its
-			// owned work is already gone (upstream writes `terminal`
-			// directly; the Completing stop only holds faulted cleanup).
+			// Upstream `#commitState` loads scopes in its terminal branch
+			// before judging owned live work on the commit's candidates, so
+			// work the same commit creates below the task counts even while
+			// its owner chain is not loaded yet (spec §5.5). The port stages
+			// `completing` and lets `finalize_on` settle it in the same
+			// commit when nothing is owned-live (observably upstream's
+			// direct `terminal` write); the load is chain-known-guarded, so
+			// already-loaded scopes cost only in-memory walks.
+			if matches!(&next, Some(NextTaskState::Terminal { .. })) {
+				let overlay = overlay_of(tx);
+				scheduler.load_scopes_on(tx, Vec::new(), Some(&overlay))?;
+			}
 			scheduler.finalize_on(tx)?;
 			*captured_in.lock() = Some(next);
 			Ok(Value::Null)

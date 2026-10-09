@@ -20,8 +20,8 @@ use crate::session::observation::DocumentWatch;
 use crate::session::support::ControlledStorage;
 use crate::tasks::{BoxFuture, HookHandler, HookInvokeFn, NextTaskState, PhaseHandler, Task, TaskDefinition, TaskRuntime, commit_change, define_task};
 use crate::types::{
-	ConversationOwnership, DocumentFork, DocumentHistory, EntryId, JsonObject, StorageWrite, TaskId, TaskOptions,
-	TaskOutcomeStatus, TaskOwnership, TaskStateStatus, WatchEnd,
+	ConversationOwnership, DocumentFork, DocumentHistory, EntryId, JsonObject, Storage, StorageWrite, TaskId,
+	TaskOptions, TaskOutcomeStatus, TaskOwnership, TaskStateStatus, WatchEnd,
 };
 
 fn object(value: Value) -> JsonObject {
@@ -293,11 +293,13 @@ async fn task_commits_entries_and_outcomes_atomically_retains_memos_while_live_a
 
 	let commits = storage.commits();
 	let answer_commit = commits.iter().find(|batch| batch.iter().any(|write| matches!(write, StorageWrite::Entry { value } if value.id == entry.id))).expect("answer was committed");
-	// The completed outcome lands atomically with the answer entry; whether it
-	// holds as Completing (child still live) or settles Terminal in the same
-	// commit depends on the child-vs-writer scheduling race, so only the
-	// outcome is pinned here.
-	assert!(answer_commit.iter().any(|write| matches!(write, StorageWrite::Task { value } if value.id == id && value.state.outcome.as_ref().is_some_and(|outcome| outcome.status == TaskOutcomeStatus::Completed))));
+	// The completed outcome lands atomically with the answer entry, and the
+	// task settles `terminal` in the same commit: upstream `#commitState`
+	// writes `terminal` directly when the commit's candidates hold no owned
+	// live work, and the writer's child is conversation-owned, so the writer
+	// owns nothing (the port's `finalize_on` settles the staged
+	// `completing` in the same commit).
+	assert!(answer_commit.iter().any(|write| matches!(write, StorageWrite::Task { value } if value.id == id && value.state.status == TaskStateStatus::Terminal && value.state.outcome.as_ref().is_some_and(|outcome| outcome.status == TaskOutcomeStatus::Completed))));
 	let progress_document_id = commits.iter().flatten().find_map(|write| match write {
 		StorageWrite::DocumentCreate { record, .. } if record.kind == "test.phase-progress" => Some(record.id),
 		_ => None,
@@ -492,11 +494,10 @@ async fn task_resolves_agent_lazily_once_per_phase_and_refreshes_registry_and_se
 	harness.close(&context()).await.expect("close harness");
 }
 
-// Deferred with the `awaitWithContext(agent(), context)` parity work (see
-// local/pi-durable-remaining.md): hangs/fails until the runtime.agent
-// caller-cancellation seam lands.
+// Port of upstream "rejects an agent() wait whose caller context is
+// cancelled, without affecting the phase's resolution" (awaitWithContext
+// seam, see local/pi-durable-remaining.md).
 #[tokio::test]
-#[ignore = "agent caller-cancellation parity deferred (awaitWithContext seam)"]
 async fn task_agent_rejects_a_pre_cancelled_caller_without_poisoning_phase_resolution() {
 	let cancelled = Arc::new(Mutex::new(None::<String>));
 	let resolved = Arc::new(Mutex::new(None::<ModelThinkingLevel>));
@@ -535,8 +536,14 @@ async fn task_agent_rejects_a_pre_cancelled_caller_without_poisoning_phase_resol
 	harness.close(&context()).await.expect("close harness");
 }
 
+// Port of upstream "observes a failed agent resolution whose only caller
+// stopped waiting" (awaitWithContext seam, see
+// local/pi-durable-remaining.md): the resolution fails on its own — the
+// poisoned agent document below is the port stand-in for upstream's
+// throwing settings getter, since the shared resolution runs with the
+// invocation's context and a caller's cancellation cannot steer it — and a
+// later caller observes the shared failure.
 #[tokio::test]
-#[ignore = "agent caller-cancellation parity deferred (awaitWithContext seam)"]
 async fn task_surfaces_agent_resolution_failure_when_its_only_caller_is_cancelled() {
 	let storage = Arc::new(ControlledStorage::new());
 	let registry = super::support::registry();
@@ -546,21 +553,14 @@ async fn task_surfaces_agent_resolution_failure_when_its_only_caller_is_cancelle
 		"test.phase-agent-resolution-failure",
 		json!({"phase":"run"}),
 		[("run".into(), {
-			let storage = storage.clone();
 			let observed = observed.clone();
 			handler(move |_, runtime, ctx| {
-				let storage = storage.clone();
 				let observed = observed.clone();
 				Box::pin(async move {
-					let mut gate = storage.hold_find_document();
 					let controller = AbortController::new();
-					let caller = with_abort_signal(controller.signal(), ctx.clone());
-					let first_runtime = runtime.clone();
-					let first = tokio::spawn(async move { first_runtime.agent(&caller).await });
-					gate.entered().await;
 					controller.abort("caller gone");
-					gate.release();
-					let first_error = first.await.map_err(|error| error.to_string())?.err();
+					let caller = with_abort_signal(controller.signal(), ctx.clone());
+					let first_error = runtime.agent(&caller).await.err();
 					let second_error = runtime.agent(&ctx).await.err();
 					*observed.lock() = Some((first_error, second_error));
 					runtime.commit(commit_change(|_, _| Ok(Some(NextTaskState::completed(Value::Null)))), &ctx).await?;
@@ -572,13 +572,51 @@ async fn task_surfaces_agent_resolution_failure_when_its_only_caller_is_cancelle
 	);
 	register(&registry, vec![agent.clone()]);
 	let conversation = root(&harness).await;
+	// Poison the conversation's agent document with a version newer than the
+	// definition carries, so reading it rejects: the resolution fails
+	// independently of any caller (a direct storage write; the session would
+	// validate the version). The conversation's own `pi.agent` incarnation is
+	// retired and the poisoned one created in one atomic batch.
+	let address = crate::types::DocumentAddress {
+		kind: "pi.agent".into(),
+		scope: crate::types::DocumentScope::Conversation { conversation_id: conversation.id },
+		key: None,
+	};
+	let current = storage
+		.find_document(&address, crate::types::DocumentPoint::Current, &context())
+		.await
+		.expect("conversation has an agent document");
+	let seed = crate::types::DocumentId(storage.mint_id().await);
+	storage
+		.commit(
+			&[
+				StorageWrite::DocumentRetire { id: current.id },
+				StorageWrite::DocumentCreate {
+					record: crate::types::DocumentCreate {
+						id: seed,
+						kind: "pi.agent".into(),
+						key: None,
+						scope: crate::types::DocumentScope::Conversation { conversation_id: conversation.id },
+						history: Some(DocumentHistory::Rewindable),
+						fork: Some(DocumentFork::AsOf),
+					},
+					content: crate::types::DocumentBase { version: 2, value: object(json!({})) },
+				},
+			],
+			&context(),
+		)
+		.await
+		.expect("seed poisoned agent document");
 	let id = start(&conversation, agent).await;
 	harness.session.unload_documents().await;
 	harness.resume();
 	harness.wait_for_task(id, &context()).await.expect("task completes");
 	let (first, second) = observed.lock().clone().expect("agent resolution results");
 	assert!(first.as_deref().is_some_and(|error| error.contains("caller gone")), "first result: {first:?}");
-	assert!(second.as_deref().is_some_and(|error| error.contains("caller gone")), "later waiter: {second:?}");
+	assert!(
+		second.as_deref().is_some_and(|error| error.contains("newer version")),
+		"later waiter: {second:?}"
+	);
 	harness.close(&context()).await.expect("close harness");
 }
 

@@ -86,21 +86,41 @@ registry green).
   pi-durable --lib -- --test-threads=1` → 580 passed, 0 failed, 4 ignored;
   parallel run green too). The former known-failure set of 5 and the 11
   session failures are fixed; see "Root causes fixed (2026-10-08 afternoon)"
-  below.
-- pi-durable tasks_phase_runtime deferred items (pre-existing, not regressions):
-  - `task_commits_entries_and_outcomes_atomically...`: racy commit-composition
-    assertion relaxed (outcome pinned; Completing-vs-Terminal depends on the
-    child-vs-writer race). Doing it deterministically needs upstream's
-    `#commitState` terminal-branch `#loadScopes` parity — a first attempt
-    (load_scopes_on before finalize_on) was correct but made the suite slow
-    (storage scans per terminal commit); needs a cheaper chain-load.
+  below. After the 2026-10-09 deferred-item work the two agent tests run
+  un-ignored: 582 passed, 0 failed, 2 ignored (the remaining two are the
+  pre-existing select_phase_hook and jsonl D5 ignores). Serial time vs the
+  pre-change baseline (580 passed, 56.14s): 56.33s / 56.10s / 58.98s /
+  52.31s across four consecutive green serial runs — within noise; the two
+  un-ignored tests themselves run in ~0ms.
+- pi-durable tasks_phase_runtime deferred items — RESOLVED (2026-10-09):
+  - `task_commits_entries_and_outcomes_atomically...`: the commit-composition
+    assertion is deterministic now — the writer's Task write in the answer
+    commit is always `terminal` with the completed outcome (the child is
+    conversation-owned, so the writer owns nothing; upstream `#commitState`
+    writes `terminal` directly in that case and the port's `finalize_on`
+    settles the staged `completing` in the same commit; probed 40/40).
+    The missing parity also landed: the runtime commit callback now runs
+    upstream's terminal-branch scope load (`load_scopes_on` with the commit
+    overlay, chain-known-guarded) before `finalize_on` on TERMINAL commits
+    only, so the owned-live decision is chain-correct at ~zero cost
+    (non-terminal commits are untouched; no storage scans were observable —
+    the earlier "slow" attempt had wrapped every commit).
   - `task_agent_rejects_a_pre_cancelled_caller` +
-    `task_surfaces_agent_resolution_failure...`: need upstream
-    `awaitWithContext(agent(), context)` parity (currently `#[ignore]`d in
-    harness/tests/tasks_phase_runtime.rs). First attempt
-    (await_with_context around the agent cell) fixed both but slowed/
-    destabilized the suite alongside the load_scopes attempt; deferred
-    together with the cheap chain-load work.
+    `task_surfaces_agent_resolution_failure...`: un-ignored. Upstream
+    `awaitWithContext(agent(), context)` parity in `SchedulerRuntime::agent`:
+    the phase's shared resolution is bound to the invocation's context
+    (upstream passes `invocation.context` into `#agent`) and
+    `await_with_context` races only the caller's wait, so a cancelled caller
+    rejects with its own reason without poisoning the shared resolution and a
+    failed resolution stays shared for later callers. The second test's body
+    was adapted to inject the resolution's own failure (a direct-storage
+    poisoned `pi.agent` document at version 2 — the port stand-in for
+    upstream's throwing settings getter, which typed settings cannot
+    reproduce); its old gate+abort shape encoded the pre-parity
+    resolution-bound-to-caller behavior and is unrepresentable under parity.
+    Timing deviation (documented at the callsite): a pre-cancelled caller
+    rejects before polling the cell, so the shared resolution starts at the
+    next caller rather than eagerly.
 - pi-coding-agent: foundation + utils/config/defaults/settings-manager landed;
   remaining module checklist in crate docs (compaction, tools, extensions,
   export-html, modes print/json-event/rpc, agent-session, model-*/system-prompt/
