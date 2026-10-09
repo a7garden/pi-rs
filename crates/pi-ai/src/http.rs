@@ -178,6 +178,14 @@ impl HttpRequest {
 
 	pub fn json_body(mut self, value: &serde_json::Value) -> HttpRequest {
 		let bytes = serde_json::to_vec(value).expect("request body serializes");
+		// Upstream sends JSON request bodies through the openai SDK / fetch,
+		// which always carries `content-type: application/json`. The port
+		// builds requests by hand, so set it here (parity fix, 2026-10-09:
+		// z.ai rejected the body as application/octet-stream without it).
+		// Adapters that need a different content type set it explicitly
+		// after this call.
+		self.headers.retain(|(name, _)| !name.eq_ignore_ascii_case("content-type"));
+		self.headers.push(("content-type".to_string(), "application/json".to_string()));
 		self.body = HttpBody::Bytes(bytes);
 		self
 	}
@@ -314,5 +322,38 @@ async fn optional_abort(signal: &Option<crate::utils::abort::AbortSignal>) {
 			let _ = signal.aborted_future().await;
 		}
 		None => pending::<()>().await,
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	/// Parity fix (2026-10-09): upstream's openai SDK / fetch always sends a
+	/// JSON request body with `content-type: application/json`; z.ai rejects
+	/// the body as `application/octet-stream` without it. `json_body` must
+	/// set the header, and must not duplicate one set by an explicit caller.
+	#[test]
+	fn json_body_sets_content_type_application_json() {
+		let request = HttpRequest::new("POST", "https://example.test/v1/chat/completions")
+			.json_body(&serde_json::json!({ "model": "m" }));
+		let content_types: Vec<&str> = request
+			.headers
+			.iter()
+			.filter(|(name, _)| name.eq_ignore_ascii_case("content-type"))
+			.map(|(_, value)| value.as_str())
+			.collect();
+		assert_eq!(content_types, vec!["application/json"]);
+
+		// An explicit later `header` push coexists with the json_body default;
+		// every content-type entry must still be the JSON media type.
+		let request = request.header("content-type", "application/json");
+		let content_types: Vec<&str> = request
+			.headers
+			.iter()
+			.filter(|(name, _)| name.eq_ignore_ascii_case("content-type"))
+			.map(|(_, value)| value.as_str())
+			.collect();
+		assert!(content_types.iter().all(|value| *value == "application/json"));
 	}
 }
