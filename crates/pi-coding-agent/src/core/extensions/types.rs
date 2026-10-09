@@ -3658,6 +3658,16 @@ impl ExtensionRuntimeState {
 		self.pending_virtual_model_registrations.read().clone()
 	}
 
+	/// Queued native pi-ai provider registrations (drained on bind).
+	pub fn pending_native_providers(&self) -> Vec<PendingNativeProviderRegistration> {
+		self.pending_native_provider_registrations.read().clone()
+	}
+
+	/// Drops the queued native pi-ai provider registrations.
+	pub fn clear_pending_native_providers(&self) {
+		*self.pending_native_provider_registrations.write() = Vec::new();
+	}
+
 	/// Drops the queued virtual-model registrations.
 	pub fn clear_pending_virtual_models(&self) {
 		*self.pending_virtual_model_registrations.write() = Vec::new();

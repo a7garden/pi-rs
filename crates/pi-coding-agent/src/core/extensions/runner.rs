@@ -351,6 +351,9 @@ impl ExtensionRunner {
 	) {
 		// Flush provider registrations queued during extension loading.
 		let provider_actions = provider_actions.unwrap_or_default();
+		if std::env::var("PI_DBG").is_ok() {
+			eprintln!("DBG bind_core flush providers={} has_register={}", self.runtime.state.pending_providers().len(), provider_actions.register_provider.is_some());
+		}
 		for registration in self.runtime.state.pending_providers() {
 			let outcome = provider_actions
 				.register_provider
@@ -393,8 +396,32 @@ impl ExtensionRunner {
 				});
 			}
 		}
+		// Flush native pi-ai providers queued during extension loading
+		// through the session actions so the active model re-resolves.
+		for registration in self.runtime.state.pending_native_providers() {
+			let outcome = provider_actions
+				.register_native_provider
+				.as_ref()
+				.map(|register| {
+					registration
+						.provider
+						.clone()
+						.map(|provider| std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| register(&provider))))
+						.unwrap_or(Ok(()))
+				})
+				.unwrap_or(Ok(()));
+			if let Err(payload) = outcome {
+				self.emit_error(&ExtensionError {
+					extension_path: registration.extension_path.clone(),
+					event: "register_provider".to_string(),
+					error: panic_payload_message(payload),
+					stack: None,
+				});
+			}
+		}
 		self.runtime.state.clear_pending_providers();
 		self.runtime.state.clear_pending_virtual_models();
+		self.runtime.state.clear_pending_native_providers();
 
 		// Install the bound action set.
 		let mut bound = self.runtime.core.bound.write();

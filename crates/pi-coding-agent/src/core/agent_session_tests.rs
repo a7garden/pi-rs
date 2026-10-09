@@ -501,7 +501,6 @@ mod retry {
 		json!({"retry": {"enabled": true, "maxRetries": max_retries, "baseDelayMs": 1, "maxAgentDelayMs": max_agent_delay_ms}})
 	}
 
-	#[ignore = "hangs: retry re-entry does not resolve in the ported agent loop (parity gap, see module docs)"]
 	#[tokio::test(flavor = "multi_thread")]
 	async fn retries_after_a_transient_error_and_succeeds() {
 		let dir = temp_dir("retry-1");
@@ -529,7 +528,6 @@ mod retry {
 		assert!(!harness.session.is_retrying());
 	}
 
-	#[ignore = "hangs: retry re-entry does not resolve in the ported agent loop (parity gap, see module docs)"]
 	#[tokio::test(flavor = "multi_thread")]
 	async fn exhausts_max_retries_and_emits_failure() {
 		let dir = temp_dir("retry-2");
@@ -560,7 +558,6 @@ mod retry {
 		assert!(!harness.session.is_retrying());
 	}
 
-	#[ignore = "hangs: retry re-entry does not resolve in the ported agent loop (parity gap, see module docs)"]
 	#[tokio::test(flavor = "multi_thread")]
 	async fn caps_agent_retry_delay() {
 		// Regression for #8826.
@@ -593,7 +590,6 @@ mod retry {
 		assert_eq!(*delays.lock(), vec![1, 2, 4, 5]);
 	}
 
-	#[ignore = "hangs: retry re-entry does not resolve in the ported agent loop (parity gap, see module docs)"]
 	#[tokio::test(flavor = "multi_thread")]
 	async fn prompt_waits_for_retry_completion_even_when_assistant_message_end_handling_is_delayed() {
 		let dir = temp_dir("retry-4");
@@ -619,7 +615,6 @@ mod retry {
 		assert!(!harness.session.is_retrying());
 	}
 
-	#[ignore = "hangs: retry re-entry does not resolve in the ported agent loop (parity gap, see module docs)"]
 	#[tokio::test(flavor = "multi_thread")]
 	async fn retries_provider_network_error_failures() {
 		let dir = temp_dir("retry-5");
@@ -646,7 +641,6 @@ mod retry {
 		assert_eq!(*events.lock(), vec!["start:1".to_string(), "end:success=true".to_string()]);
 	}
 
-	#[ignore = "hangs: retry re-entry does not resolve in the ported agent loop (parity gap, see module docs)"]
 	#[tokio::test(flavor = "multi_thread")]
 	async fn prompt_waits_for_full_agent_loop_when_retry_produces_tool_calls() {
 		let dir = temp_dir("retry-6");
@@ -1750,7 +1744,6 @@ mod concurrent {
 		drop(harness_slot);
 	}
 
-	#[ignore = "parity gap: the port does not append a fresh system message for the post-tool turn; ordering of user/assistant/toolResult entries verified"]
 	#[tokio::test(flavor = "multi_thread")]
 	async fn should_persist_message_end_events_in_order_with_slow_extension_handlers() {
 		let dir = temp_dir("conc-7");
@@ -1777,11 +1770,15 @@ mod concurrent {
 			})],
 		).await;
 
+		// Upstream passes the tool via `initialState.tools`, so the agent's
+		// initial system message carries the declaration and the post-tool
+		// turn emits a fresh declaration system message (parity with
+		// agent-session-concurrent.test.ts).
 		let harness = build_session(
 			tool_loop_stream_fn(true),
 			Some(text_model(200_000)),
 			None,
-			vec![],
+			vec![dummy_tool()],
 			Some(vec![dummy_tool()]),
 			test_settings_manager(),
 			in_memory_session_manager(),
@@ -2078,17 +2075,65 @@ mod dynamic_provider {
 		ProviderConfig { base_url: Some(base_url.to_string()), ..Default::default() }
 	}
 
-	#[ignore = "parity gap: baseUrl-only registerProvider overrides do not yet re-resolve the active model for native providers (refresh_current_model_from_registry sees no change)"]
 	#[tokio::test(flavor = "multi_thread")]
 	async fn applies_top_level_register_provider_overrides_to_the_active_model() {
-		let factories: Vec<ExtensionFactory> = vec![Arc::new(|pi: crate::core::extensions::types::ExtensionApiHandle| -> pi_agent::types::BoxFuture<'static, Result<(), String>> {
-			Box::pin(async move {
-				pi.register_provider(PROVIDER_ID, provider_config("http://localhost:8080/top-level"));
-				Ok(())
-			})
-		})];
+		// Upstream registers the override against the builtin `anthropic`
+		// provider (agent-session-dynamic-provider.test.ts), so the model
+		// survives the `registerProvider` native-provider reset and re-resolves
+		// with the new baseUrl.
+		let credentials: Arc<dyn CredentialStore> = Arc::new(InMemoryCredentialStore::new());
+		credentials
+			.modify(
+				"anthropic",
+				Box::new(|_| {
+					Box::pin(async move {
+						Ok(Some(Credential::ApiKey(ApiKeyCredential { key: Some("test-key".to_string()), env: None })))
+					})
+				}),
+				None,
+			)
+			.await
+			.unwrap();
+		let runtime = ModelRuntime::create(CreateModelRuntimeOptions {
+			credentials: Some(credentials),
+			models_path: Some(None),
+			refresh_on_create: true,
+			..Default::default()
+		})
+		.await
+		.unwrap();
+		let _ = Models::refresh(
+			&*runtime,
+			Some(pi_ai::models::ModelsRefreshOptions { allow_network: Some(false), ..Default::default() }),
+		)
+		.await;
+		let model = Models::get_model(&*runtime, "anthropic", "claude-haiku-4-5").expect("builtin anthropic model");
 
-		let (harness, base_url) = provider_session("dp-1", factories).await;
+		let dir = temp_dir("dp-1");
+		let loader = loader_with_factories(
+			&dir,
+			vec![Arc::new(|pi: crate::core::extensions::types::ExtensionApiHandle| -> pi_agent::types::BoxFuture<'static, Result<(), String>> {
+				Box::pin(async move {
+					pi.register_provider("anthropic", provider_config("http://localhost:8080/top-level"));
+					Ok(())
+				})
+			})],
+		)
+		.await;
+		let (stream_fn, base_url) = base_url_stream_recorder();
+		let harness = build_session(
+			stream_fn,
+			Some(model),
+			None,
+			vec![],
+			None,
+			test_settings_manager(),
+			in_memory_session_manager(),
+			runtime,
+			loader,
+			&dir,
+		);
+
 		harness.session.bind_extensions(Default::default()).await.unwrap();
 
 		assert_eq!(harness.session.model().unwrap().base.base_url, "http://localhost:8080/top-level");
@@ -2122,8 +2167,7 @@ mod dynamic_provider {
 		let _ = harness.session.model();
 	}
 
-	#[ignore = "parity gap: native provider re-registration during extension loading does not yet refresh the active model"]
-	#[tokio::test(flavor = "multi_thread")]
+		#[tokio::test(flavor = "multi_thread")]
 	async fn registers_native_pi_ai_providers_during_extension_loading() {
 		let factories: Vec<ExtensionFactory> = vec![Arc::new(|pi: crate::core::extensions::types::ExtensionApiHandle| -> pi_agent::types::BoxFuture<'static, Result<(), String>> {
 			Box::pin(async move {

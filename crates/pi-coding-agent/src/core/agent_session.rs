@@ -889,6 +889,13 @@ impl AgentSession {
 		Some(self.inner.agent.model()).filter(|model| !model.base.id.is_empty())
 	}
 
+	/// Re-resolve the active model from the model registry
+	/// (`_refreshCurrentModelFromRegistry`; the SDK create path calls this
+	/// after applying extension provider registrations).
+	pub fn refresh_current_model_from_registry(&self) {
+		self.inner.refresh_current_model_from_registry();
+	}
+
 	/// Current thinking level.
 	pub fn thinking_level(&self) -> AgentThinkingLevel {
 		self.inner.agent.thinking_level()
@@ -3683,6 +3690,10 @@ impl AgentSessionInner {
 
 		let update_message =
 			self.prepare_prompt_and_tool_loadout(&mut options, Some(&next_context.messages));
+		if std::env::var("PI_DBG").is_ok() {
+			let llm: Vec<pi_ai::types::Message> = next_context.messages.iter().filter_map(|m| m.as_llm().cloned()).collect();
+			eprintln!("DBG next_turn: roles={:?} current_sys={:?} update_message={:?}", next_context.messages.iter().map(|m| m.role().to_string()).collect::<Vec<_>>(), pi_ai::utils::transcript::get_current_system_message(&llm).map(|s| (s.sections.clone(), s.tools_added.clone())), update_message.is_some());
+		}
 		// Keep session.systemPrompt and ctx.getSystemPrompt() in step with
 		// what the provider sees.
 		*self.run_system_prompt_options.lock() = Some(options);
@@ -4229,8 +4240,14 @@ impl AgentSessionInner {
 			panic!("Cannot persist recovery omission because a projected message has no source entry");
 		}
 		for target_id in target_ids.into_iter().flatten() {
-			if let Ok(edit_id) = self.session_manager.lock().append_context_edit(&target_id, None) {
-				if let Some(entry) = self.session_manager.lock().get_entry(&edit_id).cloned() {
+			// Drop the append guard before locking again: in edition 2021 the
+			// scrutinee temporary of `if let` lives to the end of the whole
+			// statement, so nesting the second `lock()` in the body would
+			// re-acquire the same non-reentrant mutex and deadlock.
+			let appended = self.session_manager.lock().append_context_edit(&target_id, None);
+			if let Ok(edit_id) = appended {
+				let entry = self.session_manager.lock().get_entry(&edit_id).cloned();
+				if let Some(entry) = entry {
 					self.emit(AgentSessionEvent::EntryAppended { entry });
 				}
 			}
@@ -5787,7 +5804,7 @@ impl AgentSessionInner {
 		}
 	}
 
-	fn refresh_current_model_from_registry(&self) {
+	pub(crate) fn refresh_current_model_from_registry(&self) {
 		let current_model = self.model_option();
 		let Some(current_model) = current_model else { return };
 		let refreshed_model = pi_ai::Models::get_model(&*self.model_runtime, current_model.provider(), current_model.id());
