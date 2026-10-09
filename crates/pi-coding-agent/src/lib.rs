@@ -17,7 +17,7 @@
 //! | `core/settings-manager.ts` | [`core::settings_manager`] | complete (D18–D20) |
 //! | `core/usage-totals.ts` | [`core::usage_totals`] | complete |
 //! | `core/compaction/` | [`core::compaction`] (`compaction`, `branch_summarization`, `utils`) | complete (D23) |
-//! | `core/agent-session*.ts` | [`core::agent_session`] (portable surface: `parseSkillBlock`) | partial — `AgentSession`/`AgentSessionRuntime`/`AgentSessionServices` deferred (see [`core::agent_session`] docs) |
+//! | `core/agent-session*.ts` | [`core::agent_session`] | complete — `AgentSession` class 1:1; the portable `agent-session-*.test.ts` suites live in `agent_session_tests` (D74–D79 docs in [`core::agent_session`]) |
 //! | `core/diagnostics.ts` | [`core::diagnostics`] | complete |
 //! | `core/source-info.ts` | [`core::source_info`] (D25) | complete |
 //! | `core/skills.ts` | [`core::skills`] (D24, D26) | complete |
@@ -47,6 +47,11 @@
 //! | `core/session-cwd.ts` | [`core::session_cwd`] (D65) | complete — the `createAgentSessionRuntime` case defers with `AgentSessionRuntime` |
 //! | `core/session-export.ts` | [`core::session_export`] (D66) | complete — no upstream direct suite; consumers defer with AgentSession/interactive (D66) |
 //! | `core/auth-guidance.ts` | [`core::auth_guidance`] (D69) | complete — no upstream suite; consumers defer with sdk/AgentSession (D69) |
+//! | `core/sdk.ts` | [`core::sdk`] (D73) | complete — `createAgentSession` + re-export surface; upstream `sdk-stream-options`/`sdk-openrouter-attribution` suites run the full prompt loop and defer with AgentSession/interactive |
+//! | `core/agent-session-runtime.ts` | [`core::agent_session_runtime`] (D72) | complete — lifecycle/new/fork/import flows; `agent-session-runtime-events` four lifecycle cases ported 1:1 in `runtime_events_tests` (faux-provider `session.prompt()` drive) |
+//! | `core/agent-session-services.ts` | [`core::agent_session_services`] (D71) | complete — `createAgentSessionServices`/`FromServices`; flag-diagnostics and registration-drain behavior covered in module tests |
+//! | `core/provider-attribution.ts` | [`core::provider_attribution`] | complete — no upstream direct suite (upstream covers it via the deferred `sdk-openrouter-attribution` prompt-loop suite); module tests pin the header tables |
+//! | `core/telemetry.ts` | [`core::telemetry`] | complete — no upstream suite |
 //! | `core/model-config.ts` | [`core::model_config`] (D51) | complete |
 //! | `core/model-resolver.ts` | [`core::model_resolver`] (D47, D48) | complete |
 //! | `core/provider-composer.ts` | [`core::provider_composer`] (D49, D50) | complete |
@@ -135,7 +140,9 @@
 //!   quarantine reads `/proc/self/maps` on Linux only; randomness via
 //!   getrandom; DOS zip timestamps use UTC and zip writes are sync;
 //!   `getChangelogPath` uses `PI_PACKAGE_DIR` or the executable directory;
-//!   open-browser detaches via `setsid`.
+//!   open-browser detaches via `setsid`; open-browser unit tests use a
+//!   hidden override seam (`set_browser_launcher_override`) so `cargo test`
+//!   never spawns a real browser on developer machines.
 //! - **D14 — photon codec seam.** `photon-node` becomes the `PhotonEngine`
 //!   trait with a process-wide registry, unset by default (paths degrade
 //!   exactly like upstream when the WASM module cannot load).
@@ -544,6 +551,79 @@
 //!   tokio mutex raced only on the lock wait (pi-ai D17 convention).
 //!   **D70e** — `reload()` stays synchronous (upstream `lockSync`), so it
 //!   must not run inside latency-sensitive async contexts.
+//! - **D71 — agent-session-services ([`core::agent_session_services`]).**
+//!   Upstream returns plain object/service handles; Rust returns
+//!   [`core::agent_session_services::AgentSessionServices`] with `Arc`-shared
+//!   runtime/loader handles (D58/D63 rationale). **D71a** — the optional
+//!   create-time `modelRuntimeSignal` maps to
+//!   `CreateAgentSessionServicesOptions::model_runtime_signal`. **D71b** —
+//!   `applyExtensionFlagValues` writes through the extension runtime state's
+//!   `set_flag_value` instead of a mutable map. **D71c** — the pending
+//!   registration queues drain through the runtime state's RwLocks;
+//!   extension-registered virtual models bridge through
+//!   `ModelRuntime::register_extension_virtual_model` (D27/D31 route-shape
+//!   split). **D71d** — `createAgentSessionFromServices` delegates to
+//!   [`core::sdk::create_agent_session`]; the JS options-spread becomes an
+//!   explicit options struct.
+//! - **D72 — agent-session-runtime ([`core::agent_session_runtime`]).**
+//!   The factory closure is an `Arc`-ed async
+//!   `CreateAgentSessionRuntimeFactory`; teardown/apply/rebind order is
+//!   upstream 1:1. **D72a** — `SessionImportFileNotFoundError` is a
+//!   `std::error::Error` carrying `file_path` (message
+//!   `File not found: <path>`). **D72b** — `existsSync`/`copyFileSync(COPYFILE_EXCL)`
+//!   become `Path::exists` and create-new copy; the `name-N` suffix scan
+//!   keeps upstream's collision avoidance. **D72c** —
+//!   `extractUserMessageText` filters text parts from user message content.
+//! - **D73 — sdk `createAgentSession` ([`core::sdk`]).** Upstream wires the
+//!   agent loop through option-object closures; Rust uses
+//!   [`pi_agent::types`] hook types with explicit `Arc` captures.
+//!   **D73a** — the cache warmer consumes `SimpleStreamOptions` (D67
+//!   shape), so warmed replays do not carry the live request's
+//!   `transformHeaders` hook (headers are not part of the prompt-cache
+//!   key). **D73b** — `setDefaultStreamFn(streamSimple)` is the pi-agent
+//!   default already. **D73c** — the `process.cwd()` fallback becomes
+//!   `std::env::current_dir()`. **D73d** — `ExtensionRunnerRef` and
+//!   `NoToolsMode` live in [`core::agent_session`]/[`core::sdk`]
+//!   (upstream: inline object literal / string union). **D73e** — the
+//!   warmer's "is this request still current" check compares
+//!   provider/id plus message-prefix equality instead of JS object
+//!   identity (agent state may shallow-copy arrays).
+//! - **D74 — shared mutable `SessionManager` ([`core::agent_session`]).**
+//!   Upstream hands every consumer the same JS object; Rust
+//!   `SessionManager` methods take `&mut self`, so the runner and the
+//!   extension context hold `Arc<Mutex<SessionManager>>` (upstream
+//!   `ReadonlySessionManager` stays a convention, D28) and
+//!   `ExtensionRunner::bind_core`/`set_ui_context` take `&self` with
+//!   interior-mutable UI state (ui context/mode/`hasUI` behind RwLocks;
+//!   the write-only `runtime.actions` copy is dropped — readers use
+//!   `BoundCore.actions`).
+//! - **D75 — typed session event enum ([`core::agent_session`]).** The TS
+//!   `AgentSessionEvent` union (core `AgentEvent` pass-throughs plus
+//!   session-specific payloads and the `WithParentToolCallId` conditional)
+//!   collapses into [`core::agent_session::AgentSessionEvent`], a Rust
+//!   enum; `tool_execution_*` variants carry
+//!   `parent_tool_call_id: Option<String>`.
+//! - **D76 — message identity by value ([`core::agent_session`]).**
+//!   Upstream keys `_entryIdsByMessage` (WeakMap) and
+//!   `_boundaryDispatchedMessages` (WeakSet) by object identity.
+//!   `AgentMessage` is a value type in Rust, so entries are located by
+//!   structural equality (branch scan, then projection index) and
+//!   dispatched boundaries are remembered by serialized fingerprint.
+//! - **D77 — `message_end` replacement ([`core::agent_session`]).**
+//!   Upstream mutates the finalized message object in place so agent
+//!   state, listeners, and persistence see the extension replacement.
+//!   Rust finds the structurally-equal message in agent state and swaps
+//!   it.
+//! - **D78 — auto-compaction test seam ([`core::agent_session`]).**
+//!   Upstream tests monkey-patch the private `_runAutoCompaction` via
+//!   `vi.spyOn`; the port routes the call through an internal override
+//!   slot that only the in-module tests set
+//!   (`run_auto_compaction_override` + `#[cfg(test)]` call log).
+//! - **D79 — HTML export and bug-report summary defer
+//!   ([`core::agent_session`]).** `export-html/` and `bug-report.ts` are
+//!   not ported yet, so `AgentSession::export_to_html` and
+//!   `AgentSession::summarize_for_bug_report` return a fixed `Err`
+//!   describing the missing module. Every other member is ported.
 //! - **D65 — session-cwd ([`core::session_cwd`]).** Upstream's structural
 //!   `{ getCwd, getSessionFile }` parameter becomes the `SessionCwdSource`
 //!   trait with a blanket impl for `SessionManager`

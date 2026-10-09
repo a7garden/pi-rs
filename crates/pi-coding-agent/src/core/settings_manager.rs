@@ -440,7 +440,7 @@ pub struct SettingsError {
 /// Upstream `SettingsStorage`. `with_lock` hands the current file content (if
 /// any) to `f` and writes the returned string (if any) back; a returned
 /// `Err` mirrors an upstream throw inside `withLock`.
-pub trait SettingsStorage {
+pub trait SettingsStorage: Send + Sync {
 	fn with_lock(
 		&self,
 		scope: SettingsScope,
@@ -1836,6 +1836,12 @@ impl SettingsManager {
 		self.set_global_field("images", Value::Object(images), Some("autoResize"));
 	}
 
+	/// Per-level thinking token budgets (`getThinkingBudgets`); `None` when
+	/// unset. Parsed settings keys are snake_case via serde.
+	pub fn get_thinking_budgets(&self) -> Option<pi_ai::types::ThinkingBudgets> {
+		serde_json::from_value(self.settings.get("thinkingBudgets").cloned()?).ok()
+	}
+
 	pub fn get_block_images(&self) -> bool {
 		self.settings
 			.get("images")
@@ -2610,6 +2616,7 @@ mod settings_manager_tests {
 
 	#[test]
 	fn resolves_editor_commands_by_precedence() {
+		let _env_guard = crate::utils::test_env_lock();
 		let _env = ENV_LOCK.lock();
 		std::env::set_var("VISUAL", "vim");
 		std::env::set_var("EDITOR", "nano");

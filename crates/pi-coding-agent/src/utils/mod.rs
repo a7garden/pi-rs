@@ -38,3 +38,13 @@ pub mod version_check;
 pub mod windows_self_update;
 pub mod wsl;
 pub mod zip;
+
+/// Shared serialization for tests that mutate process env vars
+/// (`std::env::set_var`/`remove_var` race concurrent `fork`/`exec` on macOS,
+/// breaking unrelated suites like `child_process` under parallel test runs).
+/// Take this guard around every env mutation in `#[cfg(test)]` code.
+#[cfg(test)]
+pub(crate) fn test_env_lock() -> parking_lot::MutexGuard<'static, ()> {
+	static TEST_ENV_LOCK: std::sync::LazyLock<parking_lot::Mutex<()>> = std::sync::LazyLock::new(|| parking_lot::Mutex::new(()));
+	TEST_ENV_LOCK.lock()
+}

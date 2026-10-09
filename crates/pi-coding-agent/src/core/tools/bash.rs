@@ -376,8 +376,8 @@ fn resolve_spawn_context(
 	}
 	if expose_session_environment {
 		if let Some(ctx) = ctx {
-			env.insert("PI_SESSION_ID".to_string(), ctx.session_manager.get_session_id().to_string());
-			if let Some(session_file) = ctx.session_manager.get_session_file() {
+			env.insert("PI_SESSION_ID".to_string(), ctx.session_manager.lock().get_session_id().to_string());
+			if let Some(session_file) = ctx.session_manager.lock().get_session_file().map(str::to_string) {
 				env.insert("PI_SESSION_FILE".to_string(), session_file.to_string());
 			}
 			if let Some(model) = &ctx.model {

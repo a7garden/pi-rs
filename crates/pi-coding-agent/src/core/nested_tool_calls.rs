@@ -90,7 +90,9 @@ pub struct NestedCallRecorder {
 
 impl NestedCallRecorder {
 	pub fn new() -> NestedCallRecorder {
-		NestedCallRecorder::default()
+		// Upstream starts with `complete: true`; only drops (call/argument
+		// limits) mark the record incomplete.
+		NestedCallRecorder { complete: true, ..NestedCallRecorder::default() }
 	}
 
 	/// Record a call as it starts. Returns `None` when the call is dropped
@@ -184,7 +186,9 @@ pub struct NestedToolCallOptions {
 }
 
 /// `tool_execution_*` events of nested calls (`NestedToolExecutionEvent`).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Serialize-only: `AgentToolResult` has no `Deserialize` (pi-agent), and the
+/// events flow outward to extension handlers and listeners.
+#[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type")]
 pub enum NestedToolExecutionEvent {
 	#[serde(rename = "tool_execution_start")]
@@ -404,7 +408,8 @@ impl NestedToolCallRunner {
 #[cfg(test)]
 mod tests {
 	use super::*;
-	use pi_agent::types::{AgentToolExecute, TextContent as _TextContentMarker, Tool};
+	use pi_agent::types::AgentToolExecute;
+	use pi_ai::types::Tool;
 	use std::sync::atomic::AtomicUsize;
 
 	fn usage(input: u64, cost: f64) -> Usage {
@@ -437,6 +442,7 @@ mod tests {
 			structured_content: None,
 			usage: None,
 			is_error: None,
+			terminate: None,
 		}
 	}
 
@@ -492,9 +498,10 @@ mod tests {
 			let tools = self.tools.lock().clone();
 			Box::pin(async move {
 				let Some(tool) = tools.iter().find(|tool| tool.name() == tool_call.name) else {
+					let not_found = tool_call.name.clone();
 					return AgentToolCallOutcome {
 						tool_call,
-						result: text_result(&format!("Tool {} not found", tool_call.name)),
+						result: text_result(&format!("Tool {not_found} not found")),
 						is_error: true,
 					};
 				};
@@ -506,15 +513,26 @@ mod tests {
 				let result = (tool.execute)(
 					tool_call.id.clone(),
 					tool_call.arguments.clone(),
-					signal,
+					crate::core::tools::tool_definition_wrapper::bridge_signal_to_ai(signal),
 					Some(Arc::new(move |partial: AgentToolResult| {
-						let future = forwarder(partial);
-						futures_util::executor::block_on(future);
+						let forwarder = Arc::clone(&forwarder);
+						// D68a: the forwarded future is trivially ready, so
+						// poll it inline — `tokio::spawn` would race the
+						// assertion on a current-thread runtime.
+						drop(futures_util::FutureExt::now_or_never(forwarder(partial)));
 					})),
 				)
 				.await;
-				let is_error = result.is_error == Some(true);
-				AgentToolCallOutcome { tool_call, result, is_error }
+				let is_error = result.as_ref().map(|result| result.is_error == Some(true)).unwrap_or(false);
+				AgentToolCallOutcome {
+						tool_call,
+						result: result.unwrap_or_else(|message| {
+							let mut error = text_result(&message);
+							error.is_error = Some(true);
+							error
+						}),
+						is_error,
+					}
 			})
 		}
 
@@ -740,13 +758,13 @@ mod tests {
 		for _ in 0..3 {
 			sequential_calls.push(runner.execute("call", "sequential", None, NestedToolCallOptions::default()));
 		}
-		let ((), (), ()) = futures_util::join!(sequential_calls[0], sequential_calls[1], sequential_calls[2]);
+		futures_util::future::join3(sequential_calls.remove(0), sequential_calls.remove(0), sequential_calls.remove(0)).await;
 
 		let mut parallel_calls = Vec::new();
 		for _ in 0..3 {
 			parallel_calls.push(runner.execute("call", "parallel", None, NestedToolCallOptions::default()));
 		}
-		let ((), (), ()) = futures_util::join!(parallel_calls[0], parallel_calls[1], parallel_calls[2]);
+		futures_util::future::join3(parallel_calls.remove(0), parallel_calls.remove(0), parallel_calls.remove(0)).await;
 
 		assert_eq!(max_sequential.load(Ordering::SeqCst), 1);
 		assert_eq!(max_parallel.load(Ordering::SeqCst), 3);

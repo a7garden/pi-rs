@@ -192,7 +192,7 @@ fn noop_context(cwd: &str) -> ExtensionContext {
 		mode: ExtensionMode::Print,
 		has_ui: false,
 		cwd: cwd.to_string(),
-		session_manager: std::sync::Arc::new(test_session_manager(cwd)),
+		session_manager: std::sync::Arc::new(parking_lot::Mutex::new(test_session_manager(cwd))),
 		model_registry: crate::core::extensions::types::offline_registry_for_tests(),
 		model: None,
 		scoped_models: Vec::new(),

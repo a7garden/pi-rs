@@ -705,8 +705,7 @@ mod tests {
 	use super::*;
 
 	fn env_guard() -> MutexGuard<'static> {
-		static LOCK: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
-		LOCK.lock()
+		crate::utils::test_env_lock()
 	}
 
 	type MutexGuard<'a> = parking_lot::MutexGuard<'a, ()>;

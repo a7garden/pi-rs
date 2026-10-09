@@ -16,7 +16,7 @@ pub type ToolContextFactory = Arc<dyn Fn(&str, Option<AbortSignal>) -> Extension
 /// Bridge the crate-local [`AbortSignal`] (D9) onto the pi-ai signal the
 /// agent loop's [`pi_agent::AgentToolExecute`] expects. A task forwards the
 /// abort; the forwarder finishes on its own afterwards.
-fn bridge_signal_to_ai(signal: Option<AbortSignal>) -> Option<pi_ai::utils::abort::AbortSignal> {
+pub(crate) fn bridge_signal_to_ai(signal: Option<AbortSignal>) -> Option<pi_ai::utils::abort::AbortSignal> {
 	let signal = signal?;
 	let forwarded = pi_ai::utils::abort::AbortSignal::new();
 	let target = forwarded.clone();

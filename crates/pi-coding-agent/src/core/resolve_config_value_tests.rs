@@ -25,6 +25,7 @@ fn temp_dir(name: &str) -> String {
 
 #[test]
 fn resolves_literals_environment_templates_and_escapes() {
+		let _env_guard = crate::utils::test_env_lock();
 	let _guard = ENV_LOCK.lock();
 	std::env::set_var("TEST_CONFIG_LEFT", "left");
 	std::env::set_var("TEST_CONFIG_RIGHT", "right");
@@ -45,6 +46,7 @@ fn resolves_literals_environment_templates_and_escapes() {
 
 #[test]
 fn uses_credential_scoped_environment_before_process_env() {
+		let _env_guard = crate::utils::test_env_lock();
 	let _guard = ENV_LOCK.lock();
 	std::env::set_var("TEST_CONFIG_SCOPED", "process");
 	let result = std::panic::catch_unwind(|| {
@@ -98,6 +100,7 @@ fn caches_successful_and_failed_commands_until_explicitly_cleared() {
 
 #[test]
 fn does_not_cache_environment_values() {
+		let _env_guard = crate::utils::test_env_lock();
 	let _guard = ENV_LOCK.lock();
 	std::env::set_var("TEST_CONFIG_DYNAMIC", "first");
 	let result = std::panic::catch_unwind(|| {

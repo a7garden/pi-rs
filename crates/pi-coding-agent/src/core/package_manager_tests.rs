@@ -19,7 +19,6 @@ use parking_lot::Mutex;
 use super::*;
 use crate::core::settings_manager::{Settings, SettingsManager, SettingsManagerCreateOptions};
 
-static ENV_LOCK: Mutex<()> = Mutex::new(());
 
 type Handler = Box<dyn Fn(&CommandCall) -> Result<String, String> + Send + Sync>;
 
@@ -82,7 +81,14 @@ struct TestEnv {
 }
 
 fn fresh_dir(name: &str) -> String {
-	let dir = std::env::temp_dir().join(format!("pm-rs-{name}-{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+	// Counter disambiguates same-tick creations under parallel load.
+	static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+	let dir = std::env::temp_dir().join(format!(
+		"pm-rs-{name}-{}-{}-{}",
+		std::process::id(),
+		std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos(),
+		SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+	));
 	std::fs::create_dir_all(&dir).unwrap();
 	dir.to_string_lossy().into_owned()
 }
@@ -124,7 +130,33 @@ fn setup(name: &str) -> (TestEnv, DefaultPackageManager) {
 }
 
 fn env_guard() -> parking_lot::MutexGuard<'static, ()> {
-	ENV_LOCK.lock()
+	// Shared crate-wide lock: env mutation races concurrent fork/exec in
+	// other suites (e.g. child_process spawns) under parallel test runs.
+	crate::utils::test_env_lock()
+}
+
+/// RAII restore of `HOME`: a failing assertion must not leak the override to
+/// unrelated suites (`get_home_dir()` reads `HOME` process-wide). The caller
+/// holds [`env_guard`]; this guard only restores the value.
+struct HomeOverride {
+	previous: Option<String>,
+}
+
+impl HomeOverride {
+	fn set(value: &str) -> HomeOverride {
+		let previous = std::env::var("HOME").ok();
+		std::env::set_var("HOME", value);
+		HomeOverride { previous }
+	}
+}
+
+impl Drop for HomeOverride {
+	fn drop(&mut self) {
+		match self.previous.take() {
+			Some(home) => std::env::set_var("HOME", home),
+			None => std::env::remove_var("HOME"),
+		}
+	}
 }
 
 fn ends_with_enabled(r: &ResolvedResource, suffix: &str) -> bool {
@@ -260,8 +292,7 @@ async fn auto_discovers_user_prompts_with_overrides() {
 async fn resolves_symlinked_user_and_project_resources_once() {
 	let _guard = env_guard();
 	let (env, pm) = setup("resolve-symlink-dedupe");
-	let previous_home = std::env::var("HOME").ok();
-	std::env::set_var("HOME", &env.temp_dir);
+	let _home = HomeOverride::set(&env.temp_dir);
 
 	let result = {
 		let shared_dir = Path::new(&env.temp_dir).join("shared-resources");
@@ -295,10 +326,6 @@ async fn resolves_symlinked_user_and_project_resources_once() {
 		pm.resolve(None).await.unwrap()
 	};
 
-	match previous_home {
-		Some(home) => std::env::set_var("HOME", home),
-		None => std::env::remove_var("HOME"),
-	}
 
 	assert_eq!(result.extensions.len(), 1);
 	assert_eq!(result.skills.len(), 1);
@@ -380,18 +407,13 @@ async fn project_pi_skill_base_dir_is_project_pi() {
 async fn user_agents_skill_base_dir_is_home_agents() {
 	let _guard = env_guard();
 	let (env, pm) = setup("meta-user-agents");
-	let previous_home = std::env::var("HOME").ok();
-	std::env::set_var("HOME", &env.temp_dir);
+	let _home = HomeOverride::set(&env.temp_dir);
 
 	let agents_base_dir = Path::new(&env.temp_dir).join(".agents").to_string_lossy().into_owned();
 	let skill_path = Path::new(&agents_base_dir).join("skills").join("user-agents").join("SKILL.md").to_string_lossy().into_owned();
 	write_file(&skill_path, "---\nname: user-agents\ndescription: user agents\n---\n");
 
 	let result = pm.resolve(None).await.unwrap();
-	match previous_home {
-		Some(home) => std::env::set_var("HOME", home),
-		None => std::env::remove_var("HOME"),
-	}
 
 	let skill = result.skills.iter().find(|r| r.path == skill_path).unwrap();
 	assert_eq!(skill.metadata.source, "auto");
@@ -529,8 +551,7 @@ async fn agents_skills_ignore_root_markdown_but_find_nested() {
 async fn home_agents_skills_stay_user_scoped() {
 	let _guard = env_guard();
 	let (env, _pm) = setup("agents-home-scope");
-	let previous_home = std::env::var("HOME").ok();
-	std::env::set_var("HOME", &env.temp_dir);
+	let _home = HomeOverride::set(&env.temp_dir);
 
 	let cwd = Path::new(&env.temp_dir).join("scratch").join("nested");
 	let local_agent_dir = Path::new(&env.temp_dir).join(".pi").join("agent");
@@ -549,10 +570,6 @@ async fn home_agents_skills_stay_user_scoped() {
 	});
 
 	let result = pm.resolve(None).await.unwrap();
-	match previous_home {
-		Some(home) => std::env::set_var("HOME", home),
-		None => std::env::remove_var("HOME"),
-	}
 
 	let matching: Vec<_> = result.skills.iter().filter(|r| r.path == home_skill).collect();
 	assert_eq!(matching.len(), 1);
@@ -565,8 +582,7 @@ async fn home_agents_skills_stay_user_scoped() {
 async fn dedupes_user_skills_when_agent_skills_symlink() {
 	let _guard = env_guard();
 	let (env, pm) = setup("agents-symlink-dedupe");
-	let previous_home = std::env::var("HOME").ok();
-	std::env::set_var("HOME", &env.temp_dir);
+	let _home = HomeOverride::set(&env.temp_dir);
 
 	let agent_skills_dir = Path::new(&env.agent_dir).join("skills");
 	let agents_skills_dir = Path::new(&env.temp_dir).join(".agents").join("skills");
@@ -577,10 +593,6 @@ async fn dedupes_user_skills_when_agent_skills_symlink() {
 	write_file(&skill_path, "---\nname: foo\ndescription: foo\n---\n");
 
 	let result = pm.resolve(None).await.unwrap();
-	match previous_home {
-		Some(home) => std::env::set_var("HOME", home),
-		None => std::env::remove_var("HOME"),
-	}
 
 	let foo_skills: Vec<_> = result.skills.iter().filter(|r| r.path.ends_with("foo/SKILL.md")).collect();
 	assert_eq!(foo_skills.len(), 1);
@@ -595,10 +607,9 @@ async fn respects_gitignore_in_skill_directories() {
 	let _guard = env_guard();
 	let (env, pm) = setup("ignore-gitignore");
 	// Isolate from the real $HOME (~/.agents/skills could contain matching names).
-	let previous_home = std::env::var("HOME").ok();
 	let fake_home = Path::new(&env.temp_dir).join("home");
 	std::fs::create_dir_all(&fake_home).unwrap();
-	std::env::set_var("HOME", &fake_home);
+	let _home = HomeOverride::set(fake_home.to_str().unwrap());
 	let skills_dir = Path::new(&env.agent_dir).join("skills").to_string_lossy().into_owned();
 	write_file(&format!("{skills_dir}/.gitignore"), "venv\n__pycache__\n");
 	write_file(
@@ -609,10 +620,6 @@ async fn respects_gitignore_in_skill_directories() {
 	env.settings.lock().set_skill_paths(&["skills".to_string()]);
 
 	let result = pm.resolve(None).await.unwrap();
-	match previous_home {
-		Some(home) => std::env::set_var("HOME", home),
-		None => std::env::remove_var("HOME"),
-	}
 	assert!(result.skills.iter().any(|r| r.path.contains("good-skill") && r.enabled));
 	assert!(!result.skills.iter().any(|r| r.path.contains("venv") && r.enabled));
 }
@@ -2019,8 +2026,7 @@ async fn resolves_autoload_disabled_project_entries_as_deltas() {
 async fn resolves_autoload_disabled_entries_as_positive_only_without_global() {
 	let _guard = env_guard();
 	let (env, pm) = setup("pkgfilter-positive-only");
-	let previous_home = std::env::var("HOME").ok();
-	std::env::set_var("HOME", &env.temp_dir);
+	let _home = HomeOverride::set(&env.temp_dir);
 
 	let pkg_dir = Path::new(&env.temp_dir).join("positive-only-pkg").to_string_lossy().into_owned();
 	write_file(&format!("{pkg_dir}/extensions/foo.ts"), "export default function() {}");
@@ -2037,10 +2043,6 @@ async fn resolves_autoload_disabled_entries_as_positive_only_without_global() {
 	}]);
 
 	let result = pm.resolve(None).await.unwrap();
-	match previous_home {
-		Some(home) => std::env::set_var("HOME", home),
-		None => std::env::remove_var("HOME"),
-	}
 
 	assert_eq!(result.extensions.iter().map(|r| r.path.clone()).collect::<Vec<_>>(), vec![format!("{pkg_dir}/extensions/foo.ts")]);
 	assert!(result.skills.is_empty());

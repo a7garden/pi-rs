@@ -147,6 +147,7 @@ mod tests {
 
 	#[tokio::test]
 	async fn spawn_process_captures_output() {
+		let _env_guard = crate::utils::test_env_lock();
 		let child = spawn_process("/bin/sh", &["-c", "echo out; echo err 1>&2"]).unwrap();
 		let result = wait_for_child_process(child).await.unwrap();
 		assert_eq!(result.code, Some(0));
@@ -156,6 +157,7 @@ mod tests {
 
 	#[tokio::test]
 	async fn wait_returns_after_exit_even_with_detached_grandchild_holding_pipe() {
+		let _env_guard = crate::utils::test_env_lock();
 		// A short-lived child that leaves a detached descendant writing to the
 		// (inherited) pipe: the grace timer must release us, not hang forever.
 		let child = spawn_process(

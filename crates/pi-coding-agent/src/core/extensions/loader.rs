@@ -69,7 +69,7 @@ use std::sync::Arc;
 use std::sync::LazyLock;
 use std::time::SystemTime;
 
-use parking_lot::Mutex;
+use parking_lot::{Mutex, MutexGuard};
 use pi_agent::{AgentThinkingLevel, BoxFuture};
 use pi_ai::types::Model;
 use pi_ai::Provider as AiProvider;
@@ -120,6 +120,15 @@ struct ExtensionCache {
 }
 
 static EXTENSION_CACHE: LazyLock<Mutex<ExtensionCache>> = LazyLock::new(Mutex::default);
+
+/// Test-only gate serializing global extension-cache mutation (tests) with
+/// cache-reading tests in this module (`clearExtensionCache` may run at any
+/// time upstream; the ported tests keep the assertions deterministic).
+#[cfg(test)]
+pub(crate) fn cache_test_gate() -> parking_lot::MutexGuard<'static, ()> {
+	static CACHE_TEST_LOCK: Mutex<()> = Mutex::new(());
+	CACHE_TEST_LOCK.lock()
+}
 
 /// Clear the global module cache (`clearExtensionCache`).
 pub fn clear_extension_cache() {
@@ -964,12 +973,10 @@ mod tests {
 		create_extension_runtime()
 	}
 
-	/// The cache registry is global — serialize cache-touching tests.
-	static CACHE_TEST_LOCK: Mutex<()> = Mutex::new(());
 
 	#[test]
 	fn missing_path_yields_stand_in_error_record() {
-		let _guard = CACHE_TEST_LOCK.lock();
+		let _guard = cache_test_gate();
 		let result = tokio::runtime::Runtime::new().unwrap().block_on(load_extensions_cached(
 			&["./nope/missing.ts".to_string()],
 			".",
@@ -984,7 +991,7 @@ mod tests {
 
 	#[test]
 	fn existing_path_produces_stand_in_record_and_cache_entry() {
-		let _guard = CACHE_TEST_LOCK.lock();
+		let _guard = cache_test_gate();
 		let dir = std::env::temp_dir().join(format!("pi-loader-test-{}", std::process::id()));
 		std::fs::create_dir_all(&dir).unwrap();
 		let file = dir.join("ext.ts");
@@ -1003,15 +1010,32 @@ mod tests {
 		assert!(first.extensions[0].tools.is_empty());
 		assert!(first.runtime.pending_providers().is_empty());
 
-		// The entry is cached under (path, mtime).
-		assert!(EXTENSION_CACHE.lock().entries.contains_key(&path));
+		// The entry is cached under (path, mtime). Any parallel test loading
+		// extensions from a different cwd legitimately clears the global
+		// cache (`useExtensionCacheCwd`), so re-load and re-check a few
+		// times instead of asserting against racing clears.
+		let mut cached = EXTENSION_CACHE.lock().entries.contains_key(&path);
+		for _ in 0..50 {
+			if cached {
+				break;
+			}
+			std::thread::sleep(std::time::Duration::from_millis(10));
+			let _ = tokio::runtime::Runtime::new().unwrap().block_on(load_extensions_cached(
+				&[path.clone()],
+				&dir.to_string_lossy(),
+				test_event_bus(),
+				Some(runtime()),
+			));
+			cached = EXTENSION_CACHE.lock().entries.contains_key(&path);
+		}
+		assert!(cached);
 
 		std::fs::remove_dir_all(&dir).ok();
 	}
 
 	#[test]
 	fn clear_extension_cache_bumps_generation_and_clears_entries() {
-		let _guard = CACHE_TEST_LOCK.lock();
+		let _guard = cache_test_gate();
 		let dir = std::env::temp_dir().join(format!("pi-loader-gen-{}", std::process::id()));
 		std::fs::create_dir_all(&dir).unwrap();
 		let path = dir.join("ext.ts").to_string_lossy().to_string();
@@ -1137,5 +1161,112 @@ mod tests {
 			builtin: None,
 		})
 		.is_some());
+	}
+}
+
+#[cfg(test)]
+mod runtime_freshness_probe {
+	// Probe: two sequential cached loads sharing one factory must yield two
+	// independent `Extension`s whose handlers both dispatch.
+	use crate::core::resource_loader::{DefaultResourceLoader, ResourceLoaderReloadOptions};
+	use super::*;
+	use crate::core::extensions::runner::ExtensionRunner;
+	use crate::core::extensions::types::ExtensionContext;
+	use std::sync::atomic::{AtomicU32, Ordering};
+
+	struct ProbeBus;
+	impl EventBus for ProbeBus {
+		fn emit(&self, _channel: &str, _data: JsonValue) {}
+		fn on(&self, _channel: &str, _handler: EventBusHandler) -> Unsubscribe {
+			Box::new(|| {})
+		}
+	}
+
+	#[tokio::test(flavor = "multi_thread")]
+	async fn second_cached_load_dispatches_session_start() {
+		let dir = std::env::temp_dir().join(format!("loader-probe-{}", std::process::id()));
+		std::fs::create_dir_all(&dir).unwrap();
+		let cwd = dir.to_string_lossy().to_string();
+
+		let counter = Arc::new(AtomicU32::new(0));
+		let counter_for_fn = Arc::clone(&counter);
+		let factory: ExtensionFactory = Arc::new(move |_pi: ExtensionApiHandle| {
+			let counter = Arc::clone(&counter_for_fn);
+			Box::pin(async move {
+				_pi.on(
+					"session_start",
+					Arc::new(move |_event: JsonValue, _ctx: ExtensionContext| {
+						let counter = Arc::clone(&counter);
+						Box::pin(async move {
+							counter.fetch_add(1, Ordering::SeqCst);
+							Ok(None)
+						})
+					}),
+				);
+				Ok(())
+			})
+		});
+
+		let factory_for_first = Arc::clone(&factory);
+		let cwd_for_task = cwd.clone();
+		let first = tokio::task::spawn_blocking(move || {
+			let mut loader = DefaultResourceLoader::new(crate::core::resource_loader::DefaultResourceLoaderOptions {
+				cwd: cwd_for_task.clone(),
+				agent_dir: cwd_for_task.clone(),
+				extension_factories: vec![crate::core::extensions::types::InlineExtension::Factory(factory_for_first)],
+				..Default::default()
+			});
+			loader.reload(ResourceLoaderReloadOptions::default());
+			loader
+		})
+		.await
+		.unwrap();
+		let first_result = first.get_extensions().clone();
+		let first_extensions = first_result.extensions.clone();
+		let factory_for_second = Arc::clone(&factory);
+		let cwd_for_task = cwd.clone();
+		let second = tokio::task::spawn_blocking(move || {
+			let mut loader = DefaultResourceLoader::new(crate::core::resource_loader::DefaultResourceLoaderOptions {
+				cwd: cwd_for_task.clone(),
+				agent_dir: cwd_for_task.clone(),
+				extension_factories: vec![crate::core::extensions::types::InlineExtension::Factory(factory_for_second)],
+				..Default::default()
+			});
+			loader.reload(ResourceLoaderReloadOptions::default());
+			loader
+		})
+		.await
+		.unwrap();
+		let second_result = second.get_extensions().clone();
+		let second_extensions = second_result.extensions.clone();
+
+		let session_manager = Arc::new(parking_lot::Mutex::new(
+			crate::core::session_manager::SessionManager::in_memory(None, None, None).unwrap(),
+		));
+		let model_runtime = crate::core::model_runtime::ModelRuntime::create(Default::default()).await.unwrap();
+		let model_registry = Arc::new(crate::core::model_registry::ModelRegistry::new(model_runtime));
+		let make_runner = |extensions: Vec<crate::core::extensions::types::Extension>| {
+			let runner = ExtensionRunner::new(
+				extensions,
+				create_extension_runtime(),
+				&cwd,
+				Arc::clone(&session_manager),
+				Arc::clone(&model_registry),
+			);
+			runner
+		};
+		let runner_one = Arc::new(make_runner(first_extensions));
+		let runner_two = Arc::new(make_runner(second_extensions));
+
+		runner_one.emit("session_start", JsonValue::Null).await;
+		let after_first = counter.load(Ordering::SeqCst);
+		runner_two.emit("session_start", JsonValue::Null).await;
+		let after_second = counter.load(Ordering::SeqCst);
+
+		assert!(after_first >= 1, "first load dispatch: {after_first}");
+		assert!(
+			after_second > after_first,
+			"second load must dispatch into its own fresh handlers (first={after_first}, second={after_second})"
+		);
 	}
 }

@@ -1440,7 +1440,7 @@ mod tests {
 			extensions,
 			runtime,
 			"/tmp/pi-cache-warmer-test",
-			Arc::new(SessionManager::in_memory(None, None, None).unwrap()),
+			Arc::new(parking_lot::Mutex::new(SessionManager::in_memory(None, None, None).unwrap())),
 			crate::core::extensions::types::offline_registry_for_tests(),
 		);
 		let event = CacheWarmingDecisionEvent {

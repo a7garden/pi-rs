@@ -164,18 +164,18 @@ pub struct Agent {
 	follow_up_queue: Arc<Mutex<PendingMessageQueue>>,
 
 	pub convert_to_llm: crate::types::ConvertToLlm,
-	pub transform_context: Option<crate::types::TransformContext>,
+	pub transform_context: parking_lot::RwLock<Option<crate::types::TransformContext>>,
 	pub stream_function: crate::types::StreamFn,
 	pub get_api_key: Option<crate::types::GetApiKey>,
 	pub on_payload: Option<pi_ai::types::PayloadHook>,
 	pub on_response: Option<pi_ai::types::ResponseHook>,
 	pub on_provider_stream_event: Option<pi_ai::types::ProviderStreamEventHook>,
-	pub before_tool_call: Option<crate::types::BeforeToolCallHook>,
-	pub after_tool_call: Option<crate::types::AfterToolCallHook>,
-	pub finish_turn: Option<crate::types::FinishTurn>,
-	pub prepare_request: Option<crate::types::PrepareRequestHook>,
-	pub prepare_next_turn: Option<crate::types::PrepareNextTurnWithContextHook>,
-	pub prepare_next_turn_with_context: Option<crate::types::PrepareNextTurnWithContextHook>,
+	pub before_tool_call: parking_lot::RwLock<Option<crate::types::BeforeToolCallHook>>,
+	pub after_tool_call: parking_lot::RwLock<Option<crate::types::AfterToolCallHook>>,
+	pub finish_turn: parking_lot::RwLock<Option<crate::types::FinishTurn>>,
+	pub prepare_request: parking_lot::RwLock<Option<crate::types::PrepareRequestHook>>,
+	pub prepare_next_turn: parking_lot::RwLock<Option<crate::types::PrepareNextTurnWithContextHook>>,
+	pub prepare_next_turn_with_context: parking_lot::RwLock<Option<crate::types::PrepareNextTurnWithContextHook>>,
 	active_run: Mutex<Option<ActiveRun>>,
 	session_id: Mutex<Option<String>>,
 	/// Optional per-level thinking token budgets forwarded to the stream
@@ -208,18 +208,18 @@ impl Agent {
 			convert_to_llm: options.convert_to_llm.take().unwrap_or_else(|| {
 				Arc::new(|messages| Box::pin(async move { default_convert_to_llm(&messages) }))
 			}),
-			transform_context: options.transform_context.take(),
+			transform_context: parking_lot::RwLock::new(options.transform_context.take()),
 			stream_function,
 			get_api_key: options.get_api_key.take(),
 			on_payload: options.on_payload.take(),
 			on_response: options.on_response.take(),
 			on_provider_stream_event: options.on_provider_stream_event.take(),
-			before_tool_call: options.before_tool_call.take(),
-			after_tool_call: options.after_tool_call.take(),
-			finish_turn: options.finish_turn.take(),
-			prepare_request: options.prepare_request.take(),
-			prepare_next_turn: options.prepare_next_turn.take(),
-			prepare_next_turn_with_context: options.prepare_next_turn_with_context.take(),
+			before_tool_call: parking_lot::RwLock::new(options.before_tool_call.take()),
+			after_tool_call: parking_lot::RwLock::new(options.after_tool_call.take()),
+			finish_turn: parking_lot::RwLock::new(options.finish_turn.take()),
+			prepare_request: parking_lot::RwLock::new(options.prepare_request.take()),
+			prepare_next_turn: parking_lot::RwLock::new(options.prepare_next_turn.take()),
+			prepare_next_turn_with_context: parking_lot::RwLock::new(options.prepare_next_turn_with_context.take()),
 			active_run: Mutex::new(None),
 			session_id: Mutex::new(options.session_id.take()),
 			thinking_budgets: options.thinking_budgets.take(),
@@ -443,11 +443,16 @@ impl Agent {
 			return Err(AgentError("Agent is already processing. Wait for completion before continuing.".into()));
 		}
 
-		let state = self.state.lock();
-		let last_message = state.messages.last().cloned();
-		let all_system = !state.messages.is_empty() && state.messages.iter().all(|message| message.role() == "system");
-		let has_messages = !state.messages.is_empty();
-		drop(state);
+		// Block-scoped so the guard cannot live across the awaits below
+		// (`drop(state)` alone does not end the generator's may-use range).
+		let (last_message, all_system, has_messages) = {
+			let state = self.state.lock();
+			(
+				state.messages.last().cloned(),
+				!state.messages.is_empty() && state.messages.iter().all(|message| message.role() == "system"),
+				!state.messages.is_empty(),
+			)
+		};
 		if !has_messages || all_system {
 			return Err(AgentError("No messages to continue from".into()));
 		}
@@ -528,16 +533,16 @@ impl Agent {
 				..SimpleStreamOptions::default()
 			},
 			convert_to_llm: self.convert_to_llm.clone(),
-			transform_context: self.transform_context.clone(),
+			transform_context: self.transform_context.read().clone(),
 			get_api_key: self.get_api_key.clone(),
-			finish_turn: self.finish_turn.clone(),
-			prepare_request: self.prepare_request.clone(),
+			finish_turn: self.finish_turn.read().clone(),
+			prepare_request: self.prepare_request.read().clone(),
 			prepare_next_turn: None,
 			get_steering_messages: None,
 			get_follow_up_messages: None,
 			tool_execution: Some(self.tool_execution),
-			before_tool_call: self.before_tool_call.clone(),
-			after_tool_call: self.after_tool_call.clone(),
+			before_tool_call: self.before_tool_call.read().clone(),
+			after_tool_call: self.after_tool_call.read().clone(),
 		};
 		config.simple.base.session_id = self.session_id();
 		config.simple.base.on_payload = self.on_payload.clone();
@@ -547,10 +552,10 @@ impl Agent {
 		config.simple.thinking_budgets = self.thinking_budgets.clone();
 		config.simple.base.max_retry_delay_ms = self.max_retry_delay_ms;
 
-		if self.prepare_next_turn_with_context.is_some() || self.prepare_next_turn.is_some() {
+		if self.prepare_next_turn_with_context.read().is_some() || self.prepare_next_turn.read().is_some() {
 			let agent = Arc::clone(self);
-			let with_context = self.prepare_next_turn_with_context.clone();
-			let signal_only = self.prepare_next_turn.clone();
+			let with_context = self.prepare_next_turn_with_context.read().clone();
+			let signal_only = self.prepare_next_turn.read().clone();
 			config.prepare_next_turn = Some(prepare_next_turn(move |context| {
 				let agent = agent.clone();
 				let with_context = with_context.clone();
@@ -761,4 +766,5 @@ fn create_mutable_agent_state(initial_state: &AgentInitialState) -> MutableAgent
 		error_message: None,
 	}
 }
+
 

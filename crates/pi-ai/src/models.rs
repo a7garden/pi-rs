@@ -1018,6 +1018,14 @@ pub trait MutableModels: Models {
 	fn set_provider(&self, provider: Arc<dyn Provider>);
 	fn delete_provider(&self, id: &str);
 	fn clear_providers(&self);
+	/// Atomically swap the full provider set (no clear-then-re-add window
+	/// observable between the per-provider `set_provider` calls).
+	fn replace_providers(&self, providers: Vec<Arc<dyn Provider>>) {
+		self.clear_providers();
+		for provider in providers {
+			self.set_provider(provider);
+		}
+	}
 }
 
 /// `ModelsRequestTransforms` upstream: caller hooks applied just before
@@ -2377,6 +2385,22 @@ impl MutableModels for ModelsImpl {
 			self.supersede_provider_refresh(&id);
 		}
 		self.providers.write().clear();
+	}
+
+	fn replace_providers(&self, providers: Vec<Arc<dyn Provider>>) {
+		let mut map = OrderedMap::new();
+		for provider in &providers {
+			map.insert(provider.id().to_string(), provider.clone());
+		}
+		// Supersede refresh loops for ids that leave the set.
+		let departing: Vec<String> = {
+			let current = self.providers.read();
+			current.keys().filter(|id| !map.contains_key(*id)).map(|id| id.to_string()).collect()
+		};
+		for id in &departing {
+			self.supersede_provider_refresh(id);
+		}
+		*self.providers.write() = map;
 	}
 }
 

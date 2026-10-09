@@ -122,8 +122,15 @@ mod tests {
 	use std::time::{SystemTime, UNIX_EPOCH};
 
 	fn create_temp_dir(name: &str) -> PathBuf {
+		// Counter disambiguates same-tick creations under parallel load.
+		static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 		let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
-		let dir = std::env::temp_dir().join(format!("{name}-{}", nanos));
+		let dir = std::env::temp_dir().join(format!(
+			"{name}-{}-{}-{}",
+			nanos,
+			std::process::id(),
+			SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+		));
 		fs::create_dir_all(&dir).unwrap();
 		dir
 	}

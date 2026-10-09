@@ -90,7 +90,7 @@ pub struct ResourcePathEntry {
 /// (upstream `ResourceLoaderReloadOptions`).
 pub struct ResourceLoaderReloadOptions {
 	/// Resolves project trust from the pre-trust extension set.
-	pub resolve_project_trust: Option<Box<dyn FnOnce(&LoadExtensionsResult) -> bool>>,
+	pub resolve_project_trust: Option<Box<dyn FnOnce(&LoadExtensionsResult) -> bool + Send>>,
 }
 
 impl Default for ResourceLoaderReloadOptions {
@@ -114,13 +114,13 @@ const HOST_PROVIDED_EXTENSION_PACKAGES: &[&str] = &[
 	"typebox",
 ];
 
-type ExtensionsOverride = Box<dyn Fn(LoadExtensionsResult) -> LoadExtensionsResult>;
-type SkillsOverride = Box<dyn Fn(SkillsResult) -> SkillsResult>;
-type PromptsOverride = Box<dyn Fn(PromptsResult) -> PromptsResult>;
-type ThemesOverride = Box<dyn Fn(ThemesResult) -> ThemesResult>;
-type AgentsFilesOverride = Box<dyn Fn(Vec<ContextFile>) -> Vec<ContextFile>>;
-type SystemPromptOverride = Box<dyn Fn(Option<String>) -> Option<String>>;
-type AppendSystemPromptOverride = Box<dyn Fn(Vec<String>) -> Vec<String>>;
+type ExtensionsOverride = Box<dyn Fn(LoadExtensionsResult) -> LoadExtensionsResult + Send + Sync>;
+type SkillsOverride = Box<dyn Fn(SkillsResult) -> SkillsResult + Send + Sync>;
+type PromptsOverride = Box<dyn Fn(PromptsResult) -> PromptsResult + Send + Sync>;
+type ThemesOverride = Box<dyn Fn(ThemesResult) -> ThemesResult + Send + Sync>;
+type AgentsFilesOverride = Box<dyn Fn(Vec<ContextFile>) -> Vec<ContextFile> + Send + Sync>;
+type SystemPromptOverride = Box<dyn Fn(Option<String>) -> Option<String> + Send + Sync>;
+type AppendSystemPromptOverride = Box<dyn Fn(Vec<String>) -> Vec<String> + Send + Sync>;
 
 pub type SkillsResult = SkillsPromptResult<Skill>;
 pub type PromptsResult = SkillsPromptResult<PromptTemplate>;
@@ -590,6 +590,13 @@ impl DefaultResourceLoader {
 		&self.extensions_result
 	}
 
+	/// Shared settings-manager handle (upstream: callers pass the same
+	/// `SettingsManager` object around; the loader owns the shared instance,
+	/// so sdk/services consumers take the handle from here).
+	pub fn settings_manager(&self) -> Arc<parking_lot::Mutex<SettingsManager>> {
+		Arc::clone(&self.settings_manager)
+	}
+
 	pub fn get_skills(&self) -> SkillsResult {
 		SkillsResult { items: self.skills.clone(), diagnostics: self.skill_diagnostics.clone() }
 	}
@@ -685,6 +692,11 @@ impl DefaultResourceLoader {
 		reset_timings("extensions");
 
 		if self.loaded {
+			// Serialize against the loader module's cache-reading tests (the
+			// gate is uncontended in production; tests use it to keep the
+			// global-cache assertions deterministic).
+			#[cfg(test)]
+			let _cache_gate = crate::core::extensions::loader::cache_test_gate();
 			clear_extension_cache();
 		}
 
@@ -1794,13 +1806,18 @@ mod resource_loader_tests {
 
 	impl TempDir {
 		fn new(tag: &str) -> Self {
+			// Nanosecond timestamps alone collide when two tests construct
+			// workspaces in the same tick under parallel load; the process-wide
+			// counter makes names unique.
+			static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 			let unique = format!(
-				"rl-{tag}-{}-{}",
+				"rl-{tag}-{}-{}-{}",
 				std::time::SystemTime::now()
 					.duration_since(std::time::UNIX_EPOCH)
 					.unwrap()
 					.as_nanos(),
-				std::process::id()
+				std::process::id(),
+				SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 			);
 			let path = std::env::temp_dir().join(unique);
 			std::fs::create_dir_all(&path).unwrap();
@@ -2991,6 +3008,7 @@ mod resource_loader_tests {
 	/// the `PI_TRUE_COLOR` environment override.
 	#[test]
 	fn uses_true_color_setting_over_256_color_environment() {
+		let _env_guard = crate::utils::test_env_lock();
 		let root = TempDir::new("theme-tc");
 		let theme_path = write_capability_theme(&root);
 		crate::utils::tui_compat::set_capability_overrides(Default::default());
@@ -3007,6 +3025,7 @@ mod resource_loader_tests {
 
 	#[test]
 	fn uses_256_color_mode_when_setting_is_false_despite_truecolor_environment() {
+		let _env_guard = crate::utils::test_env_lock();
 		let root = TempDir::new("theme-256");
 		let theme_path = write_capability_theme(&root);
 		crate::utils::tui_compat::set_capability_overrides(Default::default());
@@ -3023,6 +3042,7 @@ mod resource_loader_tests {
 
 	#[test]
 	fn returns_to_automatic_detection_after_an_explicit_setting_is_removed() {
+		let _env_guard = crate::utils::test_env_lock();
 		let ws = Workspace::new();
 		let theme_path = write_capability_theme(&ws._root);
 		std::env::set_var("PI_TRUE_COLOR", "1");

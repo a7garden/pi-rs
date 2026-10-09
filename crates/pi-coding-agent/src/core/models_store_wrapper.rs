@@ -344,10 +344,16 @@ mod models_store_wrapper_tests {
 	}
 
 	fn temp_dir(label: &str) -> String {
-		let unique = std::time::SystemTime::now()
-			.duration_since(std::time::UNIX_EPOCH)
-			.unwrap()
-			.as_nanos();
+		// Counter disambiguates same-tick creations under parallel load.
+		static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+		let unique = format!(
+			"{}-{}",
+			std::time::SystemTime::now()
+				.duration_since(std::time::UNIX_EPOCH)
+				.unwrap()
+				.as_nanos(),
+			SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+		);
 		std::env::temp_dir()
 			.join(format!("pi-models-store-{}-{}-{}", label, std::process::id(), unique))
 			.to_string_lossy()

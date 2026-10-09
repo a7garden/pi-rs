@@ -32,7 +32,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, OnceLock, Weak};
+use std::sync::{Arc, LazyLock, OnceLock, Weak};
 
 use async_trait::async_trait;
 use futures_util::future::BoxFuture;
@@ -133,7 +133,6 @@ impl ModelRuntimeAuthOverrides {
 }
 
 /// `CreateModelRuntimeOptions`.
-#[derive(Default)]
 pub struct CreateModelRuntimeOptions {
 	/// Credential storage. Defaults to the file at `auth_path`.
 	pub credentials: Option<Arc<dyn CredentialStore>>,
@@ -155,6 +154,29 @@ pub struct CreateModelRuntimeOptions {
 	/// Skip initial catalog and availability refresh. Static models remain
 	/// available. Defaults to true.
 	pub refresh_on_create: bool,
+}
+
+/// Upstream `create()` refreshes unless `refreshOnCreate === false`
+/// (`options.refreshOnCreate !== false`), so the default constructs with
+/// `refresh_on_create: true`. A derived `Default` silently produced `false`,
+/// leaving freshly created runtimes without a synchronous availability pass —
+/// register/prompt flows then raced the fire-and-forget refreshes
+/// (`No API key found for <provider>` at first prompt).
+impl Default for CreateModelRuntimeOptions {
+	fn default() -> Self {
+		CreateModelRuntimeOptions {
+			credentials: None,
+			auth_path: None,
+			models_path: None,
+			models_store: None,
+			models_store_path: None,
+			allow_model_network: false,
+			model_refresh_timeout_ms: None,
+			catalog_base_url: None,
+			signal: None,
+			refresh_on_create: true,
+		}
+	}
 }
 
 /// A virtual model registered under a provider (`RegisteredVirtualModel`).
@@ -402,7 +424,8 @@ impl ModelRuntime {
 
 	/// The provider without virtual models, or `None` when only virtual models
 	/// define it (`recomposeProvider`).
-	fn recompose_provider(&self, provider_id: &str) -> Option<Arc<dyn Provider>> {
+	/// The composed provider including virtual models (no registry mutation).
+	fn composed_provider(&self, provider_id: &str) -> Option<Arc<dyn Provider>> {
 		let provider = self.compose_provider(provider_id);
 		let virtual_models: Vec<Model> = self
 			.virtual_models
@@ -411,12 +434,19 @@ impl ModelRuntime {
 			.map(|entries| entries.values().map(|entry| entry.model.clone()).collect())
 			.unwrap_or_default();
 		if !virtual_models.is_empty() {
-			self.models.set_provider(crate::core::virtual_models::with_virtual_models(
+			Some(crate::core::virtual_models::with_virtual_models(
 				provider_id,
-				provider.clone(),
+				provider,
 				virtual_models,
-			));
-		} else if let Some(provider) = &provider {
+			))
+		} else {
+			provider
+		}
+	}
+
+	fn recompose_provider(&self, provider_id: &str) -> Option<Arc<dyn Provider>> {
+		let provider = self.composed_provider(provider_id);
+		if let Some(provider) = &provider {
 			self.models.set_provider(provider.clone());
 		} else {
 			self.models.delete_provider(provider_id);
@@ -460,11 +490,17 @@ impl ModelRuntime {
 	}
 
 	fn rebuild_providers(&self) {
-		self.models.clear_providers();
 		self.maps.lock().composition_errors.clear();
+		// Compose every provider first, then swap the set atomically so a
+		// concurrent reader never observes the clear-then-re-add window
+		// (single-threaded upstream JS cannot observe it; see crate docs).
+		let mut composed: Vec<Arc<dyn Provider>> = Vec::new();
 		for provider_id in self.provider_ids() {
-			self.recompose_provider(&provider_id);
+			if let Some(provider) = self.composed_provider(&provider_id) {
+				composed.push(provider);
+			}
 		}
+		self.models.replace_providers(composed);
 		self.update_model_snapshot();
 	}
 
@@ -940,9 +976,8 @@ impl ModelRuntime {
 	/// credential or a configured API key (`markProvisionallyConfigured`).
 	fn mark_provisionally_configured(&self, provider_id: &str, configured_status: Option<AuthStatus>, auth_type: AuthType) {
 		let mut state = self.state.lock();
-		if !state.snapshot.stored_providers.contains(provider_id)
-			&& !configured_status.map(|status| status.configured).unwrap_or(false)
-		{
+		let status_configured = configured_status.as_ref().map(|status| status.configured).unwrap_or(false);
+		if !state.snapshot.stored_providers.contains(provider_id) && !status_configured {
 			return;
 		}
 		state.snapshot.configured_providers.insert(provider_id.to_string());
@@ -1048,6 +1083,85 @@ impl ModelRuntime {
 		self.update_model_snapshot();
 		self.spawn_refresh(false);
 		Ok(())
+	}
+
+	/// `registerVirtualModel` over an extension-queued definition
+	/// ([`crate::core::extensions::types::VirtualModelDefinition`], D27/D31):
+	/// adapts the extension route shape (`BoxFuture<ModelRoute>`) to the
+	/// virtual-models router shape (`BoxFuture<Result<ModelRoute,
+	/// ThrownValue>>`).
+	pub fn register_extension_virtual_model(
+		&self,
+		definition: crate::core::extensions::types::VirtualModelDefinition,
+	) -> Result<(), ThrownValue> {
+		let crate::core::extensions::types::VirtualModelDefinition {
+			provider,
+			id,
+			name,
+			thinking_levels,
+			context_window,
+			max_tokens,
+			input,
+			route,
+		} = definition;
+		let adapted_route: crate::core::virtual_models::ModelRouteFn = Arc::new(move |request| {
+			let route = Arc::clone(&route);
+			Box::pin(async move {
+				// virtual_models::RouteRequest -> extension ModelRouteRequest
+				let request = crate::core::extensions::types::ModelRouteRequest {
+					model: request.model,
+					thinking_level: request.thinking_level,
+					reason: match request.reason {
+						crate::core::virtual_models::ModelRouteReason::User => {
+							crate::core::extensions::types::ModelRouteReason::User
+						}
+						crate::core::virtual_models::ModelRouteReason::Continuation => {
+							crate::core::extensions::types::ModelRouteReason::Continuation
+						}
+						crate::core::virtual_models::ModelRouteReason::Retry => {
+							crate::core::extensions::types::ModelRouteReason::Retry
+						}
+						crate::core::virtual_models::ModelRouteReason::Direct => {
+							crate::core::extensions::types::ModelRouteReason::Direct
+						}
+					},
+					previous: request.previous.map(|previous| crate::core::extensions::types::RouteModelRef {
+						model: previous.model,
+						thinking_level: previous.thinking_level,
+					}),
+					failed: request.failed.map(|failed| crate::core::extensions::types::RouteFailedRequest {
+						model: failed.model,
+						thinking_level: failed.thinking_level,
+						message: failed.message,
+					}),
+					state: request.state,
+					messages: request.messages,
+					signal: {
+						// The loader stub uses crate utils::abort; the pi-ai
+						// signal is carried by re-wrapping through the bridge
+						// controller when present. Extension routes observe
+						// cancellation through the crate signal (D30).
+						Some(crate::utils::abort::AbortSignal::default())
+					},
+				};
+				let route = route(request).await;
+				Ok(crate::core::virtual_models::ModelRoute {
+					model: route.model,
+					thinking_level: route.thinking_level,
+					state: route.state,
+				})
+			})
+		});
+		self.register_virtual_model(crate::core::virtual_models::VirtualModelDefinition {
+			provider,
+			id,
+			name,
+			thinking_levels,
+			context_window,
+			max_tokens,
+			input,
+			route: adapted_route,
+		})
 	}
 
 	/// `unregisterVirtualModel`.

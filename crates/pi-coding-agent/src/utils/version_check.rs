@@ -231,7 +231,9 @@ mod tests {
 
 	/// Serializes tests that mutate/read PI_* env vars against tests that
 	/// assert fetch behavior (cargo runs them in parallel threads).
-	static ENV_LOCK: Mutex<()> = Mutex::new(());
+	fn env_lock() -> parking_lot::MutexGuard<'static, ()> {
+		crate::utils::test_env_lock()
+	}
 	use crate::utils::management_http::HttpResponse;
 	use std::future::Future;
 
@@ -267,7 +269,7 @@ mod tests {
 
 	#[tokio::test]
 	async fn returns_only_newer_versions() {
-		let _env = ENV_LOCK.lock();
+		let _env = env_lock();
 		let fetcher = json_fetcher(r#"{"version":"1.2.3"}"#);
 		assert_eq!(check_for_new_pi_version(fetcher.clone(), "1.2.3").await, None);
 		assert_eq!(
@@ -278,7 +280,7 @@ mod tests {
 
 	#[tokio::test]
 	async fn uses_the_pi_dev_version_check_api_with_a_pi_user_agent() {
-		let _env = ENV_LOCK.lock();
+		let _env = env_lock();
 		let fetcher = Arc::new(CaptureFetcher::new(r#"{"version":"1.2.4"}"#));
 		let version = get_latest_pi_version(fetcher.clone(), "1.2.3", FetchCheckOptions::default()).await.unwrap();
 		assert_eq!(version.as_deref(), Some("1.2.4"));
@@ -291,7 +293,7 @@ mod tests {
 
 	#[tokio::test]
 	async fn returns_active_package_metadata_and_notes() {
-		let _env = ENV_LOCK.lock();
+		let _env = env_lock();
 		let fetcher = json_fetcher(r#"{"packageName":"@new-scope/pi","version":"1.2.4"}"#);
 		assert_eq!(
 			get_latest_pi_release(fetcher.clone(), "1.2.3", FetchCheckOptions::default()).await.unwrap(),
@@ -307,7 +309,7 @@ mod tests {
 
 	#[tokio::test]
 	async fn skips_automatic_checks_when_disabled_but_allows_direct_calls() {
-		let _env = ENV_LOCK.lock();
+		let _env = env_lock();
 		// SAFETY: tests touching distinct env keys run serialized by the
 		// coordinator (single test binary; keys unique to this suite).
 		std::env::set_var("PI_SKIP_VERSION_CHECK", "1");
@@ -322,7 +324,7 @@ mod tests {
 
 	#[tokio::test]
 	async fn offline_env_disables_even_direct_calls() {
-		let _env = ENV_LOCK.lock();
+		let _env = env_lock();
 		std::env::set_var("PI_OFFLINE", "1");
 		let fetcher = Arc::new(CaptureFetcher::new(r#"{"version":"1.2.4"}"#));
 		assert_eq!(get_latest_pi_version(fetcher.clone(), "1.2.3", FetchCheckOptions::default()).await.unwrap(), None);

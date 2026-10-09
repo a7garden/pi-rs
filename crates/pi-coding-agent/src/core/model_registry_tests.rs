@@ -44,7 +44,6 @@ use crate::core::virtual_models::{ModelRoute, RouteRequest, VirtualModelDefiniti
 /// Serializes process-env mutation across the parallel test binary (upstream
 /// tests mutate `process.env` inline; the port follows the
 /// `resolve_config_value_tests` house pattern).
-static ENV_LOCK: LazyLock<parking_lot::Mutex<()>> = LazyLock::new(|| parking_lot::Mutex::new(()));
 
 static DIR_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -283,7 +282,7 @@ fn run_with_env(name: &str, value: &str, test: impl FnOnce()) {
 
 /// Several env vars set/restored around `test`, panic-safe.
 fn run_with_envs(env: &[(&str, &str)], test: impl FnOnce()) {
-	let _guard = ENV_LOCK.lock();
+	let _guard = crate::utils::test_env_lock();
 	let previous: Vec<(&str, Option<String>)> =
 		env.iter().map(|(name, _)| (*name, std::env::var(name).ok())).collect();
 	for (name, value) in env {

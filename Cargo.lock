@@ -1937,6 +1937,7 @@ dependencies = [
  "thiserror",
  "tokio",
  "unicode-normalization",
+ "url",
 ]
 
 [[package]]

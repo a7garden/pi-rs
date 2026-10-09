@@ -796,9 +796,9 @@ pub struct ExtensionContext {
 	pub has_ui: bool,
 	/// Current working directory.
 	pub cwd: String,
-	/// Session manager (read-only by convention; upstream
-	/// `ReadonlySessionManager` — D28).
-	pub session_manager: Arc<SessionManager>,
+	/// Session manager (upstream `ReadonlySessionManager` — D28). Shared
+	/// mutable in Rust (agent-session D74); lock for reads and writes.
+	pub session_manager: Arc<parking_lot::Mutex<SessionManager>>,
 	/// Model registry for API key resolution.
 	pub model_registry: Arc<ModelRegistry>,
 	/// Current model (may be `None`).

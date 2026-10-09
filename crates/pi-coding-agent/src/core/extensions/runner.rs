@@ -30,7 +30,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
-use parking_lot::Mutex;
+use parking_lot::{Mutex, RwLock};
 use serde::Serialize;
 use serde_json::Value as JsonValue;
 
@@ -51,6 +51,7 @@ use super::types::{
 	ToolRenderers, ToolResultEvent, ToolResultEventResult, Unsubscribe, UserBashEvent, UIPromptKind,
 };
 use crate::core::session_manager::SessionManager as SessionManagerType;
+use parking_lot::Mutex as PlMutex;
 
 /// Error listener (`ExtensionErrorListener`).
 pub type ExtensionErrorListener = Arc<dyn Fn(&ExtensionError) + Send + Sync>;
@@ -282,12 +283,12 @@ struct HandlerSnapshot {
 pub struct ExtensionRunner {
 	extensions: Vec<Extension>,
 	runtime: super::types::ExtensionRuntime,
-	ui_context: Arc<dyn ExtensionUi>,
+	ui_context: RwLock<Arc<dyn ExtensionUi>>,
 	/// `true` once a real UI context was installed (`hasUI`).
-	ui_provided: bool,
-	mode: ExtensionMode,
+	ui_provided: RwLock<bool>,
+	mode: RwLock<ExtensionMode>,
 	cwd: String,
-	session_manager: Arc<SessionManagerType>,
+	session_manager: Arc<PlMutex<SessionManagerType>>,
 	model_registry: Arc<super::types::ModelRegistry>,
 	error_listeners: Arc<Mutex<Vec<ExtensionErrorListener>>>,
 	stale_message: Arc<Mutex<Option<String>>>,
@@ -304,7 +305,7 @@ impl std::fmt::Debug for ExtensionRunner {
 	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
 		f.debug_struct("ExtensionRunner")
 			.field("extensions", &self.extensions.iter().map(|e| e.path.clone()).collect::<Vec<_>>())
-			.field("mode", &self.mode)
+			.field("mode", &*self.mode.read())
 			.field("cwd", &self.cwd)
 			.finish_non_exhaustive()
 	}
@@ -315,15 +316,15 @@ impl ExtensionRunner {
 		extensions: Vec<Extension>,
 		runtime: super::types::ExtensionRuntime,
 		cwd: &str,
-		session_manager: Arc<SessionManagerType>,
+		session_manager: Arc<PlMutex<SessionManagerType>>,
 		model_registry: Arc<super::types::ModelRegistry>,
 	) -> Self {
 		ExtensionRunner {
 			extensions,
 			runtime,
-			ui_context: Arc::new(NoopExtensionUi),
-			ui_provided: false,
-			mode: ExtensionMode::Print,
+			ui_context: RwLock::new(Arc::new(NoopExtensionUi)),
+			ui_provided: RwLock::new(false),
+			mode: RwLock::new(ExtensionMode::Print),
 			cwd: cwd.to_string(),
 			session_manager,
 			model_registry,
@@ -343,7 +344,7 @@ impl ExtensionRunner {
 	/// Copy actions into the shared runtime (`bindCore`). All extension APIs
 	/// reference this runtime.
 	pub fn bind_core(
-		&mut self,
+		&self,
 		actions: ExtensionActions,
 		context_actions: ExtensionContextActions,
 		provider_actions: Option<super::types::ProviderActions>,
@@ -405,7 +406,6 @@ impl ExtensionRunner {
 			create_context: None,
 		});
 		drop(bound);
-		self.runtime.actions = actions;
 	}
 
 	/// Bind the command-context actions (`bindCommandContext`); `None`
@@ -432,18 +432,18 @@ impl ExtensionRunner {
 
 	/// Install the UI context and run mode (`setUIContext`); `None` resets
 	/// to the no-op UI.
-	pub fn set_ui_context(&mut self, ui_context: Option<Arc<dyn ExtensionUi>>, mode: ExtensionMode) {
+	pub fn set_ui_context(&self, ui_context: Option<Arc<dyn ExtensionUi>>, mode: ExtensionMode) {
 		match ui_context {
 			Some(ui) => {
-				self.ui_provided = true;
-				self.ui_context = ui;
+				*self.ui_provided.write() = true;
+				*self.ui_context.write() = ui;
 			}
 			None => {
-				self.ui_provided = false;
-				self.ui_context = Arc::new(NoopExtensionUi);
+				*self.ui_provided.write() = false;
+				*self.ui_context.write() = Arc::new(NoopExtensionUi);
 			}
 		}
-		self.mode = mode;
+		*self.mode.write() = mode;
 	}
 
 	/// Set the system-prompt renderer seam (D44).
@@ -458,11 +458,11 @@ impl ExtensionRunner {
 	// -- UI / introspection ---------------------------------------------------
 
 	pub fn get_ui_context(&self) -> Arc<dyn ExtensionUi> {
-		Arc::clone(&self.ui_context)
+		Arc::clone(&self.ui_context.read())
 	}
 
 	pub fn has_ui(&self) -> bool {
-		self.ui_provided
+		*self.ui_provided.read()
 	}
 
 	pub fn get_extension_paths(&self) -> Vec<String> {
@@ -814,8 +814,8 @@ impl ExtensionRunner {
 		};
 
 		Ok(ExtensionContext {
-			ui: Arc::clone(&self.ui_context),
-			mode: self.mode,
+			ui: Arc::clone(&self.ui_context.read()),
+			mode: *self.mode.read(),
 			has_ui: self.has_ui(),
 			cwd: self.cwd.clone(),
 			session_manager: Arc::clone(&self.session_manager),
@@ -2066,7 +2066,7 @@ pub(crate) mod runner_tests {
 	}
 
 	pub(crate) fn test_runner(extensions: Vec<Extension>, runtime: super::super::types::ExtensionRuntime) -> ExtensionRunner {
-		let session_manager = Arc::new(SessionManagerType::in_memory(None, None, None).expect("in-memory session"));
+		let session_manager = Arc::new(PlMutex::new(SessionManagerType::in_memory(None, None, None).expect("in-memory session")));
 		let model_registry = super::super::types::offline_registry_for_tests();
 		ExtensionRunner::new(extensions, runtime, "/tmp/pi-runner-test", session_manager, model_registry)
 	}
@@ -2216,7 +2216,7 @@ pub(crate) mod runner_tests {
 			mode: ExtensionMode::Tui,
 			has_ui: false,
 			cwd: cwd.to_string(),
-			session_manager: Arc::new(SessionManagerType::in_memory(None, None, None).unwrap()),
+			session_manager: Arc::new(PlMutex::new(SessionManagerType::in_memory(None, None, None).unwrap())),
 			model_registry: Arc::new(super::super::types::ModelRegistry::new(runtime)),
 			model: None,
 			scoped_models: Vec::new(),

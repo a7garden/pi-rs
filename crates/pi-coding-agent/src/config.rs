@@ -924,7 +924,7 @@ mod tests {
 
 	#[test]
 	fn agent_dir_env_override_wins() {
-		// SAFETY: single-threaded test touching a distinct env key.
+		let _env = crate::utils::test_env_lock();
 		std::env::set_var(ENV_AGENT_DIR, "/tmp/pi-agent-dir-override");
 		assert_eq!(get_agent_dir(), "/tmp/pi-agent-dir-override");
 		std::env::remove_var(ENV_AGENT_DIR);
