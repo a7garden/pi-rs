@@ -771,7 +771,16 @@ pub fn resolve_codemode_worker_specifier(runtime: &str, module_url: &str) -> Opt
 		return Some("./src/extensions/codemode/worker.ts".to_string());
 	}
 	if runtime == "bundled-node" {
-		let base = module_url.trim_end_matches('/');
+		// `new URL("./codemode-worker.js", moduleUrl)` resolves relative to
+		// the module's directory: the last path segment is replaced.
+		let (scheme_end, rest) = match module_url.find("://") {
+			Some(idx) => (idx + 3, &module_url[idx + 3..]),
+			None => (0, module_url),
+		};
+		let base = match rest.rfind('/') {
+			Some(idx) => &module_url[..scheme_end + idx],
+			None => module_url,
+		};
 		return Some(format!("{base}/codemode-worker.js"));
 	}
 	None
@@ -972,7 +981,7 @@ mod tests {
 			Some("./src/extensions/codemode/worker.ts".to_string())
 		);
 		assert_eq!(
-			resolve_codemode_worker_specifier("bundled-node", "file:///x/dist"),
+			resolve_codemode_worker_specifier("bundled-node", "file:///x/dist/config.js"),
 			Some("file:///x/dist/codemode-worker.js".to_string())
 		);
 		assert_eq!(resolve_codemode_worker_specifier("unbundled", "file:///x"), None);

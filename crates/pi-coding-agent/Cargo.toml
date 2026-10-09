@@ -46,6 +46,10 @@ thiserror = { workspace = true }
 tokio = { workspace = true }
 pi-ai = { path = "../pi-ai" }
 pi-agent = { path = "../pi-agent" }
+# extensions/mcp builds on the shared MCP client + OAuth port.
+pi-mcp = { path = "../pi-mcp" }
+# extensions/codemode builds on the codemode declarations/runtime traits.
+pi-codemode = { path = "../pi-codemode" }
 
 [dev-dependencies]
 # `tokio::time::advance` / `start_paused` in ported async tests (`full` excludes `test-util`).

@@ -46,6 +46,7 @@
 //! | `core/nested-tool-calls.ts` | [`core::nested_tool_calls`] (D68) | complete |
 //! | `core/session-cwd.ts` | [`core::session_cwd`] (D65) | complete — the `createAgentSessionRuntime` case defers with `AgentSessionRuntime` |
 //! | `core/session-export.ts` | [`core::session_export`] (D66) | complete — no upstream direct suite; consumers defer with AgentSession/interactive (D66) |
+//! | `core/export-html/` | [`core::export_html`] (D80, D81) | complete — templates embedded verbatim; tests ported; `createToolHtmlRenderer` component pipeline deferred (D81) |
 //! | `core/auth-guidance.ts` | [`core::auth_guidance`] (D69) | complete — no upstream suite; consumers defer with sdk/AgentSession (D69) |
 //! | `core/sdk.ts` | [`core::sdk`] (D73) | complete — `createAgentSession` + re-export surface; upstream `sdk-stream-options`/`sdk-openrouter-attribution` suites run the full prompt loop and defer with AgentSession/interactive |
 //! | `core/agent-session-runtime.ts` | [`core::agent_session_runtime`] (D72) | complete — lifecycle/new/fork/import flows; `agent-session-runtime-events` four lifecycle cases ported 1:1 in `runtime_events_tests` (faux-provider `session.prompt()` drive) |
@@ -63,6 +64,7 @@
 //! | `test/resolve-config-value.test.ts` | [`core::resolve_config_value::resolve_config_value_tests`] (1:1; the platform-mock case drives the stdin-transport path through the shell-config override seam) | complete |
 //! | `test/tools.test.ts` | `core::tools::tools_tests` + `tests/tools_image_tests.rs` (85 cases, 1:1; image cases split out for photon-seam process isolation, D36) | complete |
 //! | `core/tools/renderers/` | — | deferred (TUI renderer layer; D32) |
+//! | `extensions/` (mcp, tool-search, llama, codemode) | [`extensions`] | see [`extensions`] module docs (D80+) |
 //!
 //! Not ported yet (next passes), in dependency order:
 //! `core/agent-session.ts` (`AgentSession` class), `core/agent-session-runtime.ts`,
@@ -619,11 +621,67 @@
 //!   `vi.spyOn`; the port routes the call through an internal override
 //!   slot that only the in-module tests set
 //!   (`run_auto_compaction_override` + `#[cfg(test)]` call log).
-//! - **D79 — HTML export and bug-report summary defer
-//!   ([`core::agent_session`]).** `export-html/` and `bug-report.ts` are
-//!   not ported yet, so `AgentSession::export_to_html` and
-//!   `AgentSession::summarize_for_bug_report` return a fixed `Err`
-//!   describing the missing module. Every other member is ported.
+//! - **D79 — bug-report summary defer ([`core::agent_session`]).**
+
+//!   `bug-report.ts` is not ported yet, so
+//!   `AgentSession::summarize_for_bug_report` returns a fixed `Err`
+//!   describing the missing module. `export-html/` has since landed (see
+//!   D80/D81), so `AgentSession::export_to_html` is wired to it. Every other
+//!   member is ported.
+//! - **D90 — modes runtime-host seam ([`modes`]).** Upstream passes the
+//!   concrete `AgentSessionRuntime` (tests cast object-literal fakes); Rust
+//!   modes take an explicit [`modes::RuntimeHost`] trait object
+//!   ([`modes::AgentSessionRuntimeHandle`] wraps
+//!   `Arc<tokio::sync::Mutex<AgentSessionRuntime>>`).
+//! - **D91 — stdio seam / output-guard port
+//!   ([`core::output_guard`]).** Node's overridable `process.stdout` +
+//!   ENOBUFS write-tail have no Rust counterpart: `writeRawStdout` is a
+//!   locked blocking write, backpressure wait is a no-op, and modes take a
+//!   [`modes::ModeStdio`] seam tests capture (upstream `vi.mock`).
+//! - **D92 — bounded mode loops ([`modes::print_mode`],
+//!   [`modes::rpc::rpc_mode`]).** Upstream modes end in `process.exit`; the
+//!   Rust loops return the exit code and the production wrappers exit, so
+//!   tests drive a mode in-process. Signal/stdin wiring rides the seams.
+//! - **D93 — RPC wire projection ([`modes::rpc::rpc_types`],
+//!   [`modes::json_event`]).** Typed-session events (D75) project through
+//!   explicit JSON projections; command unions deserialize via an envelope;
+//!   aggregates without `Serialize` ports (`SessionStats`, `SessionTreeNode`,
+//!   `CompactionResult`) project manually. Unknown thinking levels / queue
+//!   modes are rejected (typed deserialization).
+//! - **D93b — mode command actions.** Infallible `SessionSwitchOutcome`
+//!   actions log errors to stderr and report `cancelled: false`; the
+//!   extension `setup` hook is not forwarded (extension seam takes
+//!   `Arc<SessionManager>`, runtime seam `&mut SessionManager`). RPC `bash`
+//!   honors `user_bash` `result` overrides; remote `operations` have no
+//!   runtime bridge on the erased channel (D43) and run locally.
+//! - **D94 — RPC client spawn ([`modes::rpc::rpc_client`]).** Spawns
+//!   `node <cliPath>` by default with a configurable program; the
+//!   private-`send` test seam is a crate-internal transport override. The
+//!   upstream `test/rpc.test.ts` live-CLI suite (17 cases) is deferred: it
+//!   requires the built CLI process (`dist/cli.js` upstream; no Rust CLI
+//!   binary exists yet) on top of the upstream credential gate — port it
+//!   with the CLI entry point.
+//! - **D80 — export-html assets and theme export helpers
+//!   ([`core::export_html`]).** Template assets (`template.html/css/js`,
+//!   `vendor/marked.min.js`, `vendor/highlight.min.js`) are embedded verbatim
+//!   with `include_str!` instead of read from a template directory at
+//!   runtime; the theme HTML-export helpers upstream defers with the
+//!   interactive mode (`getResolvedThemeColors`, `isLightTheme`,
+//!   `getThemeExportColors`) land in `core::export_html` because only export
+//!   consumes them; `getResolvedThemeColors` emits CSS custom properties in
+//!   `BTreeMap` (alphabetical) token order rather than upstream's JS object
+//!   insertion order; `state.systemPrompt` is replayed from the snapshot's
+//!   transcript (the Rust `AgentStateSnapshot` carries messages, not a
+//!   precomputed prompt); and base64 session-data encoding is hand-rolled to
+//!   avoid a new dependency.
+//! - **D81 — export-html tool-renderer component pipeline defer
+//!   ([`core::export_html::tool_renderer`]).** Upstream
+//!   `createToolHtmlRenderer` drives erased `ToolDefinition` TUI renderers
+//!   and converts their `pi-tui` `Component` ANSI output to HTML; that
+//!   renderer layer remains deferred (D27/D32). The pure text helpers
+//!   (`isBlankRenderedLine`, `trimRenderedResultLines`) are ported and the
+//!   `ToolHtmlRenderer` trait keeps the injection seam; custom-tool export
+//!   falls back to structured result rendering until the seam lands.
 //! - **D65 — session-cwd ([`core::session_cwd`]).** Upstream's structural
 //!   `{ getCwd, getSessionFile }` parameter becomes the `SessionCwdSource`
 //!   trait with a blanket impl for `SessionManager`
@@ -714,9 +772,59 @@
 //! `with_virtual_models` catalog, filtering and unrouted-stream coverage live
 //! in [`core::virtual_models::virtual_models_tests`]; its `ModelRuntime` and
 //! `createAgentSession` describe blocks defer with those ports.
+//!
+//! Upstream `test/args.test.ts` is ported 1:1 in [`cli::args`];
+//! `test/initial-message.test.ts` in [`cli::initial_message`];
+//! `test/keybindings-migration.test.ts` (the `runMigrations` cases) in
+//! [`core::keybindings_migration`]; the parse/validate cases of
+//! `test/auth-check.test.ts` and `test/credential-print.test.ts` in
+//! [`cli::auth_check`] / [`cli::auth_command`] / [`cli::credential_print`]
+//! tests. Deferred: the `KeybindingsManager` in-memory case (manager port),
+//! the runtime-backed OAuth-refresh cases (provider refresh injection is a
+//! `pi-ai` runtime capability), `startup-session-name.test.ts` (spawns the
+//! JS CLI binary), and all interactive/TUI-rendering surfaces.
+//!
+//! - **D100 — hand-rolled CLI parser ([`cli::args`]).** The upstream parser
+//!   is a hand-written loop with idiosyncratic observable behavior (`-p`
+//!   consuming one non-flag message, unknown `--flags` captured for
+//!   extensions, `--mode`/`--tui-mode` diagnostics instead of hard errors);
+//!   the loop is ported 1:1 rather than rebuilt on clap, which would need a
+//!   shim re-implementing every quirk. `printHelp` prints uncolored text
+//!   (chalk is upstream-only).
+//! - **D101 — local fuzzy matcher ([`cli::list_models`]).** Upstream
+//!   imports `fuzzyFilter` from pi-tui (excluded); the scoring function is
+//!   ported verbatim.
+//! - **D102 — mode dispatch seam ([`cli::main_dispatch`]).** Upstream ends
+//!   `main()` by constructing `InteractiveMode`/`runPrintMode`/
+//!   `runRpcMode`; the port consumes print/rpc runners through the
+//!   `ModeDispatcher` trait installed with `set_mode_dispatcher`, and
+//!   interactive mode is excluded with the TUI. `prepareInitialMessage`
+//!   consumes the first message from the owned `Args` (same observable
+//!   shift as upstream).
+//! - **D103 — deferred startup infra.** `takeOverStdout`/`restoreStdout`,
+//!   http dispatcher/proxy configuration, timing probes, theme init, and
+//!   `setCapabilityOverrides` are not invoked from `main()`; project trust
+//!   resolves from `--approve`/`--no-approve` (the `ProjectTrustStore`/
+//!   trust-manager modules are deferred, so project-local files are trusted
+//!   by default); `--resume` requires the excluded TUI session picker and
+//!   reports an error; missing-session-cwd always takes the non-interactive
+//!   error path; `showDeprecationWarnings` prints without the keypress.
+//! - **D104 — package/config/mcp CLI commands defer.** `install`, `remove`,
+//!   `uninstall`, `update`, `list`, `config`, and `mcp` print an error
+//!   naming the deferred modules.
+//! - **D105 — keybindings migration subset
+//!   ([`core::keybindings_migration`]).** Only
+//!   `migrateKeybindingsConfig` + config ordering are ported; the
+//!   `KeybindingsManager` and default-key tables stay behind the pi-tui
+//!   exclusion, and output ordering covers the ported key list with unknown
+//!   keys sorted alphabetically afterwards.
 
+pub mod cli;
 pub mod config;
 pub mod core;
+pub mod extensions;
+pub mod migrations;
+pub mod modes;
 pub mod theme;
 pub mod utils;
 

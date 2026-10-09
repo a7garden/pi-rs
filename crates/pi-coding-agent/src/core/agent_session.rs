@@ -31,10 +31,11 @@
 //! - **D78 — auto-compaction test seam**: upstream tests monkey-patch the
 //!   private `_runAutoCompaction` via `vi.spyOn`; the port routes the call
 //!   through an internal override slot that only the in-module tests set.
-//! - **D79 — HTML export and bug-report summary defer**: `export-html/` and
-//!   `bug-report.ts` are not ported yet, so [`AgentSession::export_to_html`]
-//!   and [`AgentSession::summarize_for_bug_report`] return a fixed
-//!   `Err` describing the missing module. Every other member is ported.
+//! - **D79 — bug-report summary defer**: `bug-report.ts` is not ported yet,
+//!   so [`AgentSession::summarize_for_bug_report`] returns a fixed `Err`
+//!   describing the missing module. `export-html/` has since landed in
+//!   [`core::export_html`] (D80/D81), so [`AgentSession::export_to_html`] is
+//!   wired to it. Every other member is ported.
 //!
 //! `agent-session-runtime.ts` and `agent-session-services.ts` (the
 //! `AgentSessionRuntime`/services layer) are separate ports; the upstream
@@ -2147,6 +2148,11 @@ impl AgentSession {
 		self.inner.settings_manager.lock().set_retry_enabled(enabled);
 	}
 
+	/// Abort an in-progress retry (`AgentSession.abortRetry`).
+	pub fn abort_retry(&self) {
+		self.inner.abort_retry();
+	}
+
 	// =========================================================================
 	// Bash Execution
 	// =========================================================================
@@ -2678,10 +2684,19 @@ impl AgentSession {
 	// Export & Utilities
 	// =========================================================================
 
-	/// Export session to HTML (D79: `export-html/` is not ported yet).
-	pub async fn export_to_html(&self, _output_path: Option<&str>, _theme_name: Option<&str>) -> Result<String, String> {
-		let _ = self;
-		Err("export_html is not ported yet (upstream export-html/ defers with the interactive mode; D79)".to_string())
+	/// Export session to HTML (upstream `AgentSession.exportToHtml`; the
+	/// `export-html/` module is now ported — see [`core::export_html`]).
+	pub async fn export_to_html(&self, output_path: Option<&str>, theme_name: Option<&str>) -> Result<String, String> {
+		let snapshot = self.state();
+		super::export_html::export_session_to_html(
+			&self.inner.session_manager.lock(),
+			Some(&snapshot),
+			super::export_html::ExportOptions {
+				output_path: output_path.map(str::to_string),
+				theme_name: theme_name.map(str::to_string),
+				tool_renderer: None,
+			},
+		)
 	}
 
 	/// Export the current session branch to a JSONL file. Writes the session

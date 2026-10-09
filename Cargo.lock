@@ -1928,6 +1928,8 @@ dependencies = [
  "parking_lot",
  "pi-agent",
  "pi-ai",
+ "pi-codemode",
+ "pi-mcp",
  "reqwest",
  "semver",
  "serde",

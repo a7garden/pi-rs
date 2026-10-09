@@ -72,8 +72,8 @@ pub trait OAuthClientProvider: Send + Sync {
 	async fn client_metadata_document(
 		&self,
 		_metadata: Option<&AuthorizationServerMetadata>,
-	) -> Option<OAuthClientMetadataDocument> {
-		None
+	) -> Result<Option<OAuthClientMetadataDocument>, McpError> {
+		Ok(None)
 	}
 
 	/// Upstream `state?()`.
@@ -619,7 +619,7 @@ async fn run_flow(
 		.filter(|scope| !scope.is_empty());
 	let stored = provider.client_information().await?;
 	let client_document = match &stored {
-		None => provider.client_metadata_document(metadata).await,
+		None => provider.client_metadata_document(metadata).await?,
 		Some(_) => None,
 	};
 	if let Some(document) = &client_document {

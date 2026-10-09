@@ -43,7 +43,7 @@ pub struct McpOAuthProviderOptions {
 	pub client_metadata: OAuthClientMetadata,
 	/// See [`OAuthClientProvider::client_metadata_document`].
 	pub client_metadata_document: Option<Arc<
-		dyn Fn(Option<&crate::oauth::types::AuthorizationServerMetadata>) -> Option<OAuthClientMetadataDocument>
+		dyn Fn(Option<&crate::oauth::types::AuthorizationServerMetadata>) -> Result<Option<OAuthClientMetadataDocument>, McpError>
 			+ Send
 			+ Sync,
 	>>,
@@ -90,7 +90,7 @@ pub struct McpOAuthProvider {
 	redirect_url: String,
 	client_metadata: OAuthClientMetadata,
 	client_metadata_document: Option<Arc<
-		dyn Fn(Option<&crate::oauth::types::AuthorizationServerMetadata>) -> Option<OAuthClientMetadataDocument>
+		dyn Fn(Option<&crate::oauth::types::AuthorizationServerMetadata>) -> Result<Option<OAuthClientMetadataDocument>, McpError>
 			+ Send
 			+ Sync,
 	>>,
@@ -182,8 +182,10 @@ impl OAuthClientProvider for McpOAuthProvider {
 	async fn client_metadata_document(
 		&self,
 		metadata: Option<&crate::oauth::types::AuthorizationServerMetadata>,
-	) -> Option<OAuthClientMetadataDocument> {
-		let hook = self.client_metadata_document.as_ref()?;
+	) -> Result<Option<OAuthClientMetadataDocument>, McpError> {
+		let Some(hook) = self.client_metadata_document.as_ref() else {
+			return Ok(None);
+		};
 		hook(metadata)
 	}
 

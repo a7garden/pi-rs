@@ -216,6 +216,12 @@ impl AgentSessionRuntime {
 		&self.session
 	}
 
+	/// Cloned session handle for mode hosts that hand the session out of a
+	/// locked runtime (D90 consumer).
+	pub fn session_arc(&self) -> Arc<AgentSession> {
+		Arc::clone(&self.session)
+	}
+
 	pub fn cwd(&self) -> &str {
 		&self.services.cwd
 	}

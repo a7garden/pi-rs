@@ -31,6 +31,7 @@ pub mod package_manager;
 pub mod pi_manifest;
 pub mod prompt_templates;
 pub mod provider_composer;
+pub mod export_html;
 pub mod resolve_config_value;
 pub mod resource_loader;
 pub mod runtime_credentials;
@@ -51,9 +52,11 @@ pub mod timings;
 pub mod tools;
 pub mod usage_totals;
 pub mod virtual_models;
+pub mod output_guard;
 pub mod remote_catalog_provider;
 
 #[cfg(test)]
 #[path = "model_registry_tests.rs"]
 mod model_registry_tests;
 pub mod auth_storage;
+pub mod keybindings_migration;
