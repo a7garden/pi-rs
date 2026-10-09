@@ -10,7 +10,7 @@
 //! | `tool.ts` (404) | [`tool`] | ported — schema, description catalog, loadout presentation, tool/`AgentTool` factories |
 //! | `execute.ts` (672) | [`execute`] | ported — orchestration/validation surface; the QuickJS worker itself stays behind pi-codemode's [`pi_codemode::runtime::host::CodeModeWorkerFactory`]/[`pi_codemode::wasm::WasmLoader`] traits, which pi-runtime implements (D91) |
 //! | `renderer.ts` (150) | [`renderer`] | theme-free string surface ported; TUI component assembly deferred with the theme layer (D92) |
-//! | `worker.ts` (6) | — | folded — a 2-line re-export of `pi-codemode/worker` as a bundled worker entrypoint; the Rust counterpart is pi-codemode's worker protocol and the `get_codemode_worker_specifier`/`get_quick_js_wasm_path` config already ported in [`crate::config`] (D91). No Rust file needed. |
+//! | `worker.ts` (6) | — | folded — a 2-line re-export of `pi-codemode/worker` as a bundled worker entrypoint; the Rust counterpart is pi-codemode's worker protocol and the `get_codemode_worker_specifier`/`get_quick_js_wasm_path` config already ported in [`crate::config`] (D91). pi-runtime implements the seam (`DenoCodeModeWorkerFactory` over the worker protocol — D160). No Rust file needed. |
 //! | `execute.lazy.ts` (2) | — | folded — a dynamic `import("./execute.ts")` so the sandbox loads on the first script; Rust modules load statically, [`execute::execute_codemode`] is called directly (D91). |
 //!
 //! # Deviations (D90–D94)
@@ -54,6 +54,13 @@
 //!   scalar values instead of UTF-16 code units (identical for ASCII and
 //!   every BMP content pi renders); `describeValue` reports JS `typeof`
 //!   shapes over JSON kinds.
+//! - **D160 — worker entry already covered.** `worker.ts`'s Rust
+//!   counterpart (the worker factory seam behind the bundled-entry
+//!   specifier) is implemented in pi-runtime as
+//!   `DenoCodeModeWorkerFactory` (`CodeModeWorkerFactory` + `WorkerHandle`
+//!   over the worker protocol); this crate only resolves the specifier
+//!   ([`crate::config::resolve_codemode_worker_specifier`]). No local
+//!   worker file.
 //!
 //! # Tests
 //!

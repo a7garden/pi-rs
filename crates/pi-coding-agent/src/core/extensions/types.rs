@@ -98,25 +98,7 @@ pub struct SlashCommandInfo {
 	pub source_info: SourceInfo,
 }
 
-/// Upstream `core/exec.ts` `ExecOptions` (module ported separately).
-#[derive(Debug, Clone, Default)]
-pub struct ExecOptions {
-	/// Signal to cancel the command.
-	pub signal: Option<AbortSignal>,
-	/// Timeout in milliseconds.
-	pub timeout: Option<u64>,
-	/// Working directory.
-	pub cwd: Option<String>,
-}
-
-/// Upstream `core/exec.ts` `ExecResult` (module ported separately).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ExecResult {
-	pub stdout: String,
-	pub stderr: String,
-	pub code: i32,
-	pub killed: bool,
-}
+pub use crate::core::exec::{ExecOptions, ExecResult};
 
 /// Upstream `core/model-resolver.ts` `ScopedModel` — the real port landed
 /// ([`crate::core::model_resolver`]), replacing the earlier stand-in (D29).

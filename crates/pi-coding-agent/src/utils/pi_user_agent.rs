@@ -12,7 +12,9 @@ pub fn get_pi_user_agent(version: &str) -> String {
 	format!("pi/{version} ({}; rust; {})", node_platform(), node_arch())
 }
 
-fn node_platform() -> String {
+/// `process.platform` naming (`darwin`/`win32`/…), shared with the bug-report
+/// environment summary.
+pub(crate) fn node_platform() -> String {
 	match std::env::consts::OS {
 		"macos" => "darwin".to_string(),
 		"windows" => "win32".to_string(),
@@ -20,7 +22,9 @@ fn node_platform() -> String {
 	}
 }
 
-fn node_arch() -> String {
+/// `process.arch` naming (`arm64`/`x64`/…), shared with the bug-report
+/// environment summary.
+pub(crate) fn node_arch() -> String {
 	match std::env::consts::ARCH {
 		"aarch64" => "arm64".to_string(),
 		"x86_64" => "x64".to_string(),

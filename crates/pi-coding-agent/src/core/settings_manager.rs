@@ -28,9 +28,11 @@ use serde_json::Value;
 use crate::config::CONFIG_DIR_NAME;
 use crate::utils::paths::{join, normalize_path, resolve_path_cwd, PathInputOptions};
 
-/// Upstream `DEFAULT_HTTP_IDLE_TIMEOUT_MS` (re-exported from
-/// `core/http-dispatcher.ts`, which is not ported yet).
-pub const DEFAULT_HTTP_IDLE_TIMEOUT_MS: u64 = 300_000;
+/// Upstream `DEFAULT_HTTP_IDLE_TIMEOUT_MS` — canonical home is
+/// [`crate::core::http_dispatcher`]; re-exported here for callers.
+pub use crate::core::http_dispatcher::{
+	parse_http_idle_timeout_ms, DEFAULT_HTTP_IDLE_TIMEOUT_MS,
+};
 
 /// Upstream default max server-requested retry delay (`pi-ai`
 /// `DEFAULT_MAX_AGENT_RETRY_DELAY_MS`).
@@ -175,24 +177,6 @@ fn deep_merge_settings(base: &Settings, overrides: &Settings) -> Settings {
 fn value_as_finite_f64(value: &Value) -> Option<f64> {
 	let number = value.as_f64()?;
 	number.is_finite().then_some(number)
-}
-
-/// Upstream `parseHttpIdleTimeoutMs` (`core/http-dispatcher.ts`): accepts a
-/// finite non-negative number (floored) or a string (`"disabled"` → 0, empty
-/// → `None`, otherwise numeric).
-pub fn parse_http_idle_timeout_ms(value: &Value) -> Option<u64> {
-	if let Some(text) = value.as_str() {
-		let trimmed = text.trim();
-		if trimmed.eq_ignore_ascii_case("disabled") {
-			return Some(0);
-		}
-		if trimmed.is_empty() {
-			return None;
-		}
-		return parse_http_idle_timeout_ms(&Value::from(trimmed.parse::<f64>().ok()?));
-	}
-	let number = value_as_finite_f64(value)?;
-	(number >= 0.0).then_some(number.floor() as u64)
 }
 
 /// Upstream `parseTimeoutSetting`: `parseHttpIdleTimeoutMs` plus a throw on

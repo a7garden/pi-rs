@@ -55,6 +55,35 @@ fn runtime_host(runtime: AgentSessionRuntime) -> Arc<dyn RuntimeHost> {
 }
 
 fn main() {
+	// Internal-process dispatch (D138/D140/D161/D162): spawned
+	// coordinator/server/session-worker roles run their entrypoints instead
+	// of the CLI (upstream each entry file's `isDirectInternalProcessEntry`
+	// block).
+	if let Some(role) = pi_coding_agent::experimental::process::get_internal_process_role().ok().flatten() {
+		let args: Vec<String> = std::env::args().skip(1).collect();
+		let runtime = tokio::runtime::Builder::new_multi_thread()
+			.enable_all()
+			.build()
+			.expect("failed to build the async runtime");
+		let result = runtime.block_on(async move {
+			match role {
+				pi_coding_agent::experimental::process::InternalProcessRole::Coordinator => {
+					pi_coding_agent::experimental::coordinator_entry::run_coordinator_entry(&args).await
+				}
+				pi_coding_agent::experimental::process::InternalProcessRole::Server => {
+					pi_coding_agent::experimental::server::run_server_entry(&args).await
+				}
+				pi_coding_agent::experimental::process::InternalProcessRole::SessionWorker => {
+					pi_coding_agent::experimental::session_worker::run_session_worker_entry(&args).await
+				}
+			}
+		});
+		if let Err(error) = result {
+			eprintln!("{error}");
+			std::process::exit(1);
+		}
+		return;
+	}
 	main_dispatch::set_mode_dispatcher(Box::new(ModeRunners));
 	setup_cli();
 	// The modes drive `!Send` runtime-switch futures to completion on the

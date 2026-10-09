@@ -5,7 +5,8 @@
 //! ordering are ported. Ordering follows the `app.*`/`tui.*` key lists
 //! below; unknown keys sort alphabetically afterwards (upstream orders by
 //! the full `KEYBINDINGS` definition table, including pi-tui entries not
-//! ported here).
+//! ported here). **D132:** `core/keybindings.ts` itself — the TUI-coupled
+//! `KeybindingsManager` over pi-tui — is deferred with the interactive mode.
 
 use std::collections::BTreeMap;
 

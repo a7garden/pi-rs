@@ -36,8 +36,9 @@ similar = "2"
 unicode-normalization = "0.1"
 # DEFLATE streams for utils/zip (upstream fflate).
 flate2 = "1"
-# HTTP fetch in utils/management-http (upstream global fetch).
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+# HTTP fetch in utils/management-http (upstream global fetch); multipart for
+# core/bug-report-upload (upstream FormData).
+reqwest = { version = "0.12", default-features = false, features = ["json", "multipart", "rustls-tls"] }
 # Wire types cross process boundaries (session JSONL files).
 serde = { workspace = true }
 serde_json = { workspace = true, features = ["preserve_order"] }
@@ -53,6 +54,20 @@ pi-codemode = { path = "../pi-codemode" }
 # core/extensions/loader bridge: real .ts/.js extension modules load through
 # the embedded DenoExtensionHost (D107).
 pi-runtime = { path = "../pi-runtime" }
+# experimental/services builds on the chord composition runtime, the client
+# transport, and the durable conversation/harness types (S1 slice, D138).
+pi-chord = { path = "../pi-chord" }
+pi-client = { path = "../pi-client" }
+pi-durable = { path = "../pi-durable" }
+# experimental/radius-relay WebSocket transport (upstream the npm `undici` WebSocket).
+tokio-tungstenite = "0.28"
+# experimental/server uses the protocol's server-id validation and frame limit.
+pi-protocol = { path = "../pi-protocol" }
+# session-worker control session-key env (`base64url`, upstream Buffer).
+base64 = "0.22"
+# experimental/services/server.rs routes server-side attachments (upstream
+# @earendil-works/pi-server types).
+pi-server = { path = "../pi-server" }
 
 [dev-dependencies]
 # `tokio::time::advance` / `start_paused` in ported async tests (`full` excludes `test-util`).

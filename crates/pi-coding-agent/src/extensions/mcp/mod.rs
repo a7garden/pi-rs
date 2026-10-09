@@ -11,7 +11,7 @@
 //! | `runtime.ts` | [`runtime`] | ported |
 //! | `cli.ts` | [`cli`] | ported (chalk → D81) |
 //! | `log.ts` | [`log`] | ported |
-//! | `ui.ts` | — | deferred (TUI-only, D81) |
+//! | `ui.ts` | — | deferred (TUI-only, D81; re-audited D160 — no portable logic) |
 //! | `cli.lazy.ts`, `runtime.lazy.ts` | — | folded into plain imports (D81) |
 //!
 //! # Deviations D80–D89
@@ -51,6 +51,11 @@
 //! - **D89.** JS string semantics: section budgets and the 64-character tool
 //!   name cap count UTF-8 bytes where upstream counts UTF-16 units (ASCII
 //!   equivalent); `McpToolDetails` is erased JSON (core extensions D27).
+//! - **D160.** `ui.ts` re-audit: the file is entirely TUI-bound — the
+//!   `McpMenu` items are pi-tui `SelectItem`s, the menu-selection
+//!   persistence is interleaved with `SelectList` rendering/keybinding
+//!   handling, and `redirectUrl`/`status` are component screens — so the
+//!   D81 deferral stands with nothing portable to extract.
 //!
 //! # Deferred tests
 //!

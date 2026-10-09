@@ -11,8 +11,9 @@
 //! - `takeOverStdout`/`restoreStdout`, http dispatcher/proxy configuration,
 //!   timing probes, theme init, and `setCapabilityOverrides` are
 //!   interactive/TUI-adjacent infra and are not invoked.
-//! - `install`/`remove`/`update`/`list`/`config`/`mcp` subcommands
-//!   (package-manager-cli.ts, mcp cli) are deferred modules (D104).
+//! - `install`/`remove`/`update`/`list`/`config` subcommands now live in
+//!   [`crate::package_manager_cli`] (D104 lifted for them, D133–D137);
+//!   the `mcp` subcommand remains deferred (D104).
 //! - `--export` is deferred with HTML export (D79).
 //! - `--resume` needs the TUI session picker (excluded); it reports an
 //!   error like other unavailable interactive surfaces.
@@ -738,27 +739,16 @@ fn resolve_cli_paths(cwd: &str, paths: Option<&Vec<String>>) -> Option<Vec<Strin
 	})
 }
 
-fn collect_settings_diagnostics(settings_manager: &mut SettingsManager) -> Vec<AgentSessionRuntimeDiagnostic> {
-	settings_manager
-		.drain_errors()
-		.into_iter()
-		.map(|error| AgentSessionRuntimeDiagnostic {
-			diagnostic_type: RuntimeDiagnosticType::Warning,
-			message: error.error,
-		})
-		.collect()
+fn collect_settings_diagnostics(
+	settings_manager: &mut SettingsManager,
+) -> Vec<AgentSessionRuntimeDiagnostic> {
+	crate::core::settings_diagnostics::collect_settings_diagnostics(settings_manager)
 }
 
-fn deduplicate_diagnostics(diagnostics: Vec<AgentSessionRuntimeDiagnostic>) -> Vec<AgentSessionRuntimeDiagnostic> {
-	let mut seen = std::collections::BTreeSet::new();
-	let mut result = Vec::new();
-	for diagnostic in diagnostics {
-		let key = (diagnostic.diagnostic_type.as_str(), diagnostic.message.clone());
-		if seen.insert(key) {
-			result.push(diagnostic);
-		}
-	}
-	result
+fn deduplicate_diagnostics(
+	diagnostics: Vec<AgentSessionRuntimeDiagnostic>,
+) -> Vec<AgentSessionRuntimeDiagnostic> {
+	crate::core::settings_diagnostics::deduplicate_diagnostics(diagnostics)
 }
 
 fn print_mode_unavailable(mode: AppMode) -> ! {
@@ -792,11 +782,33 @@ pub async fn main(args: Vec<String>, _options: Option<MainOptions>) {
 	let agent_dir = config::get_agent_dir();
 	let _bootstrap_settings_manager = SettingsManager::create(&cwd, &agent_dir, SettingsManagerCreateOptions::default());
 
-	// Upstream `install/remove/update/list/config/mcp` subcommands live in
-	// deferred modules (D104).
+	// Upstream `main.ts`: drop a previous run's Windows quarantine, then
+	// clean stale managed-install staging before any package command.
+	if cfg!(windows) {
+		crate::utils::windows_self_update::cleanup_windows_self_update_quarantine(&config::get_package_dir());
+	}
+	crate::package_manager_cli::cleanup_managed_install();
+
+	// Upstream `install/remove/uninstall/update/list` subcommands
+	// (package-manager-cli.ts; D104 lifted for these commands). A handled
+	// command exits with `process.exitCode ?? 0`.
+	match crate::package_manager_cli::handle_package_command(&args, &Default::default()).await {
+		Ok(true) => std::process::exit(0),
+		Err(exit_code) => std::process::exit(exit_code),
+		Ok(false) => {}
+	}
+	// Upstream `config` subcommand: handled runs exit inside (the selector's
+	// `process.exit(0)`); here the deferred-TUI report (D137) exits 1.
+	match crate::package_manager_cli::handle_config_command(&args, &Default::default()).await {
+		Ok(true) => std::process::exit(0),
+		Err(exit_code) => std::process::exit(exit_code),
+		Ok(false) => {}
+	}
+
+	// Upstream `mcp` subcommand lives in the mcp CLI module (still deferred).
 	if let Some(first) = args.first() {
-		if matches!(first.as_str(), "install" | "remove" | "uninstall" | "update" | "list" | "config" | "mcp") {
-			eprintln!("Error: \"{first}\" is not available in this build (package/mcp CLI modules are deferred).");
+		if first == "mcp" {
+			eprintln!("Error: \"{first}\" is not available in this build (the mcp CLI module is deferred).");
 			std::process::exit(1);
 		}
 	}

@@ -462,6 +462,12 @@ pub struct FacetOptions {
 #[async_trait]
 pub trait FacetHost: Send + Sync {
     fn services(&self) -> &crate::services::provider::RemoteServiceProvider;
+    /// Shared handle to the assembled provider (upstream exposes the provider
+    /// object itself; Rust callers need an `Arc` to build endpoints). Returns
+    /// `None` when the host implementation cannot share it.
+    fn provider_arc(&self) -> Option<Arc<crate::services::provider::RemoteServiceProvider>> {
+        None
+    }
     /// Activate and replace facets with matching IDs without disconnecting
     /// consumer service handles.
     async fn reload(&self, facets: Vec<Facet>) -> Result<(), AnyError>;

@@ -41,6 +41,10 @@ impl FacetHost for FacetHostFacade {
         &self.provider
     }
 
+    fn provider_arc(&self) -> Option<Arc<RemoteServiceProvider>> {
+        Some(Arc::clone(&self.provider))
+    }
+
     async fn reload(&self, facets: Vec<Facet>) -> Result<(), AnyError> {
         self.kernel.lock().await.reload(facets).await
     }

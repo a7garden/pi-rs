@@ -64,16 +64,52 @@
 //! | `test/resolve-config-value.test.ts` | [`core::resolve_config_value::resolve_config_value_tests`] (1:1; the platform-mock case drives the stdin-transport path through the shell-config override seam) | complete |
 //! | `test/tools.test.ts` | `core::tools::tools_tests` + `tests/tools_image_tests.rs` (85 cases, 1:1; image cases split out for photon-seam process isolation, D36) | complete |
 //! | `core/tools/renderers/` | — | deferred (TUI renderer layer; D32) |
-//! | `extensions/` (mcp, tool-search, llama, codemode) | [`extensions`] | see [`extensions`] module docs (D80+) |
+//! | `extensions/` (mcp, tool-search, llama, codemode) | [`extensions`] | see [`extensions`] module docs (D80+; remaining `ui.ts`/`worker.ts` surfaces re-audited D160 — llama helpers ported, mcp UI deferred, codemode worker covered by pi-runtime) |
 //! | `src/cli.ts` (`bin: pi` entry) | `src/bin/pi.rs` binary target | complete (D109; dispatcher over print/rpc runners, interactive excluded) |
+//! | `core/exec.ts` | [`core::exec`] (D116) | complete — `ExecOptions`/`ExecResult` re-exported by [`core::extensions::types`] |
+//! | `core/crash-log.ts` | [`core::crash_log`] (D117) | complete — upstream crash-log.test.ts suite ported |
+//! | `core/cache-stats.ts` | [`core::cache_stats`] (D118) | complete — upstream cache-stats.test.ts suite ported; misses keyed by session entry id |
+//! | `core/http-dispatcher.ts` | [`core::http_dispatcher`] (D119) | complete portable surface — undici global-dispatcher swap deferred; [`core::settings_manager`] consumes its re-exports |
+//! | `core/mcp-servers.ts` | [`core::mcp_servers`] (D120–D124) | complete — typed configs + full-parity registry; supersedes the `extensions/types.rs` stand-ins (migration of folded `extensions/mcp/config.rs` validation pending) |
+//! | `core/trust-manager.ts` | [`core::trust_manager`] (D111–D114) | complete — upstream trust-manager.test.ts ported |
+//! | `core/project-trust.ts` | [`core::project_trust`] (D115) | complete |
+//! | `core/radius.ts` | [`core::radius`] | complete |
+//! | `core/experimental.ts` | [`core::experimental`] | complete |
+//! | `core/settings-diagnostics.ts` | [`core::settings_diagnostics`] | complete — upstream suite ported; [`cli::main_dispatch`] rewired to it |
+//! | `core/bug-report.ts` | [`core::bug_report`] (D125–D127, D129) | complete |
+//! | `core/bug-report-upload.ts` | [`core::bug_report_upload`] (D128) | complete — gateway seam re-exported from [`core::radius`] |
+//! | `core/keybindings.ts` | — | deferred (D132 — pi-tui `KeybindingsManager`; only its migration subset is ported in [`core::keybindings_migration`]) |
+//! | `cli/config-selector.ts` | [`cli::config_selector`] | deferred (D130 — TUI launcher for `pi config`, excluded with interactive mode) |
+//! | `cli/session-picker.ts` | [`cli::session_picker`] | deferred (D131 — TUI `--resume` session selector, excluded with interactive mode) |
+//! | `client/index.ts` | `crates/pi-client` | 불요 — 1-line `export *` re-export shell, fulfilled by the pi-client crate |
+//! | `package-manager-cli.ts` | [`package_manager_cli`] (`install`/`remove`/`uninstall`/`update`/`list`/`config` subcommands, `cleanupManagedInstall`, managed self-update) | complete (D133–D137; `config` selector TUI defers per D130) |
+//! | `experimental/process.ts` | [`experimental::process`] | complete (D138) |
+//! | `experimental/services/*` (contracts, providers, connection, server, worker) | [`experimental::services`] (S1) | complete (D144–D148; `PresentationUI` implementations and the TUI chat client defer with interactive mode) |
+//! | `experimental/plugin.ts` | [`experimental::plugin`] | complete |
+//! | `experimental/coordinator.ts` | [`experimental::coordinator`] | complete (D139) |
+//! | `experimental/coordinator-entry.ts` | [`experimental::coordinator_entry`] | complete (D140) |
+//! | `experimental/session-catalog.ts` | [`experimental::session_catalog`] | complete (D141) |
+//! | `experimental/radius-auth.ts` | [`experimental::radius_auth`] | complete (D151; `AuthInput` lives here until `cli/experimental/` ports) |
+//! | `experimental/radius-relay.ts` | [`experimental::radius_relay`] | complete (D150 — undici WebSocket becomes a seam + tokio-tungstenite default factory) |
+//! | `experimental/plugins/package.ts` | [`experimental::plugins::package`] | complete (D152) |
+//! | `experimental/plugins/bundled.ts` | [`experimental::plugins::bundled`] | session facet loader + presentation data codec (D152; `createPresentationFacetLoaders` defers with the headless-client slice) |
+//! | `experimental/session-worker.ts` | [`experimental::session_worker`] + [`experimental::lockfile`] | complete (D149/D151; the default `createCodingAgentHarness` factory landed with [`experimental::durable::harness_setup`]) |
+//! | `experimental/session-worker-manager.ts` | [`experimental::session_worker_manager`] | complete (D161) |
+//! | `experimental/server.ts` | [`experimental::server`] | complete (D162; internal `server`/`session-worker`/`coordinator` roles dispatch in the `pi` bin) |
+//! | `experimental/durable/{harness-setup,prompt,runtime,sessions,subagent}.ts` | [`experimental::durable`] | complete (D170–D175; `tui.ts`/`main.ts` defer with interactive mode) |
+//! | `experimental/vacation/{harness-setup,vacation,runtime,sessions}.ts` | [`experimental::vacation`] | complete (D170/D174–D176; `tui.ts`/`main.ts` defer with interactive mode) |
+//! | `experimental/client-runtime.ts` | [`experimental::client_runtime`] | complete (D181) |
+//! | `experimental/client.ts` | [`experimental::client`] | complete (D182) |
+//! | `experimental/commands.ts` | [`experimental::commands`] | complete (D177–D179; portable CLI dispatch inlines `cli/experimental/{command,command-options,commands/*}.ts`, the client-tui branch defers with interactive mode) |
+//! | `experimental/cli.ts` | [`experimental::cli`] | complete (D180; bin wiring stays with the `pi` bin slice) |
+//! | (dependency seam) npm `proper-lockfile` | [`experimental::lockfile`] | complete (D149) |
 //!
 //! Not ported yet (next passes), in dependency order:
 //! `core/agent-session.ts` (`AgentSession` class), `core/agent-session-runtime.ts`,
 //! `core/agent-session-services.ts` — blocked on `core/tools/`,
 //! `core/extensions/` JS module loading (jiti seam, D40) and the session/agent
 //! dispatch integration,
-//! `core/sdk.ts`,
-//! `core/bug-report.ts`, `core/export-html/`,
+//! `core/export-html/`,
 //! and the
 //! `modes/interactive` theme layer; then `core/tools/renderers/` (with the
 //! theme layer), `core/export-html/`, `core/modes/{print,json-event,rpc,interactive}`
@@ -881,13 +917,340 @@
 //!   (sessions still live under `PI_CODING_AGENT_DIR`), and cases within
 //!   the file run sequentially behind a shared permit (vitest's in-file
 //!   ordering).
+//! - **D111 — trust-manager lockfile seam ([`core::trust_manager`]).**
+//!   `proper-lockfile` becomes a create-exclusive `<trust.json>.lock`
+//!   retry loop (10 attempts, 20ms sleeps; release unlinks; ELOCKED-parity
+//!   "Lock file is already being held" message; stale locks never stolen).
+//!   Store methods return `Result` instead of throwing; trust.json key
+//!   order matches JS `Array.prototype.sort` (UTF-16 code units); `HOME`
+//!   falls back to the [`utils::paths`] home seam; the project-trust emit
+//!   seam pairs upstream `extensionsResult` with the full `ExtensionContext`
+//!   the Rust runner requires (D115).
+//! - **D112–D114 — trust-manager store details.** D112: parse failures keep
+//!   the `Failed to read trust store {path}: ` prefix with a serde_json
+//!   body. D113: key sort is UTF-16 code-unit order. D114:
+//!   `has_trust_requiring_project_resources` has a `_with_home` test
+//!   variant; canonicalization stays inside.
+//! - **D115 — project-trust seams ([`core::project_trust`]).** Extension
+//!   registration carries the full context; store failures surface as
+//!   `Err`; `ui.select` follows the non-interactive `NoopExtensionUi`
+//!   gating.
+//! - **D116 — exec ([`core::exec`]).** The upstream 5s SIGKILL escalation
+//!   is dead code in Node (`subprocess.killed` is already true right after
+//!   the SIGTERM `kill()`); the port escalates for real. Non-unix
+//!   SIGTERM/SIGKILL collapse to `start_kill` (Node parity). Spawn failures
+//!   resolve with the catch-path `{ code: 1, killed: false }`; abort/timeout
+//!   bookkeeping uses `tokio::select!` over the signal's aborted future
+//!   instead of `addEventListener`.
+//! - **D117 — crash-log ([`core::crash_log`]).** `recordCrash`'s
+//!   `error: unknown` splits into explicit message/stack args (Rust errors
+//!   carry no stack); the lenient read defaults absent optional fields;
+//!   path/now become explicit args (`crash_log_default_path` + caller-
+//!   supplied now).
+//! - **D118 — cache-stats ([`core::cache_stats`]).** Misses are keyed by
+//!   session entry id (Rust messages carry no stable identity for the JS
+//!   by-reference map); `ModelPriceSource` is a minimal $/Mtok trait
+//!   implemented for `ModelRuntime`; unparseable usage-entry timestamps
+//!   read as epoch 0 where upstream's `Date.parse` NaN would propagate.
+//! - **D119 — http-dispatcher ([`core::http_dispatcher`]).** The undici
+//!   `EnvHttpProxyAgent` global-dispatcher swap, fetch reinstall, and
+//!   autoSelectFamily attempt timeout have no reqwest equivalent;
+//!   `configure_http_dispatcher` validates/normalizes with the exact
+//!   upstream error string and proxying flows through `HTTP_PROXY`/
+//!   `HTTPS_PROXY` env (set by `apply_http_proxy_settings`) that reqwest
+//!   honors at client build.
+//! - **D120–D124 — mcp-servers ([`core::mcp_servers`]).** D120: validation
+//!   runs from `serde_json::Value` for exact alias/error parity, then
+//!   produces typed structs (unknown fields are dropped, unlike the
+//!   upstream spread copy). D121: tool patterns match without a regex
+//!   engine (`*` → `.*`; wildcard also matches line terminators,
+//!   unobservable for real tool names). D122: override lookup is
+//!   own-property only (JS also sees `Object.prototype` names). D123:
+//!   timeout keeps `serde_json::Number` so integer seconds keep their wire
+//!   form. D124: `structuredClone` → `Clone` in `McpServerRegistry::list`;
+//!   the full-parity registry supersedes the earlier
+//!   `extensions/types.rs` stand-ins.
+//! - **D125–D127 — bug-report ([`core::bug_report`]).** D125:
+//!   `collectEnvironment.runtime` reports `"rust"`; platform/arch reuse the
+//!   Node naming from [`utils::pi_user_agent`]. D126: `os.release()`/
+//!   `os.version()` map to `uname(2)`, empty when unavailable. D127:
+//!   `redactUrl` parses with the `url` crate — unchanged URLs return the
+//!   input byte-for-byte; re-serialization of changed URLs can differ in
+//!   percent-encoding corners.
+//! - **D128 — bug-report-upload ([`core::bug_report_upload`]).** Status-text
+//!   fallback uses `canonical_reason`, so unknown codes fall to the numeric
+//!   status where JS echoes the wire reason. The gateway seam is
+//!   re-exported from [`core::radius`], matching the upstream import.
+//! - **D129 — bug-report crash capture.** Crash records serialize to JSON
+//!   and drop `notified` (upstream rest-spread).
+//! - **D130 — `cli/config-selector.ts` deferred.** `selectConfig` is pure
+//!   TUI wiring (ProcessTerminal + TuiMainScreen + interactive
+//!   ConfigSelectorComponent + theme init/stop); no portable data/logic
+//!   exists. Deferred with the excluded interactive mode
+//!   ([`cli::config_selector`]).
+//! - **D131 — `cli/session-picker.ts` deferred.** `selectSession` is pure
+//!   TUI wiring (startup TUI + pi-tui keybindings + interactive
+//!   SessionSelectorComponent); `SessionInfo`/`SessionListProgress` already
+//!   live in [`core::session_manager`]. Deferred with interactive mode
+//!   ([`cli::session_picker`]).
+//! - **D132 — `core/keybindings.ts` deferred.** pi-tui-coupled
+//!   `KeybindingsManager`; only its migration subset is ported
+//!   ([`core::keybindings_migration`]).
+//! - **D133–D137 — package-manager CLI ([`package_manager_cli`]).** D133:
+//!   chalk styling dropped (plain text, cf. D81). D134: project trust is an
+//!   explicit `--approve`/`--no-approve` override only (default trusted per
+//!   D103). D135: self-update note prints as trimmed raw text (pi-tui
+//!   Markdown excluded with the TUI). D136: managed-install locking uses
+//!   advisory file locks on `<managedRoot>/update.lock` (ELOCKED-parity
+//!   message); "Location of pi executable" prints argv[0]. D137: `pi
+//!   config` runs the upstream parse/trust/settings flow, then reports the
+//!   D130 deferral and exits 1 (upstream exits 0 after the selector).
+//! - **D138 — experimental/process ([`experimental::process`]).** Upstream
+//!   spawns `process.execPath` with a `--import` source resolver (source
+//!   runs) or a bundled `dist/bundle/{coordinator,cli}.js` entry
+//!   (`isBundledNode`) and locates entries relative to `import.meta.url`;
+//!   the Rust port always spawns the running executable
+//!   (`std::env::current_exe`), with `InternalProcessSpawnOptions::
+//!   entry_override` as an explicit program replacement, so `entryUrl`,
+//!   `isBunBinary`/`isBundledNode` and `isDirectInternalProcessEntry` are
+//!   not ported. Node `detached` + `unref()` becomes a fresh process group
+//!   (`process_group(0)`) with `kill_on_drop(false)` and null stdio;
+//!   `terminateInternalProcess` escalates for real (tokio `start_kill` is
+//!   already SIGKILL). Control-line encoding/decoding is
+//!   `serde_json::Value`-based with the same 128 MiB cap and error strings.
+//! - **D139 — experimental/coordinator ([`experimental::coordinator`]).**
+//!   Node sockets become [`tokio::net::UnixStream`]; the typebox wire
+//!   schema becomes the serde [`experimental::coordinator::
+//!   CoordinatorMessage`] enum (identical wire names) while the server side
+//!   keeps the loose `type`-string dispatch over `serde_json::Value` (the
+//!   upstream `ControlMessage`). The module-global coordinator singleton +
+//!   `process.once(SIGINT/SIGTERM)` hooks become a function-local
+//!   [`experimental::coordinator::CoordinatorServer`] racing tokio signal
+//!   handlers with the same socket cleanup; a second concurrent
+//!   `run_coordinator_process` in one process is still rejected.
+//!   `emptyTimer.unref()` becomes an abortable tokio sleep with the same
+//!   30 s/250 ms grace windows and emptiness predicate. Upstream's
+//!   uncaught-exception crash on a control-handler error surfaces as an
+//!   `Err` from `run_coordinator_process` (the entrypoint exits non-zero,
+//!   mirroring the crash) with the identical error string; reader framing
+//!   errors destroy only the offending connection. `endpoint` may be a
+//!   Unix-socket path or `host:port`; public connections pump raw bytes
+//!   with `copy_bidirectional`. Client `peerIds`/listeners return owned
+//!   snapshots/guards instead of live JS references.
+//! - **D140 — experimental/coordinator-entry
+//!   ([`experimental::coordinator_entry`]).** The `#!/usr/bin/env node`
+//!   entry script becomes [`experimental::coordinator_entry::
+//!   run_coordinator_entry`]; `console.error` + `process.exit(1)` becomes a
+//!   returned `Err` the host binary surfaces (same contract as the D102
+//!   mode-dispatcher seam). The `isDirectInternalProcessEntry` file probe
+//!   is a JS-runtime seam (D138).
+//! - **D141 — experimental/session-catalog
+//!   ([`experimental::session_catalog`]).** `crypto.randomUUID` becomes a
+//!   getrandom-backed v4 id; `node:fs/promises` becomes `tokio::fs`;
+//!   `Date.now()` becomes [`utils::time::now_ms`]. The tab-indented
+//!   `JSON.stringify(meta, null, "\t")` metadata file is reproduced
+//!   byte-for-byte (createdAt first, trailing newline). Read-side
+//!   validation accepts any JSON object with numeric `createdAt` and
+//!   string `cwd`, dropping unknown extra fields exactly like the upstream
+//!   destructuring read; JSON/IO failures on a session's `meta.json` read
+//!   as "no session" (upstream catches the same throws). Thrown errors
+//!   surface as `Err(String)` with the upstream messages; `rm(force:
+//!   true)` maps to ENOENT-swallowing deletes.
+//! - **D144 — experimental/services structural tokens
+//!   ([`experimental::services`]).** Upstream services are structural objects
+//!   behind `defineService<T>`; Rust tokens carry a marker (remote-only
+//!   services), a concrete implementation type (local services), or a
+//!   trait-object handle (`PresentationUI`). Remote facets expose upstream
+//!   object methods as JSON members through `RemoteServiceObject::builder`;
+//!   state members use chord's untyped JSON replicated states with typed DTOs
+//!   at the seam. The `PresentationUI` implementations (alternate-screen
+//!   renderer integration, selection dialogs) defer with interactive mode.
+//! - **D145 — services busy detection.** pi-durable Rust errors arrive
+//!   stringified, so the typed `ConversationBusy → { code: "busy" }` mapping
+//!   checks the stable durable display text (`… is busy`).
+//! - **D146 — services timestamps.** `new Date().toISOString()` in
+//!   `connection.ts` is formatted by a local RFC 3339 writer (no chrono
+//!   dependency).
+//! - **D147 — services provider sharing.** `FacetHost::provider_arc`
+//!   (additive pi-chord default method) shares the assembled provider as an
+//!   `Arc` for the worker's per-scope endpoints.
+//! - **D148 — services requirement cloning.** chord's `LocalRequirement` is
+//!   not `Clone`; the `/reload` command lends its SessionPlugins requirement
+//!   out of a mutex cell for the synchronous handle acquisition.
+//! - **D149 — proper-lockfile becomes std advisory file locks
+//!   ([`experimental::lockfile`]).** Upstream's `proper-lockfile` locks map
+//!   to `File::try_lock` polls with the same retry/wait budgets (cf. D136).
+//!   Ownership is kernel-managed, so the mtime-based `stale` option has no
+//!   counterpart; a dead holder releases automatically. The Session worker
+//!   locks `<session path>.lock` instead of the directory path.
+//! - **D150 — Radius relay WebSocket seam
+//!   ([`experimental::radius_relay`]).** Upstream drives the npm `undici`
+//!   `WebSocket` (event listeners, `binaryType`, `bufferedAmount`). The port
+//!   defines a single-listener [`RadiusRelayWebSocket`] trait; the default
+//!   factory is tokio-tungstenite with `Authorization` + subprotocol
+//!   negotiation verified after the handshake. The `OrderedWebSocketWriter`
+//!   drain loop keeps its 5 ms poll over the pending-bytes threshold, and
+//!   local protocol/transport errors still close with application codes
+//!   4000/4001.
+//! - **D151 — session-worker seams ([`experimental::session_worker`],
+//!   [`experimental::radius_auth`]).** typebox schemas become serde types
+//!   with explicit validators; `WorkerOperationScope` is a serde mirror of
+//!   the services' `WorkerServiceScope` with conversions at the seam; the
+//!   chord/persistent abort-signal split bridges at `get_auth`. `AuthInput`
+//!   (upstream `cli/experimental/command-options.ts`) is defined in
+//!   `radius_auth` until the CLI experimental slice ports. The default
+//!   `createCodingAgentHarness` factory landed with the durable slice
+//!   ([`experimental::session_worker::create_coding_agent_harness`] over
+//!   `experimental::durable::harness_setup`); the full worker machinery
+//!   still runs against the `CreateSessionWorkerHarness` seam.
+//! - **D152 — plugins slice ([`experimental::plugins`]).** `import.meta.url`
+//!   external resolution becomes the pi-runtime externals registry (the
+//!   plugin API specifier resolves to a JSON encoding of the barrel's
+//!   service tokens; identity travels through chord service ids). Facet
+//!   validation labels are read from the manifest at load time.
+//!   `createPresentationFacetLoaders` (server-sent artifacts → client
+//!   loaders) defers with the headless-client slice; the session facet
+//!   loader and the presentation data codec are complete.
+//! - **D161 — session-worker-manager ([`experimental::session_worker_manager`]).**
+//!   Upstream `Promise`s become first-write-wins [`PromiseSlot`] cells;
+//!   launch/demand errors travel as `Arc<dyn Error + Send + Sync>` while
+//!   worker operation errors stay structured so routed `ServerError` codes
+//!   survive. Unref'd timers become spawned tokio tasks (or
+//!   `tokio::time::timeout` for demand settlement) whose late fires re-check
+//!   the pending maps; the per-subscription `deliveryTail` chain becomes a
+//!   tokio mutex. `workerPids` is a shared snapshot handle
+//!   ([`WorkerPids`]) consumed by the running server, `process.kill`
+//!   becomes `libc::kill` (ESRCH swallowed), and attached-demand timeout
+//!   compensation runs inline through an acyclic
+//!   apply/reconcile split instead of a self-spawning timer task.
+//! - **D162 — experimental server entry ([`experimental::server`]).**
+//!   `proper-lockfile` locks map to `FileLock` polls (D149) with the
+//!   `default-server-id` read/`wx`-create/re-read ladder; `ServerLifetime`'s
+//!   timers become one notify-driven retirement task with a
+//!   generation-guarded startup grace; `runtime.closed` is a shared
+//!   settled-once slot and `close()` memoizes onto it. `connect`'s Node
+//!   error-code chain walk maps to `Error::source` downcasts
+//!   (`DisconnectedError`, `version` server error, or the
+//!   ENOENT/ECONNREFUSED/ECONNRESET/EPIPE/ETIMEDOUT io kinds read as "no
+//!   server yet"). The routed `ServerHost` trait hands metadata opaquely, so
+//!   `open_session` re-resolves the catalog metadata by ID. The internal
+//!   `server` role entry (`runServerProcess`) dispatches from the `pi` bin,
+//!   matching the upstream module-level `isDirectInternalProcessEntry`
+//!   blocks.
+//! - **D170 — shared `selectSession` ([`experimental::durable::sessions`]).**
+//!   Upstream `durable/sessions.ts` and `vacation/sessions.ts` are clones
+//!   differing only in the session-space directory and the "no session"
+//!   error text; the port implements the body once
+//!   (`select_session_in(space, ...)`) and both modules keep their upstream
+//!   surface. `proper-lockfile` maps to `FileLock` (D149) locking
+//!   `<directory>.lock` with the upstream `12 × 1000ms` retry budget;
+//!   `crypto` hashing/UUID map to `sha2` and the crate `randomUUID` seam;
+//!   the `^\d{13}-[0-9a-f-]{36}$` continue-filter is a validated shape
+//!   predicate.
+//! - **D171 — per-request prompt build cache
+//!   ([`experimental::durable::prompt`]).** Upstream caches the built
+//!   sections per `PromptInput` in a `WeakMap`; `PromptInput` has no weakly
+//!   referenceable identity here, so each section render rebuilds the
+//!   section map from the per-directory resource cache (context files and
+//!   skills still load once per directory, like upstream). Tool prompt
+//!   contributions read the crate's `*_TOOL_SYSTEM_PROMPT_SNIPPET`/
+//!   `*_GUIDELINES` constants.
+//! - **D172 — erased subagent tool ([`experimental::durable::subagent`]).**
+//!   typebox parameter schemas become JSON-Schema `serde_json` values on
+//!   `pi_ai::Tool`, and tool failures take the crate's erased error-result
+//!   convention (`is_error` + a `tool_error` diagnostic), like the
+//!   pi-durable coding tools. The upstream `Subagent` extension constant
+//!   becomes `subagent_extension()`; the child's self-removal configure
+//!   matches by extension name.
+//! - **D173 — live harness settings
+//!   ([`experimental::durable::harness_setup`]).** Upstream
+//!   `createHarnessSettings` returns a getters object read at every use;
+//!   the erased surface's live source is `HarnessOptions.settings_provider`
+//!   (`HarnessSettingsProvider`). `stream.timeoutMs` keeps the upstream
+//!   `idle === 0 ? 2147483647 : idle` mapping. `configureHarnessHttp`
+//!   reuses `core::http_dispatcher` (D119), surfacing the idle-timeout
+//!   getter's parse failure as its error. `findInitialAgentModel`'s CLI
+//!   branch resolves through `resolve_cli_model` so the failure returns as
+//!   the function's error (the crate's `find_initial_model` prints and
+//!   exits there); `AgentThinkingLevel` converts to pi-ai's
+//!   `ModelThinkingLevel` at the seam. `NodeExecutionEnv` memoizes per cwd
+//!   behind the erased async `EnvBuilder`.
+//! - **D174 — shared cluster runtime
+//!   ([`experimental::durable::runtime`], [`experimental::vacation::runtime`]).**
+//!   The twin upstream `openDurable` bodies differ only in registry
+//!   construction, the root agent shape, and the execution-environment
+//!   wiring; the port hosts the machinery once
+//!   (`durable::runtime::open_harness_view`) and both modules keep their
+//!   upstream surface (vacation re-exports the shared view/controller
+//!   types). `DurableView.conversation`/`tasks` carry erased `serde_json`
+//!   forms of `ConversationView`/`TaskGraph`; the exact-frame watches are
+//!   `CommittedWatch` values (`subscribe` → `start(listener)`, `dispose` →
+//!   `stop_detached`, `.value` → `value()`); `BACKGROUND_CONTEXT` maps to
+//!   `TODO_CONTEXT`; the command promise chain becomes a tokio mutex;
+//!   `setImmediate` notification coalescing becomes a spawned burst gate;
+//!   the `closing ??=` memoization becomes a shared future.
+//! - **D175 — shared harness assembly
+//!   ([`experimental::vacation::harness_setup`]).** Upstream
+//!   `configureHarnessHttp`/`createHarnessSettings`/`InitialModel`/
+//!   `findInitialAgentModel` are byte-identical across the clusters; the
+//!   port implements them once in `durable::harness_setup` and the vacation
+//!   module re-exports them (only `createVacationRegistry` is local).
+//! - **D176 — erased vacation task
+//!   ([`experimental::vacation::vacation`]).** typebox schemas become
+//!   JSON-Schema values and the `vacation.research` task's phases become
+//!   erased `PhaseHandler`s over `TaskRecord`/`TaskRuntime`; `setTimeout`
+//!   sleeps become `tokio::time::sleep` raced against the context's abort
+//!   signal; tool failures take the D172 error-result convention.
+//! - **D177 — portable experimental CLI dispatch
+//!   ([`experimental::commands`]).** The upstream `cli/experimental/` tree is
+//!   not ported as a separate module: the generic `Command` builder
+//!   (`command.ts`) collapses into focused parsers that reproduce its
+//!   observable behavior (`--` passthrough, `=` values, flag/value rules,
+//!   option-errors-before-builder-errors, unknown-option cutoff), and
+//!   `ClientCommand`/`ServerCommand` (`commands/{client,server}.ts`) plus
+//!   `TransportAddress` (`command-options.ts`) live in the module. `AuthInput`
+//!   stays in [`experimental::radius_auth`] (D151). WHATWG `--connect`
+//!   validation maps onto the `url` crate plus a strict
+//!   `decodeURIComponent`; `continue` renames to `continue_session`.
+//! - **D178 — client-tui branch excluded
+//!   ([`experimental::commands::run_client_command`]).** The
+//!   `runClientTui` dispatch and the TTY sniffing that selects it defer with
+//!   the interactive mode (D152); every portable invocation runs
+//!   [`experimental::client::run_client`].
+//! - **D179 — uncolored experimental dispatch errors
+//!   ([`experimental::commands`]).** `chalk.red` error lines print plain
+//!   (`Error: …`), matching the uncolored-output precedent (D133), and
+//!   `process.exitCode` becomes the [`experimental::commands::
+//!   ExperimentalDispatch`] result the entry applies.
+//! - **D180 — development entry seam ([`experimental::cli`]).** The
+//!   `#!/usr/bin/env node` script becomes a library entry returning the exit
+//!   code; the client command still short-circuits via `process::exit`, and
+//!   the `main(args)` fallback maps to
+//!   [`cli::main_dispatch::main`]. Wiring the entry into the `pi` bin stays
+//!   with the bin slice.
+//! - **D181 — client runtime facades ([`experimental::client_runtime`]).**
+//!   `ActivatedClientRuntimeServer extends ClientRuntimeServer` becomes a
+//!   flat struct; `services.use(Service)` lookups become typed facades over
+//!   chord's `ServiceClientHandle`; opened namespaces stay alive by holding
+//!   their `Box<dyn RemoteServices>` and dispose by dropping. The
+//!   `directory.state.value!` hydration assertion becomes an error, the
+//!   `ServerError code "version"` fallback downcasts through Rust error
+//!   types, and the infallible reconnector/client dispose steps contribute
+//!   nothing to the upstream `Promise.allSettled` failure aggregation.
+//! - **D182 — non-interactive client ([`experimental::client`]).**
+//!   `localeCompare` ordering becomes UTF-8 byte ordering; the rejected
+//!   prompt error carries a fallback message when the server omits
+//!   `error.message`; the JS `finally { await runtime.dispose() }` masking
+//!   semantics (dispose failure replaces the body outcome) are preserved.
 
 pub mod cli;
 pub mod config;
+pub mod experimental;
 pub mod core;
 pub mod extensions;
 pub mod migrations;
 pub mod modes;
+pub mod package_manager_cli;
 pub mod theme;
 pub mod utils;
 

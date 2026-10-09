@@ -8,7 +8,7 @@
 //! | `llama/client.ts` | [`client`] | ported (router client, SSE watch, progress parsing, URL/byte helpers) |
 //! | `llama/huggingface.ts` | [`huggingface`] | ported (search, details, token discovery; regexes hand-rolled — D98a) |
 //! | `llama/provider.ts` | [`provider`] | ported (native `pi_ai::Provider` — D98d) |
-//! | `llama/ui.ts` | — | **skipped: TUI-only per port decision** — D99 |
+//! | `llama/ui.ts` | [`ui`] | **partial**: pure string helpers (`contextLabel`, `modelDescription`, `compactCount`) ported + tested (D160); the interactive TUI surface (search widget, menus, progress screens) stays deferred — D99 |
 //! | `test/llama-extension.test.ts` | inline `#[cfg(test)]` modules + [`test_support`] | ported 1:1; every upstream case drives a local mock server, none need real network (see Deferred tests) |
 //!
 //! # Entry point (index.ts, D40 seam)
@@ -37,6 +37,14 @@
 //!   [`is_connection_error`], [`connection_error_message`],
 //!   [`parse_hugging_face_model`]) are ported verbatim as the shared logic
 //!   of that deferred flow.
+//! - **D160 — `ui.ts` partial port.** The pure, TUI-free string helpers the
+//!   view uses to compose model rows (`contextLabel`, `modelDescription`,
+//!   `compactCount`) are ported in [`ui`] with unit tests; everything
+//!   interactive (the `HuggingFaceSearch` widget, menus, the progress
+//!   screens, `showLlamaUi`, `runWithProgress`) stays deferred (D99).
+//!   Upstream pushes the raw `status.value` string into the description;
+//!   the D97a enum erases unknown status strings, so the label collapses
+//!   to `"unknown"`.
 //!
 //! # Deferred tests
 //!
@@ -52,6 +60,7 @@
 pub mod client;
 pub mod huggingface;
 pub mod provider;
+pub mod ui;
 #[cfg(test)]
 pub(crate) mod test_support;
 
