@@ -17,10 +17,15 @@ use crate::core::settings_manager::SettingsManager;
 /// like upstream (`interactive` → `tui`); `has_ui` is passed through and
 /// keeps the upstream gating semantics.
 pub fn create_project_trust_context(
-	cwd: &str,
-	mode: ExtensionMode,
-	has_ui: bool,
-	_settings_manager: &SettingsManager,
+    cwd: &str,
+    mode: ExtensionMode,
+    has_ui: bool,
+    _settings_manager: &SettingsManager,
 ) -> ProjectTrustContext {
-	ProjectTrustContext { cwd: cwd.to_string(), mode, has_ui, ui: Arc::new(NoopExtensionUi) }
+    ProjectTrustContext {
+        cwd: cwd.to_string(),
+        mode,
+        has_ui,
+        ui: Arc::new(NoopExtensionUi),
+    }
 }

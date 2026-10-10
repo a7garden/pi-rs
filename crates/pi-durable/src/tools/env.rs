@@ -10,5 +10,6 @@ use crate::harness::api::ToolExecutionApi;
 
 /// The call's execution environment; a tool without one fails with an ordinary error result.
 pub fn require_env(api: &dyn ToolExecutionApi) -> Result<Arc<dyn ExecutionEnv>, String> {
-	api.env().ok_or_else(|| "No execution environment is configured".to_string())
+    api.env()
+        .ok_or_else(|| "No execution environment is configured".to_string())
 }

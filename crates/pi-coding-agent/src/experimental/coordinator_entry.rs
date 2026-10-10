@@ -22,34 +22,43 @@ use super::process::consume_internal_process_role;
 /// (`process.argv.slice(2)`). Errors when the invocation was not an
 /// internal coordinator spawn.
 pub async fn run_coordinator_entry(args: &[String]) -> Result<(), String> {
-	let role = consume_internal_process_role()?;
-	if role != Some(super::process::InternalProcessRole::Coordinator) {
-		return Err("Coordinator entrypoint requires an internal coordinator invocation".into());
-	}
-	run_coordinator_process(args).await
+    let role = consume_internal_process_role()?;
+    if role != Some(super::process::InternalProcessRole::Coordinator) {
+        return Err("Coordinator entrypoint requires an internal coordinator invocation".into());
+    }
+    run_coordinator_process(args).await
 }
 
 #[cfg(test)]
 mod tests {
-	use super::*;
+    use super::*;
 
-	#[tokio::test]
-	async fn entry_requires_internal_coordinator_role() {
-		let _guard = crate::experimental::TEST_GUARD.lock();
-		std::env::set_var(super::super::process::INTERNAL_PROCESS_ENV, "session-worker");
-		let error = run_coordinator_entry(&[]).await.unwrap_err();
-		assert_eq!(error, "Coordinator entrypoint requires an internal coordinator invocation");
-		std::env::remove_var(super::super::process::INTERNAL_PROCESS_ENV);
-	}
+    #[tokio::test]
+    async fn entry_requires_internal_coordinator_role() {
+        let _guard = crate::experimental::TEST_GUARD.lock();
+        std::env::set_var(
+            super::super::process::INTERNAL_PROCESS_ENV,
+            "session-worker",
+        );
+        let error = run_coordinator_entry(&[]).await.unwrap_err();
+        assert_eq!(
+            error,
+            "Coordinator entrypoint requires an internal coordinator invocation"
+        );
+        std::env::remove_var(super::super::process::INTERNAL_PROCESS_ENV);
+    }
 
-	#[tokio::test]
-	async fn entry_requires_both_socket_paths() {
-		let _guard = crate::experimental::TEST_GUARD.lock();
-		std::env::set_var(super::super::process::INTERNAL_PROCESS_ENV, "coordinator");
-		let error = run_coordinator_entry(&["/tmp/only-public.sock".to_string()])
-			.await
-			.unwrap_err();
-		assert_eq!(error, "Coordinator requires public and control socket paths");
-		std::env::remove_var(super::super::process::INTERNAL_PROCESS_ENV);
-	}
+    #[tokio::test]
+    async fn entry_requires_both_socket_paths() {
+        let _guard = crate::experimental::TEST_GUARD.lock();
+        std::env::set_var(super::super::process::INTERNAL_PROCESS_ENV, "coordinator");
+        let error = run_coordinator_entry(&["/tmp/only-public.sock".to_string()])
+            .await
+            .unwrap_err();
+        assert_eq!(
+            error,
+            "Coordinator requires public and control socket paths"
+        );
+        std::env::remove_var(super::super::process::INTERNAL_PROCESS_ENV);
+    }
 }

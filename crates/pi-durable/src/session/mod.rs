@@ -42,18 +42,19 @@ mod tables_tests;
 mod watches_tests;
 
 pub use observation::{
-	new_view, retirement_operations, CommittedStateSource, CommittedWatch, DocumentStateView, DocumentWatch,
-	ObservedDocumentValue, ObservedValue, ViewSource, WatchError,
+    new_view, retirement_operations, CommittedStateSource, CommittedWatch, DocumentStateView,
+    DocumentWatch, ObservedDocumentValue, ObservedValue, ViewSource, WatchError,
 };
 pub use session::{
-	create_session, ConversationAbortOptions, ConversationDocumentSnapshot, ConversationHandle, ContextView,
-	Session, SessionError, SettledTask, Unsubscribe,
+    create_session, ContextView, ConversationAbortOptions, ConversationDocumentSnapshot,
+    ConversationHandle, Session, SessionError, SettledTask, Unsubscribe,
 };
 
 pub(crate) use session::SessionHooks;
 pub use transaction::{DocDraft, TransactionScope, Tx, TxError};
 /// Borrowed synchronous transaction callbacks accepted by the Session line.
-pub type CommitValueCallback<'callback> =
-	dyn for<'borrow, 'tx> FnMut(&'borrow mut Tx<'tx>) -> Result<serde_json::Value, String> + Send + 'callback;
+pub type CommitValueCallback<'callback> = dyn for<'borrow, 'tx> FnMut(&'borrow mut Tx<'tx>) -> Result<serde_json::Value, String>
+    + Send
+    + 'callback;
 pub type CommitGuardCallback<'callback> =
-	dyn for<'borrow, 'tx> FnMut(&'borrow mut Tx<'tx>) -> Result<(), String> + Send + 'callback;
+    dyn for<'borrow, 'tx> FnMut(&'borrow mut Tx<'tx>) -> Result<(), String> + Send + 'callback;

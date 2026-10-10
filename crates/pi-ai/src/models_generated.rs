@@ -63,150 +63,167 @@ pub type ProviderCatalog = crate::model_catalog::ModelCatalog;
 pub type GeneratedCatalog = OrderedMap<ProviderCatalog>;
 
 struct GeneratedCatalogs {
-	models: GeneratedCatalog,
-	image_models: GeneratedCatalog,
-	classifier_models: GeneratedCatalog,
+    models: GeneratedCatalog,
+    image_models: GeneratedCatalog,
+    classifier_models: GeneratedCatalog,
 }
 
 fn parse_provider_catalog(value: &Value) -> ProviderCatalog {
-	let mut catalog = ProviderCatalog::new();
-	let Some(object) = value.as_object() else {
-		return catalog;
-	};
-	for (id, model) in object {
-		if let Ok(entry) = AnyModel::from_json(model) {
-			catalog.insert(id.clone(), entry);
-		}
-	}
-	catalog
+    let mut catalog = ProviderCatalog::new();
+    let Some(object) = value.as_object() else {
+        return catalog;
+    };
+    for (id, model) in object {
+        if let Ok(entry) = AnyModel::from_json(model) {
+            catalog.insert(id.clone(), entry);
+        }
+    }
+    catalog
 }
 
 fn parse_catalogs() -> GeneratedCatalogs {
-	let root: Value = serde_json::from_str(CATALOG_DATA).expect("embedded model catalog parses");
-	let parse = |key: &str| -> GeneratedCatalog {
-		let mut providers = GeneratedCatalog::new();
-		if let Some(object) = root.get(key).and_then(Value::as_object) {
-			for (provider, models) in object {
-				providers.insert(provider.clone(), parse_provider_catalog(models));
-			}
-		}
-		providers
-	};
-	GeneratedCatalogs {
-		models: parse("models"),
-		image_models: parse("imageModels"),
-		classifier_models: parse("classifierModels"),
-	}
+    let root: Value = serde_json::from_str(CATALOG_DATA).expect("embedded model catalog parses");
+    let parse = |key: &str| -> GeneratedCatalog {
+        let mut providers = GeneratedCatalog::new();
+        if let Some(object) = root.get(key).and_then(Value::as_object) {
+            for (provider, models) in object {
+                providers.insert(provider.clone(), parse_provider_catalog(models));
+            }
+        }
+        providers
+    };
+    GeneratedCatalogs {
+        models: parse("models"),
+        image_models: parse("imageModels"),
+        classifier_models: parse("classifierModels"),
+    }
 }
 
 static CATALOGS: LazyLock<GeneratedCatalogs> = LazyLock::new(parse_catalogs);
 
 /// Upstream `MODELS`: flattened chat catalogs for every provider.
 pub fn models() -> &'static GeneratedCatalog {
-	&CATALOGS.models
+    &CATALOGS.models
 }
 
 /// Upstream `IMAGE_MODELS`.
 pub fn image_models() -> &'static GeneratedCatalog {
-	&CATALOGS.image_models
+    &CATALOGS.image_models
 }
 
 /// Upstream `CLASSIFIER_MODELS`.
 pub fn classifier_models() -> &'static GeneratedCatalog {
-	&CATALOGS.classifier_models
+    &CATALOGS.classifier_models
 }
 
 #[cfg(test)]
 mod tests {
-	use super::*;
-	use crate::types::ModelType;
+    use super::*;
+    use crate::types::ModelType;
 
-	const PROVIDER_COUNT: usize = 42;
+    const PROVIDER_COUNT: usize = 42;
 
-	#[test]
-	fn embeds_every_provider_shard_in_all_three_catalogs() {
-		for catalog in [models(), image_models(), classifier_models()] {
-			assert_eq!(catalog.len(), PROVIDER_COUNT, "provider count");
-		}
-		// Insertion order matches the upstream aggregation order (the first
-		// and last shards of models.generated.ts's import list).
-		let providers: Vec<&str> = models().keys().collect();
-		assert_eq!(providers.first(), Some(&"amazon-bedrock"));
-		assert_eq!(providers.last(), Some(&"zai-coding-cn"));
-	}
+    #[test]
+    fn embeds_every_provider_shard_in_all_three_catalogs() {
+        for catalog in [models(), image_models(), classifier_models()] {
+            assert_eq!(catalog.len(), PROVIDER_COUNT, "provider count");
+        }
+        // Insertion order matches the upstream aggregation order (the first
+        // and last shards of models.generated.ts's import list).
+        let providers: Vec<&str> = models().keys().collect();
+        assert_eq!(providers.first(), Some(&"amazon-bedrock"));
+        assert_eq!(providers.last(), Some(&"zai-coding-cn"));
+    }
 
-	#[test]
-	fn every_entry_keys_by_its_own_id_and_carries_its_provider() {
-		for catalog in [models(), image_models(), classifier_models()] {
-			for (provider, entries) in catalog.iter() {
-				assert!(!provider.is_empty());
-				for (id, model) in entries {
-					assert_eq!(model.id(), id, "{provider}/{id} keyed by id");
-					assert_eq!(model.provider(), provider, "{provider}/{id} carries provider");
-					assert!(!model.api().is_empty(), "{provider}/{id} has an api");
-				}
-			}
-		}
-	}
+    #[test]
+    fn every_entry_keys_by_its_own_id_and_carries_its_provider() {
+        for catalog in [models(), image_models(), classifier_models()] {
+            for (provider, entries) in catalog.iter() {
+                assert!(!provider.is_empty());
+                for (id, model) in entries {
+                    assert_eq!(model.id(), id, "{provider}/{id} keyed by id");
+                    assert_eq!(
+                        model.provider(),
+                        provider,
+                        "{provider}/{id} carries provider"
+                    );
+                    assert!(!model.api().is_empty(), "{provider}/{id} has an api");
+                }
+            }
+        }
+    }
 
-	/// The four in-scope providers this wave, as a data regression pin
-	/// (counts from the upstream generator output at porting time).
-	#[test]
-	fn in_scope_provider_counts() {
-		assert_eq!(models()["anthropic"].len(), 16);
-		assert_eq!(models()["openai"].len(), 44);
-		assert_eq!(models()["meta"].len(), 5);
-		// typesafe routes every chat model through the shared system-one
-		// pipeline; its static shard currently lists no chat models.
-		assert_eq!(models()["typesafe"].len(), 0);
-		assert_eq!(classifier_models()["typesafe"].len(), 1);
-	}
+    /// The four in-scope providers this wave, as a data regression pin
+    /// (counts from the upstream generator output at porting time).
+    #[test]
+    fn in_scope_provider_counts() {
+        assert_eq!(models()["anthropic"].len(), 17);
+        assert_eq!(models()["openai"].len(), 44);
+        assert_eq!(models()["meta"].len(), 5);
+        // typesafe routes every chat model through the shared system-one
+        // pipeline; its static shard currently lists no chat models.
+        assert_eq!(models()["typesafe"].len(), 0);
+        assert_eq!(classifier_models()["typesafe"].len(), 1);
+    }
 
-	#[test]
-	fn image_and_classifier_catalogs_carry_the_multi_type_shards() {
-		assert_eq!(image_models()["openrouter"].len(), 59);
-		assert_eq!(image_models()["amazon-bedrock"].len(), 0);
-		assert_eq!(classifier_models()["cloudflare-workers-ai"].len(), 3);
-		assert_eq!(classifier_models()["opencode"].len(), 2);
-		assert_eq!(classifier_models()["openrouter"].len(), 13);
-		assert_eq!(classifier_models()["vercel-ai-gateway"].len(), 4);
-	}
+    #[test]
+    fn image_and_classifier_catalogs_carry_the_multi_type_shards() {
+        assert_eq!(image_models()["openrouter"].len(), 59);
+        assert_eq!(image_models()["amazon-bedrock"].len(), 0);
+        assert_eq!(classifier_models()["cloudflare-workers-ai"].len(), 3);
+        assert_eq!(classifier_models()["opencode"].len(), 2);
+        assert_eq!(classifier_models()["openrouter"].len(), 13);
+        assert_eq!(classifier_models()["vercel-ai-gateway"].len(), 4);
+    }
 
-	/// Chat and image models may share an id; they key separately per type
-	/// (upstream model-data invariant, `model-data-validation.test.ts`).
-	#[test]
-	fn chat_and_image_entries_share_ids_without_collision() {
-		let shared: Vec<&str> = models()["openrouter"]
-			.keys()
-			.filter(|id| image_models()["openrouter"].contains_key(id))
-			.collect();
-		assert!(!shared.is_empty(), "openrouter has chat+image models sharing ids");
-		for id in shared {
-			assert_eq!(models()["openrouter"][id].model_type(), ModelType::Chat);
-			assert_eq!(image_models()["openrouter"][id].model_type(), ModelType::Image);
-		}
-	}
+    /// Chat and image models may share an id; they key separately per type
+    /// (upstream model-data invariant, `model-data-validation.test.ts`).
+    #[test]
+    fn chat_and_image_entries_share_ids_without_collision() {
+        let shared: Vec<&str> = models()["openrouter"]
+            .keys()
+            .filter(|id| image_models()["openrouter"].contains_key(id))
+            .collect();
+        assert!(
+            !shared.is_empty(),
+            "openrouter has chat+image models sharing ids"
+        );
+        for id in shared {
+            assert_eq!(models()["openrouter"][id].model_type(), ModelType::Chat);
+            assert_eq!(
+                image_models()["openrouter"][id].model_type(),
+                ModelType::Image
+            );
+        }
+    }
 
-	/// Every embedded model must deserialize into a known [`AnyModel`]
-	/// variant — the runtime counterpart of upstream
-	/// `withKnownModelTypes`/`validateModelDataDirectory` ("rejects a model
-	/// without a known type").
-	#[test]
-	fn parses_every_model_into_a_known_type() {
-		let mut total = 0usize;
-		for catalog in [models(), image_models(), classifier_models()] {
-			for entries in catalog.values() {
-				for model in entries.values() {
-					// AnyModel parsing is strict; re-parse the JSON form as a
-					// round-trip check.
-					let json = model.to_json();
-					AnyModel::from_json(&json).unwrap_or_else(|error| {
-						panic!("model {}/{} re-parses: {error}", model.provider(), model.id())
-					});
-					total += 1;
-				}
-			}
-		}
-		assert!(total > 500, "embedded catalogs are populated ({total} models)");
-	}
+    /// Every embedded model must deserialize into a known [`AnyModel`]
+    /// variant — the runtime counterpart of upstream
+    /// `withKnownModelTypes`/`validateModelDataDirectory` ("rejects a model
+    /// without a known type").
+    #[test]
+    fn parses_every_model_into_a_known_type() {
+        let mut total = 0usize;
+        for catalog in [models(), image_models(), classifier_models()] {
+            for entries in catalog.values() {
+                for model in entries.values() {
+                    // AnyModel parsing is strict; re-parse the JSON form as a
+                    // round-trip check.
+                    let json = model.to_json();
+                    AnyModel::from_json(&json).unwrap_or_else(|error| {
+                        panic!(
+                            "model {}/{} re-parses: {error}",
+                            model.provider(),
+                            model.id()
+                        )
+                    });
+                    total += 1;
+                }
+            }
+        }
+        assert!(
+            total > 500,
+            "embedded catalogs are populated ({total} models)"
+        );
+    }
 }

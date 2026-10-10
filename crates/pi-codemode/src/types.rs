@@ -38,13 +38,18 @@ struct SignalInner {
 
 impl Default for SignalInner {
     fn default() -> Self {
-        Self { reason: Mutex::new(None), notify: Notify::new() }
+        Self {
+            reason: Mutex::new(None),
+            notify: Notify::new(),
+        }
     }
 }
 
 impl std::fmt::Debug for AbortSignal {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("AbortSignal").field("aborted", &self.is_aborted()).finish()
+        f.debug_struct("AbortSignal")
+            .field("aborted", &self.is_aborted())
+            .finish()
     }
 }
 
@@ -94,7 +99,10 @@ impl AbortSignal {
 /// surfaces in the script as an `Error` with the same message, so failures are
 /// `Err(message)`).
 pub type ToolExecuteFn = Arc<
-    dyn Fn(Option<Value>, CodemodeToolContext) -> Pin<Box<dyn Future<Output = Result<Option<Value>, String>> + Send>>
+    dyn Fn(
+            Option<Value>,
+            CodemodeToolContext,
+        ) -> Pin<Box<dyn Future<Output = Result<Option<Value>, String>> + Send>>
         + Send
         + Sync,
 >;
@@ -134,7 +142,9 @@ pub struct CodemodeTool {
 
 impl std::fmt::Debug for CodemodeTool {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("CodemodeTool").field("name", &self.name).finish_non_exhaustive()
+        f.debug_struct("CodemodeTool")
+            .field("name", &self.name)
+            .finish_non_exhaustive()
     }
 }
 
@@ -192,12 +202,19 @@ impl CodemodeTool {
 }
 
 /// One item of the script's output, in the order the script produced it: `text()` and
-/// `console.*` produce text items, `image()` image items. `data` is base64.
+/// `console.*` produce text items, with `console: true` for `console.*`, and `image()`
+/// image items. `data` is base64.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum CodemodeOutputItem {
     #[serde(rename = "text")]
-    Text { text: String },
+    Text {
+        text: String,
+        /// `true` when the item came from `console.*` rather than `text()` (upstream
+        /// `console?: true`; never serialized as any other value).
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        console: Option<True>,
+    },
     #[serde(rename = "image")]
     Image {
         data: String,
@@ -210,7 +227,7 @@ impl CodemodeOutputItem {
     /// Characters this item contributes to the output budget (text or base64 data).
     pub fn char_len(&self) -> usize {
         match self {
-            CodemodeOutputItem::Text { text } => text.chars().count(),
+            CodemodeOutputItem::Text { text, .. } => text.chars().count(),
             CodemodeOutputItem::Image { data, .. } => data.chars().count(),
         }
     }
@@ -261,7 +278,12 @@ pub struct CodemodeError {
 
 impl CodemodeError {
     pub fn new(kind: CodemodeErrorKind, message: impl Into<String>) -> Self {
-        Self { kind, name: None, message: message.into(), stack: None }
+        Self {
+            kind,
+            name: None,
+            message: message.into(),
+            stack: None,
+        }
     }
 
     pub fn with_name(mut self, name: impl Into<String>) -> Self {
@@ -318,7 +340,11 @@ impl Serialize for True {
 
 impl<'de> Deserialize<'de> for True {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        Ok(if <bool as Deserialize>::deserialize(deserializer)? { True } else { return Err(serde::de::Error::custom("expected true")) })
+        Ok(if <bool as Deserialize>::deserialize(deserializer)? {
+            True
+        } else {
+            return Err(serde::de::Error::custom("expected true"));
+        })
     }
 }
 
@@ -334,7 +360,11 @@ impl Serialize for False {
 
 impl<'de> Deserialize<'de> for False {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        Ok(if <bool as Deserialize>::deserialize(deserializer)? { return Err(serde::de::Error::custom("expected false")) } else { False })
+        Ok(if <bool as Deserialize>::deserialize(deserializer)? {
+            return Err(serde::de::Error::custom("expected false"));
+        } else {
+            False
+        })
     }
 }
 

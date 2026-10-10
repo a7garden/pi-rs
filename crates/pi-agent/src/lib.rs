@@ -70,20 +70,22 @@ pub mod types;
 
 pub use agent::{Agent, AgentInitialState, AgentOptions, MutableAgentState};
 pub use agent_loop::{
-	agent_loop, agent_loop_continue, run_agent_loop, run_agent_loop_continue, run_tool_call, AgentEventStream,
-	RunToolCallOptions, ToolUpdateSink,
+    agent_loop, agent_loop_continue, run_agent_loop, run_agent_loop_continue, run_tool_call,
+    AgentEventStream, RunToolCallOptions, ToolUpdateSink,
 };
 pub use proxy::{stream_proxy, ProxyAssistantMessageEvent, ProxyStreamOptions};
 pub use stream_fn::{get_default_stream_fn, set_default_stream_fn};
 pub use types::{
-	after_tool_call, after_tool_call_context, before_tool_call, before_tool_call_context, convert_to_llm,
-	default_convert_to_llm, default_model, empty_usage, finish_turn, get_api_key, get_follow_up_messages,
-	get_steering_messages, now_ms, prepare_next_turn, prepare_next_turn_with_context, prepare_request,
-	transform_context, AfterToolCallContext, AfterToolCallResult, AgentContext, AgentError, AgentEvent, AgentEventSink,
-	AgentLoopConfig, AgentLoopTurnUpdate, AgentMessage, AgentRequestUpdate, AgentThinkingLevel, AgentTool,
-	AgentToolCall, AgentToolCallOutcome, AgentToolExecute, AgentToolResult, AgentToolUpdateCallback, AgentTurnContext,
-	AgentTurnDecision, BeforeToolCallContext, BeforeToolCallResult, BoxFuture, ConvertToLlm, FinishTurn, GetApiKey,
-	GetQueueMessages, PrepareNextTurnContext, PrepareNextTurnHook, PrepareNextTurnWithContextHook,
-	PrepareRequestContext, PrepareRequestHook, PromptInput, QueueMode, StreamFn, ToolExecutionMode, ToolReplayPolicy,
-	TransformContext,
+    after_tool_call, after_tool_call_context, before_tool_call, before_tool_call_context,
+    convert_to_llm, default_convert_to_llm, default_model, empty_usage, finish_turn, get_api_key,
+    get_follow_up_messages, get_steering_messages, now_ms, prepare_next_turn,
+    prepare_next_turn_with_context, prepare_request, transform_context, AfterToolCallContext,
+    AfterToolCallResult, AgentContext, AgentError, AgentEvent, AgentEventSink, AgentLoopConfig,
+    AgentLoopTurnUpdate, AgentMessage, AgentRequestUpdate, AgentThinkingLevel, AgentTool,
+    AgentToolCall, AgentToolCallOutcome, AgentToolExecute, AgentToolResult,
+    AgentToolUpdateCallback, AgentTurnContext, AgentTurnDecision, BeforeToolCallContext,
+    BeforeToolCallResult, BoxFuture, ConvertToLlm, FinishTurn, GetApiKey, GetQueueMessages,
+    PrepareNextTurnContext, PrepareNextTurnHook, PrepareNextTurnWithContextHook,
+    PrepareRequestContext, PrepareRequestHook, PromptInput, QueueMode, StreamFn, ToolExecutionMode,
+    ToolReplayPolicy, TransformContext,
 };

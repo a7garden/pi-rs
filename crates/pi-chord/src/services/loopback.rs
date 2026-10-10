@@ -12,8 +12,8 @@ use crate::json::JsonValue;
 use crate::services::errors::AnyError;
 use crate::services::provider::RemoteServiceProvider;
 use crate::types::{
-    RemoteServiceTransport, ServiceCall, ServiceMode, ServiceSubscription, ServiceSubscriptionSnapshot,
-    UpdateListener,
+    RemoteServiceTransport, ServiceCall, ServiceMode, ServiceSubscription,
+    ServiceSubscriptionSnapshot, UpdateListener,
 };
 
 /// A subscription view that hides the provider-side close semantics from the
@@ -43,7 +43,11 @@ struct LoopbackTransport {
 
 #[async_trait]
 impl RemoteServiceTransport for LoopbackTransport {
-    async fn invoke(&self, call: &ServiceCall, context: &Context) -> Result<Option<JsonValue>, AnyError> {
+    async fn invoke(
+        &self,
+        call: &ServiceCall,
+        context: &Context,
+    ) -> Result<Option<JsonValue>, AnyError> {
         self.provider.invoke(call, context).await
     }
 
@@ -60,6 +64,8 @@ impl RemoteServiceTransport for LoopbackTransport {
 }
 
 /// Connects a provider to a binding without changing remote service semantics.
-pub fn create_loopback_service_transport(provider: Arc<RemoteServiceProvider>) -> Arc<dyn RemoteServiceTransport> {
+pub fn create_loopback_service_transport(
+    provider: Arc<RemoteServiceProvider>,
+) -> Arc<dyn RemoteServiceTransport> {
     Arc::new(LoopbackTransport { provider })
 }

@@ -140,10 +140,13 @@ mod host;
 mod loader;
 
 pub use codemode::{DenoCodeModeWorkerFactory, DenoWasmLoader};
-pub use compiler::{BUNDLE_FORMAT, BUNDLE_FORMAT_VERSION, FacetBundleCompiler};
-pub use discovery::{dedupe_paths, discover_extensions_in_dir, is_extension_file, read_pi_manifest, resolve_extension_entries, PiManifest};
+pub use compiler::{FacetBundleCompiler, BUNDLE_FORMAT, BUNDLE_FORMAT_VERSION};
+pub use discovery::{
+    dedupe_paths, discover_extensions_in_dir, is_extension_file, read_pi_manifest,
+    resolve_extension_entries, PiManifest,
+};
 pub use extensions::{
-    DenoExtensionHost, DenoExtensionHostOptions, ExtensionBackend, ExtensionHost, ExtensionHostError,
-    HandlerOutcome, LoadedExtension,
+    DenoExtensionHost, DenoExtensionHostOptions, ExtensionBackend, ExtensionHost,
+    ExtensionHostError, HandlerOutcome, LoadedExtension,
 };
 pub use facets::{FacetRuntimeModuleLoader, FacetRuntimeOptions};

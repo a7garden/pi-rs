@@ -15,39 +15,39 @@ use crate::types::{AnyModel, ClassifierModel, JsonValue, Model};
 pub const ANTHROPIC_DATA_JSON: &str = include_str!("data/anthropic.json");
 
 fn groups() -> JsonValue {
-	serde_json::from_str(ANTHROPIC_DATA_JSON).expect("embedded anthropic.json parses")
+    serde_json::from_str(ANTHROPIC_DATA_JSON).expect("embedded anthropic.json parses")
 }
 
 /// `ANTHROPIC_MODELS` (`Object.values` order).
 pub fn anthropic_models() -> Vec<Model> {
-	crate::model_catalog::flatten_chat_model_catalog("anthropic", &groups())
-		.into_models()
-		.into_iter()
-		.filter_map(|model| match model {
-			AnyModel::Chat(model) => Some(model),
-			_ => None,
-		})
-		.collect()
+    crate::model_catalog::flatten_chat_model_catalog("anthropic", &groups())
+        .into_models()
+        .into_iter()
+        .filter_map(|model| match model {
+            AnyModel::Chat(model) => Some(model),
+            _ => None,
+        })
+        .collect()
 }
 
 /// `ANTHROPIC_IMAGE_MODELS` (`Object.values` order).
 pub fn anthropic_image_models() -> Vec<AnyModel> {
-	crate::model_catalog::flatten_image_model_catalog("anthropic", &groups()).into_models()
+    crate::model_catalog::flatten_image_model_catalog("anthropic", &groups()).into_models()
 }
 
 /// `ANTHROPIC_CLASSIFIER_MODELS` (`Object.values` order).
 pub fn anthropic_classifier_models() -> Vec<ClassifierModel> {
-	crate::model_catalog::flatten_classifier_model_catalog("anthropic", &groups())
-		.into_models()
-		.into_iter()
-		.filter_map(|model| match model {
-			AnyModel::Classifier(model) => Some(model),
-			_ => None,
-		})
-		.collect()
+    crate::model_catalog::flatten_classifier_model_catalog("anthropic", &groups())
+        .into_models()
+        .into_iter()
+        .filter_map(|model| match model {
+            AnyModel::Classifier(model) => Some(model),
+            _ => None,
+        })
+        .collect()
 }
 
 /// All chat entries as `AnyModel` (what `create_provider` consumes).
 pub fn anthropic_any_models() -> Vec<AnyModel> {
-	anthropic_models().into_iter().map(AnyModel::Chat).collect()
+    anthropic_models().into_iter().map(AnyModel::Chat).collect()
 }

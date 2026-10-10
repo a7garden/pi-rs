@@ -2,9 +2,9 @@
 //! JS and TypeScript extensions, event dispatch, action routing, and
 //! discovery.
 
+use parking_lot::Mutex;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
-use parking_lot::Mutex;
 
 use async_trait::async_trait;
 use pi_runtime::extensions::{ExtensionBackend, ExtensionHost};
@@ -39,12 +39,16 @@ impl FakeBackend {
 #[async_trait]
 impl ExtensionBackend for FakeBackend {
     fn register(&self, ext: &str, method: &str, payload: Value) -> Result<Value, String> {
-        self.registrations.lock().push((ext.to_string(), method.to_string(), payload));
+        self.registrations
+            .lock()
+            .push((ext.to_string(), method.to_string(), payload));
         Ok(Value::Null)
     }
 
     async fn call(&self, ext: &str, method: &str, args: Value) -> Result<Value, String> {
-        self.action_calls.lock().push((ext.to_string(), method.to_string(), args));
+        self.action_calls
+            .lock()
+            .push((ext.to_string(), method.to_string(), args));
         match self.action_results.lock().get(method) {
             Some(result) => Ok(result.clone()),
             None => Ok(Value::Null),
@@ -153,9 +157,7 @@ async fn loads_a_js_extension_and_dispatches_events_and_tools() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn loads_a_typescript_extension_and_routes_actions() {
-    let backend = Arc::new(
-        FakeBackend::default().with_action("sendMessage", json!(true)),
-    );
+    let backend = Arc::new(FakeBackend::default().with_action("sendMessage", json!(true)));
     let host = host(Arc::clone(&backend));
 
     let dir = tempfile::tempdir().unwrap();
@@ -197,9 +199,8 @@ async fn loads_a_typescript_extension_and_routes_actions() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn handler_context_methods_route_with_the_ctx_prefix() {
-    let backend = Arc::new(
-        FakeBackend::default().with_action("ctx.sessionName", json!("my-session")),
-    );
+    let backend =
+        Arc::new(FakeBackend::default().with_action("ctx.sessionName", json!("my-session")));
     let host = host(Arc::clone(&backend));
 
     let dir = tempfile::tempdir().unwrap();
@@ -316,7 +317,10 @@ async fn node_module_shims_resolve_registered_bare_specifiers() {
     shims.insert("node:path".to_string(), json!({ "join": "shimmed" }));
     let host = DenoExtensionHost::new(
         Arc::clone(&backend) as Arc<dyn ExtensionBackend>,
-        DenoExtensionHostOptions { node_modules: shims, virtual_sources: Vec::new() },
+        DenoExtensionHostOptions {
+            node_modules: shims,
+            virtual_sources: Vec::new(),
+        },
     );
 
     let dir = tempfile::tempdir().unwrap();

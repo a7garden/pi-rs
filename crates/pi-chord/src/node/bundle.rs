@@ -132,12 +132,20 @@ pub struct BundleFacetsResult {
 
 /// Bundle each opaque facet entry into an independent content-addressed
 /// CommonJS file. Port of upstream `bundleFacets`.
-pub async fn bundle_facets(options: BundleFacetsOptions, compiler: &dyn FacetCompiler) -> Result<BundleFacetsResult, AnyError> {
+pub async fn bundle_facets(
+    options: BundleFacetsOptions,
+    compiler: &dyn FacetCompiler,
+) -> Result<BundleFacetsResult, AnyError> {
     validate_options(&options)?;
     let working_directory = match &options.working_directory {
-        Some(dir) => fs::canonicalize(dir)
-            .map_err(|e| error(format!("Could not resolve facet bundle working directory {}: {e}", dir.display())))?,
-        None => std::env::current_dir().map_err(|e| error(format!("Could not resolve process working directory: {e}")))?,
+        Some(dir) => fs::canonicalize(dir).map_err(|e| {
+            error(format!(
+                "Could not resolve facet bundle working directory {}: {e}",
+                dir.display()
+            ))
+        })?,
+        None => std::env::current_dir()
+            .map_err(|e| error(format!("Could not resolve process working directory: {e}")))?,
     };
     // Upstream `resolve(workingDirectory, options.outdir)`; the outdir need not
     // exist yet, so join lexically.
@@ -146,10 +154,17 @@ pub async fn bundle_facets(options: BundleFacetsOptions, compiler: &dyn FacetCom
         .parent()
         .map(Path::to_path_buf)
         .unwrap_or_else(|| PathBuf::from("."));
-    fs::create_dir_all(&output_parent)
-        .map_err(|e| error(format!("Could not create facet bundle output parent {}: {e}", output_parent.display())))?;
-    let temporary_directory =
-        output_parent.join(format!(".{}.tmp-{}", file_name(&output_directory), unique_suffix()));
+    fs::create_dir_all(&output_parent).map_err(|e| {
+        error(format!(
+            "Could not create facet bundle output parent {}: {e}",
+            output_parent.display()
+        ))
+    })?;
+    let temporary_directory = output_parent.join(format!(
+        ".{}.tmp-{}",
+        file_name(&output_directory),
+        unique_suffix()
+    ));
     fs::create_dir(&temporary_directory).map_err(|e| {
         error(format!(
             "Could not create facet bundle staging directory {}: {e}",
@@ -203,14 +218,17 @@ async fn bundle_into(
         plugin: options.plugin.clone(),
         entries,
     };
-    let serialized = format!("{}\n", serde_json::to_string_pretty(&manifest).map_err(|e| error(e.to_string()))?);
-    fs::write(temporary_directory.join(FACET_BUNDLE_MANIFEST_FILE), serialized)
-        .map_err(|e| error(format!("Could not write facet bundle manifest: {e}")))?;
+    let serialized = format!(
+        "{}\n",
+        serde_json::to_string_pretty(&manifest).map_err(|e| error(e.to_string()))?
+    );
+    fs::write(
+        temporary_directory.join(FACET_BUNDLE_MANIFEST_FILE),
+        serialized,
+    )
+    .map_err(|e| error(format!("Could not write facet bundle manifest: {e}")))?;
     replace_directory(temporary_directory, output_directory)?;
-    Ok((
-        manifest,
-        output_directory.join(FACET_BUNDLE_MANIFEST_FILE),
-    ))
+    Ok((manifest, output_directory.join(FACET_BUNDLE_MANIFEST_FILE)))
 }
 
 /// Port of upstream `bundleEntry`: run the compiler, then post-validate the
@@ -263,7 +281,9 @@ async fn bundle_entry(
             } else {
                 format!("\n{}", diagnostics.join("\n"))
             };
-            return Err(error(format!("Could not bundle facet entry {entry_name}{detail}")));
+            return Err(error(format!(
+                "Could not bundle facet entry {entry_name}{detail}"
+            )));
         }
     };
     // Upstream runs esbuild with `write: true`, so the build itself materializes
@@ -340,7 +360,10 @@ async fn bundle_entry(
     }
     let mut hasher = Sha256::new();
     hasher.update(contents);
-    let integrity = format!("sha256-{}", base64::engine::general_purpose::STANDARD.encode(hasher.finalize()));
+    let integrity = format!(
+        "sha256-{}",
+        base64::engine::general_purpose::STANDARD.encode(hasher.finalize())
+    );
     let mut external_imports: Vec<String> = output.external_imports.clone();
     external_imports.sort();
     external_imports.dedup();
@@ -477,10 +500,7 @@ mod tests {
     /// source map, content-addressed by plugin version + entry name.
     impl TestCompiler {
         fn output_name(&self, request: &FacetBuildRequest) -> String {
-            let version_tag = request
-                .abs_working_dir
-                .to_string_lossy()
-                .into_owned();
+            let version_tag = request.abs_working_dir.to_string_lossy().into_owned();
             format!(
                 "{}-{}.cjs",
                 request.entry_names.replace("-[hash]", ""),
@@ -568,13 +588,24 @@ mod tests {
         let outdir = dir.join("bundle");
         let mut opts = options(&[("worker", &source.to_string_lossy())], &outdir);
         opts.source_map = true;
-        let result = bundle_facets(opts, &TestCompiler { fail_worker: AtomicBool::new(false) })
-            .await
-            .unwrap();
-        assert_eq!(result.manifest_path, outdir.join(FACET_BUNDLE_MANIFEST_FILE));
+        let result = bundle_facets(
+            opts,
+            &TestCompiler {
+                fail_worker: AtomicBool::new(false),
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            result.manifest_path,
+            outdir.join(FACET_BUNDLE_MANIFEST_FILE)
+        );
         let entry = result.manifest.entries.get("worker").unwrap();
         assert!(entry.file.starts_with("facet-") && entry.file.ends_with(".cjs"));
-        assert_eq!(entry.source_map.as_deref(), Some(&*format!("{}.map", entry.file)));
+        assert_eq!(
+            entry.source_map.as_deref(),
+            Some(&*format!("{}.map", entry.file))
+        );
         // Manifest file is pretty-printed with a trailing newline.
         let raw = fs::read_to_string(&result.manifest_path).unwrap();
         assert!(raw.ends_with("\n"));
@@ -588,7 +619,9 @@ mod tests {
         second_options.source_map = true;
         let second = bundle_facets(
             second_options,
-            &TestCompiler { fail_worker: AtomicBool::new(false) },
+            &TestCompiler {
+                fail_worker: AtomicBool::new(false),
+            },
         )
         .await
         .unwrap();
@@ -611,7 +644,9 @@ mod tests {
         fs::write(outdir.join("stale.txt"), b"old").unwrap();
         bundle_facets(
             options(&[("worker", &source.to_string_lossy())], &outdir),
-            &TestCompiler { fail_worker: AtomicBool::new(false) },
+            &TestCompiler {
+                fail_worker: AtomicBool::new(false),
+            },
         )
         .await
         .unwrap();
@@ -627,24 +662,35 @@ mod tests {
     async fn validates_options_with_upstream_messages() {
         let dir = tempdir();
         let outdir = dir.join("bundle");
-        let compiler = TestCompiler { fail_worker: AtomicBool::new(false) };
+        let compiler = TestCompiler {
+            fail_worker: AtomicBool::new(false),
+        };
         let mut opts = options(&[("worker", "w.ts")], &outdir);
         opts.plugin.id = String::new();
         assert_eq!(
-            bundle_facets(opts, &compiler).await.unwrap_err().to_string(),
+            bundle_facets(opts, &compiler)
+                .await
+                .unwrap_err()
+                .to_string(),
             "Facet bundle plugin ID must not be empty"
         );
 
         let mut opts = options(&[("worker", "w.ts")], &outdir);
         opts.plugin.version = Some(String::new());
         assert_eq!(
-            bundle_facets(opts, &compiler).await.unwrap_err().to_string(),
+            bundle_facets(opts, &compiler)
+                .await
+                .unwrap_err()
+                .to_string(),
             "Facet bundle plugin version must not be empty"
         );
 
         let opts = options(&[], &outdir);
         assert_eq!(
-            bundle_facets(opts, &compiler).await.unwrap_err().to_string(),
+            bundle_facets(opts, &compiler)
+                .await
+                .unwrap_err()
+                .to_string(),
             "Facet bundle must contain at least one entry"
         );
 
@@ -655,21 +701,30 @@ mod tests {
             ..opts
         };
         assert_eq!(
-            bundle_facets(opts, &compiler).await.unwrap_err().to_string(),
+            bundle_facets(opts, &compiler)
+                .await
+                .unwrap_err()
+                .to_string(),
             "Facet bundle entry name must not be empty"
         );
 
         let mut opts = options(&[("worker", "w.ts")], &outdir);
         opts.external = vec![String::new()];
         assert_eq!(
-            bundle_facets(opts, &compiler).await.unwrap_err().to_string(),
+            bundle_facets(opts, &compiler)
+                .await
+                .unwrap_err()
+                .to_string(),
             "Facet bundle external import must not be empty"
         );
 
         let mut opts = options(&[("worker", "")], &outdir);
         opts.plugin.id = "p".to_string();
         assert_eq!(
-            bundle_facets(opts, &compiler).await.unwrap_err().to_string(),
+            bundle_facets(opts, &compiler)
+                .await
+                .unwrap_err()
+                .to_string(),
             "Facet bundle entry worker must have a source path"
         );
     }
@@ -707,7 +762,10 @@ mod tests {
         struct TwoEntriesCompiler;
         #[async_trait]
         impl FacetCompiler for TwoEntriesCompiler {
-            async fn build(&self, _request: FacetBuildRequest) -> Result<FacetBuildOutput, AnyError> {
+            async fn build(
+                &self,
+                _request: FacetBuildRequest,
+            ) -> Result<FacetBuildOutput, AnyError> {
                 Ok(FacetBuildOutput {
                     output_files: vec![
                         (PathBuf::from("a.cjs"), b"1".to_vec()),
@@ -723,7 +781,10 @@ mod tests {
         struct EscapedCompiler;
         #[async_trait]
         impl FacetCompiler for EscapedCompiler {
-            async fn build(&self, _request: FacetBuildRequest) -> Result<FacetBuildOutput, AnyError> {
+            async fn build(
+                &self,
+                _request: FacetBuildRequest,
+            ) -> Result<FacetBuildOutput, AnyError> {
                 Ok(FacetBuildOutput {
                     output_files: vec![(PathBuf::from("../escape.cjs"), b"1".to_vec())],
                     entry_output: "../escape.cjs".to_string(),
@@ -736,7 +797,10 @@ mod tests {
         struct ExtraFileCompiler;
         #[async_trait]
         impl FacetCompiler for ExtraFileCompiler {
-            async fn build(&self, _request: FacetBuildRequest) -> Result<FacetBuildOutput, AnyError> {
+            async fn build(
+                &self,
+                _request: FacetBuildRequest,
+            ) -> Result<FacetBuildOutput, AnyError> {
                 Ok(FacetBuildOutput {
                     output_files: vec![
                         (PathBuf::from("a.cjs"), b"1".to_vec()),
@@ -760,7 +824,10 @@ mod tests {
         .await
         .unwrap_err()
         .to_string();
-        assert_eq!(err, "Facet entry worker did not produce exactly one JavaScript file");
+        assert_eq!(
+            err,
+            "Facet entry worker did not produce exactly one JavaScript file"
+        );
 
         let err = bundle_facets(
             options(&[("worker", &source.to_string_lossy())], &outdir),
@@ -788,7 +855,10 @@ mod tests {
         let dir = std::env::temp_dir().join(format!(
             "pi-chord-bundle-test-{}-{:x}",
             process::id(),
-            SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos() as u64
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos() as u64
         ));
         fs::create_dir_all(&dir).unwrap();
         dir

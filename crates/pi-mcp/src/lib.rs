@@ -1,4 +1,4 @@
-//! Port of `@earendil-works/pi-mcp` (upstream: packages/mcp, v1.0.3).
+//! Port of `@earendil-works/pi-mcp` (upstream: packages/mcp, v1.1.0).
 //!
 //! A standalone Model Context Protocol **client** (upstream ships client-only):
 //! JSON-RPC 2.0 framing, MCP protocol types, tool-result content conversion, a
@@ -31,9 +31,13 @@
 //!   `Display` strings). All fallible APIs are `Result`-based.
 //! - **Fetch abstraction.** Upstream uses the platform `fetch`/`Response` types;
 //!   Rust gets neutral [`HttpRequest`]/[`HttpResponse`] values behind [`McpFetch`],
-//!   with a `reqwest`-backed default. The Cloudflare-receiver concern of upstream
-//!   test #10188 ("calls fetch without a receiver") does not exist here; the test
-//!   keeps the custom-fetch + `context.fetch` assertions only.
+//!   with a `reqwest`-backed default. Abortable requests carry the crate-local
+//!   signal on `HttpRequest.signal`; the default fetch races it against the
+//!   response and reports aborts as [`McpError::Abort`] (upstream `AbortError`),
+//!   while custom fetch implementations decide how to honor it. The
+//!   Cloudflare-receiver concern of upstream test #10188 ("calls fetch without a
+//!   receiver") does not exist here; the test keeps the custom-fetch +
+//!   `context.fetch` assertions only.
 //! - **AbortSignal/AbortController.** Platform signal objects become the crate-local
 //!   [`AbortSignal`]/[`AbortController`] (watch-based); pi-runtime can adapt its own.
 //! - **Optional provider/handler methods → trait defaults.** Upstream probes
@@ -75,48 +79,46 @@ pub mod transports;
 // Mirrors upstream `src/index.ts` re-exports.
 pub use auth_provider::{AuthProvider, McpFetch, UnauthorizedContext};
 pub use client::{
-	AbortController, AbortSignal, ClientState, McpClient, McpClientOptions, McpRequestOptions,
-	RequestContext, Roots, RootsProvider,
+    AbortController, AbortSignal, ClientState, McpClient, McpClientOptions, McpRequestOptions,
+    RequestContext, Roots, RootsProvider,
 };
 pub use protocol::content::{
-	to_llm_content, AudioContent, BlobResourceContents, CallToolResult, ContentAnnotations,
-	ContentBlock, EmbeddedResourceContent, ImageContent, LlmContent, ResourceLinkContent,
-	TextContent, TextResourceContents,
+    to_llm_content, AudioContent, BlobResourceContents, CallToolResult, ContentAnnotations,
+    ContentBlock, EmbeddedResourceContent, ImageContent, LlmContent, ResourceLinkContent,
+    TextContent, TextResourceContents,
 };
 pub use protocol::jsonrpc::{
-	is_json_rpc_notification, is_json_rpc_request, is_json_rpc_response, parse_json_rpc_message,
-	JsonRpcErrorObject, JsonRpcErrorResponse, JsonRpcId, JsonRpcMessage, JsonRpcNotification,
-	JsonRpcRequest, JsonRpcResponse, JsonRpcSuccessResponse, McpError,
-	JSON_RPC_ERROR_CODES_INTERNAL_ERROR, JSON_RPC_ERROR_CODES_INVALID_PARAMS,
-	JSON_RPC_ERROR_CODES_INVALID_REQUEST, JSON_RPC_ERROR_CODES_METHOD_NOT_FOUND,
-	JSON_RPC_ERROR_CODES_PARSE_ERROR,
+    is_json_rpc_notification, is_json_rpc_request, is_json_rpc_response, parse_json_rpc_message,
+    JsonRpcErrorObject, JsonRpcErrorResponse, JsonRpcId, JsonRpcMessage, JsonRpcNotification,
+    JsonRpcRequest, JsonRpcResponse, JsonRpcSuccessResponse, McpError,
+    JSON_RPC_ERROR_CODES_INTERNAL_ERROR, JSON_RPC_ERROR_CODES_INVALID_PARAMS,
+    JSON_RPC_ERROR_CODES_INVALID_REQUEST, JSON_RPC_ERROR_CODES_METHOD_NOT_FOUND,
+    JSON_RPC_ERROR_CODES_PARSE_ERROR,
 };
 pub use protocol::types::{
-	CancelledNotification, ClientCapabilities, Implementation, InitializeParams, InitializeResult,
-	ListResourcesResult, ListResourceTemplatesResult, ListToolsResult, ProgressNotification,
-	ReadResourceResult, Resource, ResourceTemplate, Root, ServerCapabilities, Tool, ToolAnnotations,
-	ToolExecution, LATEST_PROTOCOL_VERSION, SUPPORTED_PROTOCOL_VERSIONS,
+    CancelledNotification, ClientCapabilities, Implementation, InitializeParams, InitializeResult,
+    ListResourceTemplatesResult, ListResourcesResult, ListToolsResult, ProgressNotification,
+    ReadResourceResult, Resource, ResourceTemplate, Root, ServerCapabilities, Tool,
+    ToolAnnotations, ToolExecution, LATEST_PROTOCOL_VERSION, SUPPORTED_PROTOCOL_VERSIONS,
 };
 pub use transports::stdio::{StdioMode, StdioTransport, StdioTransportOptions};
 pub use transports::streamable_http::{
-	consume_sse_stream, AuthRequiredError, ConsumeSseOptions, HttpError, SseEvent,
-	SessionExpiredError, StreamableHttpReconnectOptions, StreamableHttpTransport,
-	StreamableHttpTransportOptions,
+    consume_sse_stream, AuthRequiredError, ConsumeSseOptions, HttpError, SessionExpiredError,
+    SseEvent, StreamableHttpReconnectOptions, StreamableHttpTransport,
+    StreamableHttpTransportOptions,
 };
 pub use transports::transport::{
-	CloseListener, ErrorListener, McpTransport, MessageListener, TransportEvents, Unsubscribe,
+    CloseListener, ErrorListener, McpTransport, MessageListener, TransportEvents, Unsubscribe,
 };
-pub use transports::{
-	in_memory::create_in_memory_transport_pair, in_memory::InMemoryTransport,
-};
+pub use transports::{in_memory::create_in_memory_transport_pair, in_memory::InMemoryTransport};
 
 /// Upstream `JSON_RPC_ERROR_CODES` object, flattened into constants.
 pub mod json_rpc_error_codes {
-	pub use crate::protocol::jsonrpc::{
-		JSON_RPC_ERROR_CODES_INTERNAL_ERROR as INTERNAL_ERROR,
-		JSON_RPC_ERROR_CODES_INVALID_PARAMS as INVALID_PARAMS,
-		JSON_RPC_ERROR_CODES_INVALID_REQUEST as INVALID_REQUEST,
-		JSON_RPC_ERROR_CODES_METHOD_NOT_FOUND as METHOD_NOT_FOUND,
-		JSON_RPC_ERROR_CODES_PARSE_ERROR as PARSE_ERROR,
-	};
+    pub use crate::protocol::jsonrpc::{
+        JSON_RPC_ERROR_CODES_INTERNAL_ERROR as INTERNAL_ERROR,
+        JSON_RPC_ERROR_CODES_INVALID_PARAMS as INVALID_PARAMS,
+        JSON_RPC_ERROR_CODES_INVALID_REQUEST as INVALID_REQUEST,
+        JSON_RPC_ERROR_CODES_METHOD_NOT_FOUND as METHOD_NOT_FOUND,
+        JSON_RPC_ERROR_CODES_PARSE_ERROR as PARSE_ERROR,
+    };
 }

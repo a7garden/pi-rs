@@ -17,40 +17,40 @@
 /// importing the pi-ai root get the compat entrypoint (a strict superset of
 /// the core entrypoint, so legacy global-API extensions keep working).
 pub const VIRTUAL_MODULE_SPECIFIERS: &[&str] = &[
-	"typebox",
-	"typebox/compile",
-	"typebox/value",
-	"@sinclair/typebox",
-	"@sinclair/typebox/compile",
-	"@sinclair/typebox/value",
-	"@earendil-works/pi-agent-core",
-	"@earendil-works/pi-tui",
-	// Extensions resolve the pi-ai root to the compat entrypoint (a strict
-	// superset of the core entrypoint): existing extensions using the old
-	// global API keep working at runtime until compat is removed.
-	"@earendil-works/pi-ai",
-	"@earendil-works/pi-ai/compat",
-	"@earendil-works/pi-ai/oauth",
-	"@earendil-works/pi-ai/providers/all",
-	"@earendil-works/pi-coding-agent",
-	"@mariozechner/pi-agent-core",
-	"@mariozechner/pi-tui",
-	"@mariozechner/pi-ai",
-	"@mariozechner/pi-ai/compat",
-	"@mariozechner/pi-ai/oauth",
-	"@mariozechner/pi-ai/providers/all",
-	"@mariozechner/pi-coding-agent",
+    "typebox",
+    "typebox/compile",
+    "typebox/value",
+    "@sinclair/typebox",
+    "@sinclair/typebox/compile",
+    "@sinclair/typebox/value",
+    "@earendil-works/pi-agent-core",
+    "@earendil-works/pi-tui",
+    // Extensions resolve the pi-ai root to the compat entrypoint (a strict
+    // superset of the core entrypoint): existing extensions using the old
+    // global API keep working at runtime until compat is removed.
+    "@earendil-works/pi-ai",
+    "@earendil-works/pi-ai/compat",
+    "@earendil-works/pi-ai/oauth",
+    "@earendil-works/pi-ai/providers/all",
+    "@earendil-works/pi-coding-agent",
+    "@mariozechner/pi-agent-core",
+    "@mariozechner/pi-tui",
+    "@mariozechner/pi-ai",
+    "@mariozechner/pi-ai/compat",
+    "@mariozechner/pi-ai/oauth",
+    "@mariozechner/pi-ai/providers/all",
+    "@mariozechner/pi-coding-agent",
 ];
 
 #[cfg(test)]
 mod virtual_modules_tests {
-	use super::*;
+    use super::*;
 
-	#[test]
-	fn specifier_table_matches_upstream_keys() {
-		assert_eq!(VIRTUAL_MODULE_SPECIFIERS.len(), 20);
-		assert!(VIRTUAL_MODULE_SPECIFIERS.contains(&"typebox"));
-		assert!(VIRTUAL_MODULE_SPECIFIERS.contains(&"@earendil-works/pi-coding-agent"));
-		assert!(VIRTUAL_MODULE_SPECIFIERS.contains(&"@mariozechner/pi-ai/providers/all"));
-	}
+    #[test]
+    fn specifier_table_matches_upstream_keys() {
+        assert_eq!(VIRTUAL_MODULE_SPECIFIERS.len(), 20);
+        assert!(VIRTUAL_MODULE_SPECIFIERS.contains(&"typebox"));
+        assert!(VIRTUAL_MODULE_SPECIFIERS.contains(&"@earendil-works/pi-coding-agent"));
+        assert!(VIRTUAL_MODULE_SPECIFIERS.contains(&"@mariozechner/pi-ai/providers/all"));
+    }
 }

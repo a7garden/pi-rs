@@ -52,13 +52,12 @@ pub mod types;
 pub(crate) mod wire;
 
 // Mirrors upstream `src/index.ts` re-exports (errors, listener, server, types).
-pub use errors::{
-	INTERNAL_SERVER_ERROR_MESSAGE, ServerError, ServerOperationErrorCode,
-};
+pub use errors::{ServerError, ServerOperationErrorCode, INTERNAL_SERVER_ERROR_MESSAGE};
 pub use listener::ServerListener;
 pub use server::Server;
 pub use types::{
-	AnyError, BasicSessionMetadata, ConnectionCountCallback, ErrorCallback, MaybeFuture, RoutedServerPresentation,
-	RoutedServerServiceAttachment, RoutedServerServiceHost, RoutedSessionAttachment, RoutedSessionHandle, ServerHost,
-	ServerOptions, ServicePublish, SessionMetadata,
+    AnyError, BasicSessionMetadata, ConnectionCountCallback, ErrorCallback, MaybeFuture,
+    RoutedServerPresentation, RoutedServerServiceAttachment, RoutedServerServiceHost,
+    RoutedSessionAttachment, RoutedSessionHandle, ServerHost, ServerOptions, ServicePublish,
+    SessionMetadata,
 };

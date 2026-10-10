@@ -29,11 +29,11 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
-use std::sync::Arc;
 use std::sync::mpsc;
+use std::sync::Arc;
 
 use async_trait::async_trait;
-use deno_core::{OpState, PollEventLoopOptions, op2};
+use deno_core::{op2, OpState, PollEventLoopOptions};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -49,7 +49,9 @@ pub struct ExtensionHostError {
 
 impl ExtensionHostError {
     pub fn new(message: impl Into<String>) -> Self {
-        Self { message: message.into() }
+        Self {
+            message: message.into(),
+        }
     }
 }
 
@@ -113,7 +115,8 @@ pub trait ExtensionHost: Send + Sync {
     /// re-invocation: the module is *not* re-imported, so module-level side
     /// effects run only once). The returned summary carries `new_key`; its
     /// `path` is empty because no import happened — the caller owns the path.
-    async fn reload(&self, key: &str, new_key: &str) -> Result<LoadedExtension, ExtensionHostError>;
+    async fn reload(&self, key: &str, new_key: &str)
+        -> Result<LoadedExtension, ExtensionHostError>;
 
     /// Invoke one extension's handlers for an event, in registration order.
     /// A handler's methods on `ctx` route to the backend with the `ctx.`
@@ -203,7 +206,13 @@ impl DenoExtensionHost {
             .expect("pi-runtime: failed to spawn extension request forwarder");
 
         let worker = spawn_js_thread(move || async move {
-            extension_runtime_loop(options.node_modules, options.virtual_sources, backend, &mut async_rx).await;
+            extension_runtime_loop(
+                options.node_modules,
+                options.virtual_sources,
+                backend,
+                &mut async_rx,
+            )
+            .await;
         });
 
         Self {
@@ -218,7 +227,11 @@ impl ExtensionHost for DenoExtensionHost {
     async fn load(&self, entry: &Path, key: &str) -> Result<LoadedExtension, ExtensionHostError> {
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
         self.requests
-            .send(Request::Load { entry: entry.to_path_buf(), key: key.to_string(), reply: reply_tx })
+            .send(Request::Load {
+                entry: entry.to_path_buf(),
+                key: key.to_string(),
+                reply: reply_tx,
+            })
             .map_err(|_| ExtensionHostError::new("Extension host is no longer running"))?;
         reply_rx
             .await
@@ -226,7 +239,11 @@ impl ExtensionHost for DenoExtensionHost {
             .map_err(ExtensionHostError::new)
     }
 
-    async fn reload(&self, key: &str, new_key: &str) -> Result<LoadedExtension, ExtensionHostError> {
+    async fn reload(
+        &self,
+        key: &str,
+        new_key: &str,
+    ) -> Result<LoadedExtension, ExtensionHostError> {
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
         self.requests
             .send(Request::Reload {
@@ -270,7 +287,12 @@ impl ExtensionHost for DenoExtensionHost {
     ) -> Result<Option<Value>, ExtensionHostError> {
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
         self.requests
-            .send(Request::CallSlot { key: key.to_string(), slot, args, reply: reply_tx })
+            .send(Request::CallSlot {
+                key: key.to_string(),
+                slot,
+                args,
+                reply: reply_tx,
+            })
             .map_err(|_| ExtensionHostError::new("Extension host is no longer running"))?;
         reply_rx
             .await
@@ -281,7 +303,10 @@ impl ExtensionHost for DenoExtensionHost {
     async fn dispose(&self, key: &str) -> Result<(), ExtensionHostError> {
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
         self.requests
-            .send(Request::Dispose { key: key.to_string(), reply: reply_tx })
+            .send(Request::Dispose {
+                key: key.to_string(),
+                reply: reply_tx,
+            })
             .map_err(|_| ExtensionHostError::new("Extension host is no longer running"))?;
         reply_rx
             .await
@@ -434,10 +459,7 @@ async fn load_extension(
     runtime
         .execute_script(
             "pi-extension-factory.js",
-            format!(
-                "__piRunFactory({});",
-                crate::host::js_string_literal(&key)
-            ),
+            format!("__piRunFactory({});", crate::host::js_string_literal(&key)),
         )
         .map_err(|e| e.to_string())?;
     wait_for_done(runtime, "__piFactoryDone")
@@ -618,10 +640,7 @@ async fn op_pi_action(
         .map_err(deno_error::JsErrorBox::generic)
 }
 
-deno_core::extension!(
-    pi_extension_ops,
-    ops = [op_pi_register, op_pi_action],
-);
+deno_core::extension!(pi_extension_ops, ops = [op_pi_register, op_pi_action],);
 
 /// Bootstrap evaluated once per extension runtime.
 const EXTENSION_BOOTSTRAP: &str = r#"

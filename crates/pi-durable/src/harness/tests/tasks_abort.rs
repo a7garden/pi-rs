@@ -1,29 +1,42 @@
 use std::collections::BTreeMap;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
 use parking_lot::Mutex;
-use pi_chord::context::{AbortController, Context, with_abort_signal};
-use serde_json::{Value, json};
+use pi_chord::context::{with_abort_signal, AbortController, Context};
+use serde_json::{json, Value};
 
 use super::support::{context, open, root};
 use crate::harness::harness::{Conversation, Harness};
 use crate::harness::registry::{create_registry, RegistryImpl};
 use crate::harness::types::{AnyTask, Extension, HarnessOptions, Registry};
 use crate::session::support::ControlledStorage;
-use crate::tasks::{BoxFuture, NextTaskState, PhaseHandler, Task, TaskDefinition, TaskRuntime, commit_change, define_task};
-use crate::types::{JoinPolicy, Storage, TaskId, TaskOptions, TaskOutcomeStatus, TaskOwnership, TaskRecord, TaskStateStatus};
+use crate::tasks::{
+    commit_change, define_task, BoxFuture, NextTaskState, PhaseHandler, Task, TaskDefinition,
+    TaskRuntime,
+};
+use crate::types::{
+    JoinPolicy, Storage, TaskId, TaskOptions, TaskOutcomeStatus, TaskOwnership, TaskRecord,
+    TaskStateStatus,
+};
 
 const TEST_TIMEOUT: Duration = Duration::from_secs(5);
 
 fn handler(
-    f: impl Fn(TaskRecord, Arc<dyn TaskRuntime>, Context) -> BoxFuture<Result<(), String>> + Send + Sync + 'static,
+    f: impl Fn(TaskRecord, Arc<dyn TaskRuntime>, Context) -> BoxFuture<Result<(), String>>
+        + Send
+        + Sync
+        + 'static,
 ) -> PhaseHandler {
     Arc::new(f)
 }
 
-fn task(name: &str, phases: impl IntoIterator<Item = (String, PhaseHandler)>, abort: PhaseHandler) -> Task {
+fn task(
+    name: &str,
+    phases: impl IntoIterator<Item = (String, PhaseHandler)>,
+    abort: PhaseHandler,
+) -> Task {
     let phases = phases.into_iter().collect::<BTreeMap<_, _>>();
     define_task(TaskDefinition {
         name: name.to_string(),
@@ -39,21 +52,43 @@ fn task(name: &str, phases: impl IntoIterator<Item = (String, PhaseHandler)>, ab
 fn abort_completed(reason: &'static str) -> PhaseHandler {
     handler(move |_, runtime, ctx| {
         Box::pin(async move {
-            runtime.commit(commit_change(move |_, _| Ok(Some(NextTaskState::aborted_with(reason)))), &ctx).await?;
+            runtime
+                .commit(
+                    commit_change(move |_, _| Ok(Some(NextTaskState::aborted_with(reason)))),
+                    &ctx,
+                )
+                .await?;
             Ok(())
         })
     })
 }
 
 fn register(registry: &Arc<RegistryImpl>, tasks: Vec<Task>) {
-    registry.install(Extension::new("task-abort-tests").with_tasks(
-        tasks.into_iter().map(|task| AnyTask { definition: task.definition }).collect(),
-    ));
+    registry.install(
+        Extension::new("task-abort-tests").with_tasks(
+            tasks
+                .into_iter()
+                .map(|task| AnyTask {
+                    definition: task.definition,
+                })
+                .collect(),
+        ),
+    );
 }
 
-async fn open_with_tasks(tasks: Vec<Task>, storage: Arc<dyn Storage>) -> (Arc<Harness>, Conversation) {
+async fn open_with_tasks(
+    tasks: Vec<Task>,
+    storage: Arc<dyn Storage>,
+) -> (Arc<Harness>, Conversation) {
     let registry = Arc::new(create_registry());
-    let harness = open(storage, HarnessOptions { registry: registry.clone(), ..HarnessOptions::default() }).await;
+    let harness = open(
+        storage,
+        HarnessOptions {
+            registry: registry.clone(),
+            ..HarnessOptions::default()
+        },
+    )
+    .await;
     register(&registry, tasks);
     let conversation = root(&harness).await;
     (harness, conversation)
@@ -64,7 +99,10 @@ async fn open_memory(tasks: Vec<Task>) -> (Arc<Harness>, Conversation) {
     open_with_tasks(tasks, storage).await
 }
 
-async fn open_controlled(tasks: Vec<Task>, storage: &Arc<ControlledStorage>) -> (Arc<Harness>, Conversation) {
+async fn open_controlled(
+    tasks: Vec<Task>,
+    storage: &Arc<ControlledStorage>,
+) -> (Arc<Harness>, Conversation) {
     let storage: Arc<dyn Storage> = storage.clone();
     open_with_tasks(tasks, storage).await
 }
@@ -74,9 +112,15 @@ async fn create(conversation: &Conversation, task: Task) -> TaskId {
         .commit(
             move |tx| {
                 tx.create_task(
-                    &AnyTask { definition: task.definition },
+                    &AnyTask {
+                        definition: task.definition,
+                    },
                     Value::Null,
-                    TaskOptions { ownership: TaskOwnership::Conversation, conversation_id: None, background: None },
+                    TaskOptions {
+                        ownership: TaskOwnership::Conversation,
+                        conversation_id: None,
+                        background: None,
+                    },
                 )
                 .map_err(|error| error.to_string())
             },
@@ -117,7 +161,14 @@ async fn mark_during_a_progressing_phase_prevents_the_next_phase() {
             Box::pin(async move {
                 phases.lock().push("one");
                 runtime
-                    .commit(commit_change(|_, _| Ok(Some(NextTaskState::Running { checkpoint: json!({"phase": "two"}) }))), &ctx)
+                    .commit(
+                        commit_change(|_, _| {
+                            Ok(Some(NextTaskState::Running {
+                                checkpoint: json!({"phase": "two"}),
+                            }))
+                        }),
+                        &ctx,
+                    )
                     .await?;
                 reached.notify_one();
                 proceed.notified().await;
@@ -141,7 +192,12 @@ async fn mark_during_a_progressing_phase_prevents_the_next_phase() {
             let phases = phases.clone();
             Box::pin(async move {
                 phases.lock().push("abort");
-                runtime.commit(commit_change(|_, _| Ok(Some(NextTaskState::aborted_with("boundary")))), &ctx).await?;
+                runtime
+                    .commit(
+                        commit_change(|_, _| Ok(Some(NextTaskState::aborted_with("boundary")))),
+                        &ctx,
+                    )
+                    .await?;
                 Ok(())
             })
         })
@@ -164,7 +220,13 @@ async fn mark_during_a_progressing_phase_prevents_the_next_phase() {
     let aborting = tokio::spawn(async move { harness_for_abort.abort_task(id, &context()).await });
     tokio::time::timeout(TEST_TIMEOUT, async {
         loop {
-            if harness.get_task(id, &context()).await.expect("read marked task").expect("task exists").abort_requested {
+            if harness
+                .get_task(id, &context())
+                .await
+                .expect("read marked task")
+                .expect("task exists")
+                .abort_requested
+            {
                 break;
             }
             tokio::task::yield_now().await;
@@ -173,13 +235,25 @@ async fn mark_during_a_progressing_phase_prevents_the_next_phase() {
     .await
     .expect("abort mark is durable before releasing the phase");
     proceed.notify_one();
-    assert_eq!(aborting.await.expect("abort caller joins").expect("abort mark"), "marked");
+    assert_eq!(
+        aborting
+            .await
+            .expect("abort caller joins")
+            .expect("abort mark"),
+        "marked"
+    );
     let receipt = tokio::time::timeout(TEST_TIMEOUT, harness.wait_for_task(id, &context()))
         .await
         .expect("abort outcome settles")
         .expect("abort settles");
-    assert_eq!(receipt.state.outcome.as_ref().expect("outcome").status, TaskOutcomeStatus::Aborted);
-    assert_eq!(receipt.state.outcome.as_ref().unwrap().reason.as_deref(), Some("boundary"));
+    assert_eq!(
+        receipt.state.outcome.as_ref().expect("outcome").status,
+        TaskOutcomeStatus::Aborted
+    );
+    assert_eq!(
+        receipt.state.outcome.as_ref().unwrap().reason.as_deref(),
+        Some("boundary")
+    );
     assert_eq!(*phases.lock(), ["one", "abort"]);
     harness.close(&context()).await.expect("close");
 }
@@ -201,7 +275,14 @@ async fn aborting_waiting_tasks_bypasses_dependencies_and_faults_nonterminal_han
                     Box::pin(async move {
                         started.notify_one();
                         gate.notified().await;
-                        runtime.commit(commit_change(|_, _| Ok(Some(NextTaskState::completed(Value::Null)))), &ctx).await?;
+                        runtime
+                            .commit(
+                                commit_change(|_, _| {
+                                    Ok(Some(NextTaskState::completed(Value::Null)))
+                                }),
+                                &ctx,
+                            )
+                            .await?;
                         Ok(())
                     })
                 }),
@@ -217,16 +298,21 @@ async fn aborting_waiting_tasks_bypasses_dependencies_and_faults_nonterminal_han
             [(
                 "run".into(),
                 handler(move |_, runtime, ctx| {
-                    let dependency = dependency_id.lock().expect("dependency id set before resume");
+                    let dependency = dependency_id
+                        .lock()
+                        .expect("dependency id set before resume");
                     Box::pin(async move {
                         runtime
-                            .commit(commit_change(move |_, _| {
-                                Ok(Some(NextTaskState::Waiting {
-                                    checkpoint: json!({"phase": "run"}),
-                                    on: vec![dependency],
-                                    policy: JoinPolicy::AllSettled,
-                                }))
-                            }), &ctx)
+                            .commit(
+                                commit_change(move |_, _| {
+                                    Ok(Some(NextTaskState::Waiting {
+                                        checkpoint: json!({"phase": "run"}),
+                                        on: vec![dependency],
+                                        policy: JoinPolicy::AllSettled,
+                                    }))
+                                }),
+                                &ctx,
+                            )
                             .await?;
                         Ok(())
                     })
@@ -243,7 +329,8 @@ async fn aborting_waiting_tasks_bypasses_dependencies_and_faults_nonterminal_han
         "test.abort-wait-throwing-handler",
         handler(|_, _, _| Box::pin(async { Err("abort failed".to_owned()) })),
     );
-    let (harness, conversation) = open_memory(vec![dependency.clone(), lazy.clone(), throwing.clone()]).await;
+    let (harness, conversation) =
+        open_memory(vec![dependency.clone(), lazy.clone(), throwing.clone()]).await;
     let dependency_task = create(&conversation, dependency).await;
     *dependency_id.lock() = Some(dependency_task);
     let lazy_id = create(&conversation, lazy).await;
@@ -253,25 +340,95 @@ async fn aborting_waiting_tasks_bypasses_dependencies_and_faults_nonterminal_han
     wait_for_status(&harness, lazy_id, TaskStateStatus::Waiting).await;
     wait_for_status(&harness, throwing_id, TaskStateStatus::Waiting).await;
 
-    assert_eq!(harness.abort_task(lazy_id, &context()).await.expect("abort waiting task"), "marked");
-    assert_eq!(harness.abort_task(throwing_id, &context()).await.expect("abort waiting task"), "marked");
-    let lazy_receipt = harness.wait_for_task(lazy_id, &context()).await.expect("lazy handler settles");
-    assert_eq!(lazy_receipt.state.outcome.as_ref().expect("lazy outcome").status, TaskOutcomeStatus::Faulted);
     assert_eq!(
-		lazy_receipt.state.outcome.as_ref().unwrap().error.as_ref().unwrap().message,
+        harness
+            .abort_task(lazy_id, &context())
+            .await
+            .expect("abort waiting task"),
+        "marked"
+    );
+    assert_eq!(
+        harness
+            .abort_task(throwing_id, &context())
+            .await
+            .expect("abort waiting task"),
+        "marked"
+    );
+    let lazy_receipt = harness
+        .wait_for_task(lazy_id, &context())
+        .await
+        .expect("lazy handler settles");
+    assert_eq!(
+        lazy_receipt
+            .state
+            .outcome
+            .as_ref()
+            .expect("lazy outcome")
+            .status,
+        TaskOutcomeStatus::Faulted
+    );
+    assert_eq!(
+        lazy_receipt
+            .state
+            .outcome
+            .as_ref()
+            .unwrap()
+            .error
+            .as_ref()
+            .unwrap()
+            .message,
         format!("Abort handler of task {lazy_id} returned without a terminal outcome"),
     );
-    let throwing_receipt = harness.wait_for_task(throwing_id, &context()).await.expect("throwing handler settles");
-    assert_eq!(throwing_receipt.state.outcome.as_ref().expect("throwing outcome").status, TaskOutcomeStatus::Faulted);
-	assert_eq!(throwing_receipt.state.outcome.as_ref().unwrap().error.as_ref().unwrap().message, "abort failed");
+    let throwing_receipt = harness
+        .wait_for_task(throwing_id, &context())
+        .await
+        .expect("throwing handler settles");
     assert_eq!(
-        harness.get_task(dependency_task, &context()).await.expect("read dependency").expect("dependency exists").state.status,
+        throwing_receipt
+            .state
+            .outcome
+            .as_ref()
+            .expect("throwing outcome")
+            .status,
+        TaskOutcomeStatus::Faulted
+    );
+    assert_eq!(
+        throwing_receipt
+            .state
+            .outcome
+            .as_ref()
+            .unwrap()
+            .error
+            .as_ref()
+            .unwrap()
+            .message,
+        "abort failed"
+    );
+    assert_eq!(
+        harness
+            .get_task(dependency_task, &context())
+            .await
+            .expect("read dependency")
+            .expect("dependency exists")
+            .state
+            .status,
         TaskStateStatus::Running,
     );
 
     dependency_gate.notify_one();
-    let dependency_receipt = harness.wait_for_task(dependency_task, &context()).await.expect("dependency settles");
-	assert_eq!(dependency_receipt.state.outcome.as_ref().expect("dependency outcome").status, TaskOutcomeStatus::Completed);
+    let dependency_receipt = harness
+        .wait_for_task(dependency_task, &context())
+        .await
+        .expect("dependency settles");
+    assert_eq!(
+        dependency_receipt
+            .state
+            .outcome
+            .as_ref()
+            .expect("dependency outcome")
+            .status,
+        TaskOutcomeStatus::Completed
+    );
     harness.close(&context()).await.expect("close");
 }
 
@@ -304,7 +461,12 @@ async fn abort_signals_and_joins_the_run_before_returning_and_can_be_repeated() 
                     let aborts = aborts.clone();
                     Box::pin(async move {
                         aborts.fetch_add(1, Ordering::SeqCst);
-                        runtime.commit(commit_change(|_, _| Ok(Some(NextTaskState::aborted_with("test")))), &ctx).await?;
+                        runtime
+                            .commit(
+                                commit_change(|_, _| Ok(Some(NextTaskState::aborted_with("test")))),
+                                &ctx,
+                            )
+                            .await?;
                         Ok(())
                     })
                 })
@@ -316,12 +478,36 @@ async fn abort_signals_and_joins_the_run_before_returning_and_can_be_repeated() 
     harness.resume();
     started.notified().await;
 
-    assert_eq!(harness.abort_task(id, &context()).await.expect("mark abort"), "marked");
-    assert!(run_ended.load(Ordering::SeqCst), "abort_task returns only after the run invocation ends");
-    assert_eq!(harness.abort_task(id, &context()).await.expect("repeat abort"), "marked");
-    let receipt = harness.wait_for_task(id, &context()).await.expect("abort outcome");
-    assert_eq!(receipt.state.outcome.as_ref().expect("outcome").status, TaskOutcomeStatus::Aborted);
-	assert_eq!(receipt.state.outcome.as_ref().unwrap().reason.as_deref(), Some("test"));
+    assert_eq!(
+        harness
+            .abort_task(id, &context())
+            .await
+            .expect("mark abort"),
+        "marked"
+    );
+    assert!(
+        run_ended.load(Ordering::SeqCst),
+        "abort_task returns only after the run invocation ends"
+    );
+    assert_eq!(
+        harness
+            .abort_task(id, &context())
+            .await
+            .expect("repeat abort"),
+        "marked"
+    );
+    let receipt = harness
+        .wait_for_task(id, &context())
+        .await
+        .expect("abort outcome");
+    assert_eq!(
+        receipt.state.outcome.as_ref().expect("outcome").status,
+        TaskOutcomeStatus::Aborted
+    );
+    assert_eq!(
+        receipt.state.outcome.as_ref().unwrap().reason.as_deref(),
+        Some("test")
+    );
     assert_eq!(aborts.load(Ordering::SeqCst), 1);
     harness.close(&context()).await.expect("close");
 }
@@ -365,7 +551,12 @@ async fn cancelled_abort_caller_leaves_mark_and_repeated_abort_does_not_signal_h
                     handler_started.notify_one();
                     handler_release.notified().await;
                     handler_signalled.store(runtime.signal().aborted(), Ordering::SeqCst);
-                    runtime.commit(commit_change(|_, _| Ok(Some(NextTaskState::aborted_with("once")))), &ctx).await?;
+                    runtime
+                        .commit(
+                            commit_change(|_, _| Ok(Some(NextTaskState::aborted_with("once")))),
+                            &ctx,
+                        )
+                        .await?;
                     Ok(())
                 })
             }),
@@ -378,10 +569,20 @@ async fn cancelled_abort_caller_leaves_mark_and_repeated_abort_does_not_signal_h
     let controller = AbortController::new();
     let cancelled_context = with_abort_signal(controller.signal(), context());
     let harness_for_cancelled = harness.clone();
-    let cancelled = tokio::spawn(async move { harness_for_cancelled.abort_task(id, &cancelled_context).await });
+    let cancelled = tokio::spawn(async move {
+        harness_for_cancelled
+            .abort_task(id, &cancelled_context)
+            .await
+    });
     tokio::time::timeout(TEST_TIMEOUT, async {
         loop {
-            if harness.get_task(id, &context()).await.expect("read abort mark").expect("task exists").abort_requested {
+            if harness
+                .get_task(id, &context())
+                .await
+                .expect("read abort mark")
+                .expect("task exists")
+                .abort_requested
+            {
                 break;
             }
             tokio::task::yield_now().await;
@@ -395,9 +596,14 @@ async fn cancelled_abort_caller_leaves_mark_and_repeated_abort_does_not_signal_h
         .expect("caller cancellation releases the abort wait")
         .expect("cancelled abort task")
         .expect_err("caller cancellation rejects");
-    assert!(error.contains("caller gave up"), "the caller sees its cancellation reason: {error}");
+    assert!(
+        error.contains("caller gave up"),
+        "the caller sees its cancellation reason: {error}"
+    );
     run_release.notify_one();
-    tokio::time::timeout(TEST_TIMEOUT, handler_started.notified()).await.expect("abort handler starts");
+    tokio::time::timeout(TEST_TIMEOUT, handler_started.notified())
+        .await
+        .expect("abort handler starts");
     assert_eq!(
         tokio::time::timeout(TEST_TIMEOUT, harness.abort_task(id, &context()))
             .await
@@ -406,10 +612,22 @@ async fn cancelled_abort_caller_leaves_mark_and_repeated_abort_does_not_signal_h
         "marked",
     );
     handler_release.notify_one();
-    let receipt = harness.wait_for_task(id, &context()).await.expect("abort handler settles");
-    assert_eq!(receipt.state.outcome.as_ref().expect("outcome").status, TaskOutcomeStatus::Aborted);
-	assert_eq!(receipt.state.outcome.as_ref().unwrap().reason.as_deref(), Some("once"));
-    assert!(!handler_signalled.load(Ordering::SeqCst), "a repeated abort does not signal the abort invocation");
+    let receipt = harness
+        .wait_for_task(id, &context())
+        .await
+        .expect("abort handler settles");
+    assert_eq!(
+        receipt.state.outcome.as_ref().expect("outcome").status,
+        TaskOutcomeStatus::Aborted
+    );
+    assert_eq!(
+        receipt.state.outcome.as_ref().unwrap().reason.as_deref(),
+        Some("once")
+    );
+    assert!(
+        !handler_signalled.load(Ordering::SeqCst),
+        "a repeated abort does not signal the abort invocation"
+    );
     assert_eq!(aborts.load(Ordering::SeqCst), 1);
     harness.close(&context()).await.expect("close");
 }
@@ -434,7 +652,12 @@ async fn abort_handler_throwing_after_commit_keeps_its_terminal_outcome() {
             )],
             handler(|_, runtime, ctx| {
                 Box::pin(async move {
-                    runtime.commit(commit_change(|_, _| Ok(Some(NextTaskState::aborted_with("done")))), &ctx).await?;
+                    runtime
+                        .commit(
+                            commit_change(|_, _| Ok(Some(NextTaskState::aborted_with("done")))),
+                            &ctx,
+                        )
+                        .await?;
                     Err("after terminal".to_owned())
                 })
             }),
@@ -444,11 +667,26 @@ async fn abort_handler_throwing_after_commit_keeps_its_terminal_outcome() {
     let id = create(&conversation, work).await;
     harness.resume();
     started.notified().await;
-    assert_eq!(harness.abort_task(id, &context()).await.expect("mark abort"), "marked");
+    assert_eq!(
+        harness
+            .abort_task(id, &context())
+            .await
+            .expect("mark abort"),
+        "marked"
+    );
 
-    let receipt = harness.wait_for_task(id, &context()).await.expect("terminal outcome survives late handler error");
-    assert_eq!(receipt.state.outcome.as_ref().expect("outcome").status, TaskOutcomeStatus::Aborted);
-	assert_eq!(receipt.state.outcome.as_ref().unwrap().reason.as_deref(), Some("done"));
+    let receipt = harness
+        .wait_for_task(id, &context())
+        .await
+        .expect("terminal outcome survives late handler error");
+    assert_eq!(
+        receipt.state.outcome.as_ref().expect("outcome").status,
+        TaskOutcomeStatus::Aborted
+    );
+    assert_eq!(
+        receipt.state.outcome.as_ref().unwrap().reason.as_deref(),
+        Some("done")
+    );
     harness.close(&context()).await.expect("close");
 }
 
@@ -480,8 +718,8 @@ async fn abort_during_reservation_settlement_prevents_phase_one_from_starting() 
     harness.resume();
     held.entered().await;
 
-	let abort_context = context();
-	let mut aborting = Box::pin(harness.abort_task(id, &abort_context));
+    let abort_context = context();
+    let mut aborting = Box::pin(harness.abort_task(id, &abort_context));
     tokio::select! {
         biased;
         result = &mut aborting => panic!("abort mark bypassed the held reservation: {result:?}"),
@@ -489,10 +727,22 @@ async fn abort_during_reservation_settlement_prevents_phase_one_from_starting() 
     }
     held.release();
     assert_eq!(aborting.await.expect("abort mark"), "marked");
-    let receipt = harness.wait_for_task(id, &context()).await.expect("task settles");
-    assert_eq!(receipt.state.outcome.as_ref().expect("outcome").status, TaskOutcomeStatus::Aborted);
-	assert_eq!(receipt.state.outcome.as_ref().unwrap().reason.as_deref(), Some("test"));
-    assert!(!ran.load(Ordering::SeqCst), "the reserved task's first phase never starts");
+    let receipt = harness
+        .wait_for_task(id, &context())
+        .await
+        .expect("task settles");
+    assert_eq!(
+        receipt.state.outcome.as_ref().expect("outcome").status,
+        TaskOutcomeStatus::Aborted
+    );
+    assert_eq!(
+        receipt.state.outcome.as_ref().unwrap().reason.as_deref(),
+        Some("test")
+    );
+    assert!(
+        !ran.load(Ordering::SeqCst),
+        "the reserved task's first phase never starts"
+    );
     harness.close(&context()).await.expect("close");
 }
 
@@ -531,8 +781,8 @@ async fn abort_mark_wins_over_a_fault_that_races_its_commit() {
     phase_started.notified().await;
 
     let mut held = storage.hold_commits();
-	let abort_context = context();
-	let mut aborting = Box::pin(harness.abort_task(id, &abort_context));
+    let abort_context = context();
+    let mut aborting = Box::pin(harness.abort_task(id, &abort_context));
     tokio::select! {
         biased;
         result = &mut aborting => panic!("abort mark did not wait on its held storage commit: {result:?}"),
@@ -540,12 +790,21 @@ async fn abort_mark_wins_over_a_fault_that_races_its_commit() {
     }
     fail_phase.notify_one();
     phase_returning_error.notified().await;
-	crate::session::support::flush().await;
+    crate::session::support::flush().await;
     held.release();
 
     assert_eq!(aborting.await.expect("abort mark and run join"), "marked");
-    let receipt = harness.wait_for_task(id, &context()).await.expect("racing task settles");
-    assert_eq!(receipt.state.outcome.as_ref().expect("outcome").status, TaskOutcomeStatus::Aborted);
-    assert_eq!(receipt.state.outcome.as_ref().unwrap().reason.as_deref(), Some("test"));
+    let receipt = harness
+        .wait_for_task(id, &context())
+        .await
+        .expect("racing task settles");
+    assert_eq!(
+        receipt.state.outcome.as_ref().expect("outcome").status,
+        TaskOutcomeStatus::Aborted
+    );
+    assert_eq!(
+        receipt.state.outcome.as_ref().unwrap().reason.as_deref(),
+        Some("test")
+    );
     harness.close(&context()).await.expect("close");
 }

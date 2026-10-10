@@ -1709,6 +1709,7 @@ fn supports_adaptive_thinking(model_id: &str, model_name: Option<&str>) -> bool 
                 || s.contains("opus-5")
                 || s.contains("sonnet-4-6")
                 || s.contains("sonnet-5")
+                || s.contains("haiku-5")
                 || s.contains("fable-5")
         })
 }
@@ -1722,6 +1723,7 @@ fn supports_native_xhigh_effort(model: &Model) -> bool {
                 || s.contains("opus-4-8")
                 || s.contains("opus-5")
                 || s.contains("sonnet-5")
+                || s.contains("haiku-5")
                 || s.contains("fable-5")
         })
 }
@@ -1752,11 +1754,13 @@ fn supports_prompt_caching(model: &Model, env: Option<&crate::types::ProviderEnv
         // ARN. Allow users to force cache points via environment variable.
         return get_provider_env_value("AWS_BEDROCK_FORCE_CACHE", env).as_deref() == Some("1");
     }
-    // Claude 5 models (fable-5, opus-5, sonnet-5)
-    if candidates
-        .iter()
-        .any(|s| s.contains("fable-5") || s.contains("opus-5") || s.contains("sonnet-5"))
-    {
+    // Claude 5 models (fable-5, opus-5, sonnet-5, haiku-5)
+    if candidates.iter().any(|s| {
+        s.contains("fable-5")
+            || s.contains("opus-5")
+            || s.contains("sonnet-5")
+            || s.contains("haiku-5")
+    }) {
         return true;
     }
     // Claude 4.x models (opus-4, sonnet-4, haiku-4)
@@ -1865,6 +1869,60 @@ fn sanitize_bedrock_document(value: &Value) -> Value {
 }
 
 /// `createImageBlock` (`Unknown image type: <mime>` on unsupported types).
+/// OpenAI GPT models (GPT-5.x, GPT-6) take a nested `reasoning.effort` and
+/// reject `minimal` (`OPENAI_GPT_EFFORT`).
+fn openai_gpt_effort(level: ThinkingLevel) -> &'static str {
+    match level {
+        ThinkingLevel::Minimal => "low",
+        ThinkingLevel::Low => "low",
+        ThinkingLevel::Medium => "medium",
+        ThinkingLevel::High => "high",
+        ThinkingLevel::Xhigh => "xhigh",
+        ThinkingLevel::Max => "max",
+    }
+}
+
+/// gpt-oss takes a flat `reasoning_effort` and only accepts low, medium and
+/// high (`OPENAI_GPT_OSS_EFFORT`).
+fn openai_gpt_oss_effort(level: ThinkingLevel) -> &'static str {
+    match level {
+        ThinkingLevel::Minimal => "low",
+        ThinkingLevel::Low => "low",
+        ThinkingLevel::Medium => "medium",
+        ThinkingLevel::High => "high",
+        ThinkingLevel::Xhigh => "high",
+        ThinkingLevel::Max => "high",
+    }
+}
+
+/// v1.1.0: reasoning effort reaches OpenAI models on Bedrock — gpt-oss gets a
+/// flat `reasoning_effort` clamped to low/medium/high, other GPT models get
+/// `reasoning.effort` with `minimal` sent as `low` (#9331, #10142).
+fn openai_reasoning_fields(model: &Model, group: &BedrockOptions) -> Option<Value> {
+    let reasoning = group.reasoning?;
+    if !model.reasoning {
+        return None;
+    }
+    let candidates = get_model_match_candidates(&model.base.id, Some(&model.base.name));
+    if candidates.iter().any(|s| s.contains("gpt-oss")) {
+        return Some(serde_json::json!({ "reasoning_effort": openai_gpt_oss_effort(reasoning) }));
+    }
+    if candidates.iter().any(|s| s.contains("gpt-")) {
+        let mapped = model
+            .thinking_level_map
+            .as_ref()
+            .and_then(|map| map.get(&ModelThinkingLevel::from(reasoning)))
+            .cloned()
+            .flatten();
+        let effort = match mapped {
+            Some(effort) => effort,
+            None => openai_gpt_effort(reasoning).to_string(),
+        };
+        return Some(serde_json::json!({ "reasoning": { "effort": effort } }));
+    }
+    None
+}
+
 fn create_image_block(mime_type: &str, data: &str) -> Result<ImageBlock, String> {
     let format = match mime_type {
         "image/jpeg" | "image/jpg" => "jpeg",
@@ -2208,7 +2266,7 @@ fn build_additional_model_request_fields(
         return None;
     }
     if !is_anthropic_claude_model(model) {
-        return None;
+        return openai_reasoning_fields(model, group);
     }
 
     // GovCloud Bedrock currently rejects the Claude thinking.display field.
@@ -2695,6 +2753,7 @@ async fn run_stream(
         raw_stop_reason: None,
         end_turn: None,
         timestamp: now_ms(),
+        duration_ms: None,
     };
 
     // Parallel scratch state for the blocks in `output.content`, and the
@@ -2819,6 +2878,7 @@ async fn run_stream(
                 max_retries: Some(options.base.max_retries.unwrap_or(2)),
                 max_retry_delay_ms: options.base.max_retry_delay_ms,
                 signal: options.base.signal.clone(),
+                no_retry_statuses: None,
             },
         )
         .await
@@ -3188,9 +3248,7 @@ mod tests {
     }
 
     fn env_guard() -> EnvGuard {
-        let lock = ENV_LOCK
-            .lock()
-            ;
+        let lock = ENV_LOCK.lock();
         let mut saved = Vec::new();
         for name in GUARDED_VARS {
             saved.push((name.to_string(), std::env::var(name).ok()));
@@ -4625,6 +4683,7 @@ mod tests {
             raw_stop_reason: None,
             end_turn: None,
             timestamp: 1,
+            duration_ms: None,
         })
     }
 
@@ -4681,6 +4740,7 @@ mod tests {
                 usage: None,
                 nested_calls: None,
                 is_error: false,
+                duration_ms: None,
                 timestamp: 1,
             }),
         ]);
@@ -4937,6 +4997,7 @@ mod tests {
             usage: None,
             nested_calls: None,
             is_error: false,
+            duration_ms: None,
             timestamp: 1,
         })]);
         let payload = capture_convert_payload(&base_model, &context).await;
@@ -4982,6 +5043,7 @@ mod tests {
                 usage: None,
                 nested_calls: None,
                 is_error: false,
+                duration_ms: None,
                 timestamp: 1,
             }),
             Message::User(UserMessage {
@@ -5072,6 +5134,102 @@ mod tests {
         assert_eq!(thinking, &adaptive_with_binding());
         assert_eq!(output_config, &json!({"effort": "high"}));
         assert_eq!(beta, &json!(["thinking-binding-controls-2026-08-01"]));
+    }
+
+    // Port of test/bedrock-thinking-payload.test.ts "Bedrock OpenAI reasoning
+    // payload" (v1.1.0, #9331/#10142).
+    #[tokio::test]
+    async fn sends_reasoning_effort_for_openai_gpt_models_on_bedrock() {
+        let _guard = env_guard();
+        for (level, effort) in [
+            (ThinkingLevel::Minimal, "low"),
+            (ThinkingLevel::Low, "low"),
+            (ThinkingLevel::Medium, "medium"),
+            (ThinkingLevel::High, "high"),
+            (ThinkingLevel::Xhigh, "xhigh"),
+            (ThinkingLevel::Max, "max"),
+        ] {
+            for id in [
+                "global.openai.gpt-6-sol",
+                "us.openai.gpt-6-luna",
+                "global.openai.gpt-5.6-sol",
+            ] {
+                let model = builtin_model(id);
+                let group = BedrockOptions {
+                    reasoning: Some(level),
+                    ..Default::default()
+                };
+                let payload = capture_thinking_payload(&model, &group).await;
+                assert_eq!(
+                    payload["additionalModelRequestFields"],
+                    json!({ "reasoning": { "effort": effort } }),
+                    "{id} at {effort}"
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn sends_reasoning_effort_when_only_the_model_name_identifies_a_gpt_model() {
+        let _guard = env_guard();
+        let model = override_model(
+            &builtin_model("global.openai.gpt-6-sol"),
+            "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/my-profile",
+            "GPT-6 Sol",
+        );
+        let group = BedrockOptions {
+            reasoning: Some(ThinkingLevel::Medium),
+            ..Default::default()
+        };
+        let payload = capture_thinking_payload(&model, &group).await;
+        assert_eq!(
+            payload["additionalModelRequestFields"],
+            json!({ "reasoning": { "effort": "medium" } })
+        );
+    }
+
+    #[tokio::test]
+    async fn sends_flat_reasoning_effort_for_gpt_oss_clamped_to_high() {
+        let _guard = env_guard();
+        let model = builtin_model("openai.gpt-oss-120b-1:0");
+        let group = BedrockOptions {
+            reasoning: Some(ThinkingLevel::Minimal),
+            ..Default::default()
+        };
+        let payload = capture_thinking_payload(&model, &group).await;
+        assert_eq!(
+            payload["additionalModelRequestFields"],
+            json!({ "reasoning_effort": "low" })
+        );
+
+        let group = BedrockOptions {
+            reasoning: Some(ThinkingLevel::Medium),
+            ..Default::default()
+        };
+        let payload = capture_thinking_payload(&model, &group).await;
+        assert_eq!(
+            payload["additionalModelRequestFields"],
+            json!({ "reasoning_effort": "medium" })
+        );
+
+        let group = BedrockOptions {
+            reasoning: Some(ThinkingLevel::Xhigh),
+            ..Default::default()
+        };
+        let payload = capture_thinking_payload(&model, &group).await;
+        assert_eq!(
+            payload["additionalModelRequestFields"],
+            json!({ "reasoning_effort": "high" })
+        );
+    }
+
+    #[tokio::test]
+    async fn sends_no_reasoning_fields_for_gpt_models_when_reasoning_is_off() {
+        let _guard = env_guard();
+        let model = builtin_model("global.openai.gpt-6-sol");
+        let group = BedrockOptions::default();
+        let payload = capture_thinking_payload(&model, &group).await;
+        assert!(payload.get("additionalModelRequestFields").is_none());
     }
 
     #[tokio::test]

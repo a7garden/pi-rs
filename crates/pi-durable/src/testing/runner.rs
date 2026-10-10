@@ -31,48 +31,48 @@ pub type ItCase = Box<dyn FnOnce() -> Pin<Box<dyn Future<Output = ()> + Send>>>;
 
 /// Upstream `StorageConformanceRunner`: the host runner's registration surface.
 pub struct StorageConformanceRunner {
-	/// Register a suite; the callback performs the nested `it` registrations.
-	pub describe: Arc<dyn Fn(&str, Box<dyn FnOnce()>) + Send + Sync>,
-	pub expect: ExpectLike,
-	/// Register one test; the optional timeout is in milliseconds.
-	pub it: Arc<dyn Fn(&str, ItCase, Option<u64>) + Send + Sync>,
+    /// Register a suite; the callback performs the nested `it` registrations.
+    pub describe: Arc<dyn Fn(&str, Box<dyn FnOnce()>) + Send + Sync>,
+    pub expect: ExpectLike,
+    /// Register one test; the optional timeout is in milliseconds.
+    pub it: Arc<dyn Fn(&str, ItCase, Option<u64>) + Send + Sync>,
 }
 
 type CaseRun = Arc<dyn Fn() -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync>;
 
 /// Registers the runner-independent `ExecutionEnv` cases with the host runner.
 pub fn register_env_conformance(
-	runner: &StorageConformanceRunner,
-	name: &str,
-	with_env: EnvConformanceProvider,
-	shell: Option<Vec<String>>,
-	symlinks: Option<bool>,
+    runner: &StorageConformanceRunner,
+    name: &str,
+    with_env: EnvConformanceProvider,
+    shell: Option<Vec<String>>,
+    symlinks: Option<bool>,
 ) {
-	let cases = create_env_conformance(EnvConformanceOptions {
-		assertions: create_expect_assertions(runner.expect.clone()),
-		with_env,
-		shell,
-		symlinks,
-	});
-	let describe = runner.describe.clone();
-	let it = runner.it.clone();
-	let registrations: Vec<(String, Option<u64>, CaseRun)> = cases
-		.into_iter()
-		.map(|case| {
-			let run = case.run.clone();
-			(case.name, case.timeout_ms, run)
-		})
-		.collect();
-	describe(
-		name,
-		Box::new(move || {
-			for (case_name, timeout_ms, run) in registrations {
-				it(
-					&case_name,
-					Box::new(move || Box::pin(async move { run().await })),
-					timeout_ms,
-				);
-			}
-		}),
-	);
+    let cases = create_env_conformance(EnvConformanceOptions {
+        assertions: create_expect_assertions(runner.expect.clone()),
+        with_env,
+        shell,
+        symlinks,
+    });
+    let describe = runner.describe.clone();
+    let it = runner.it.clone();
+    let registrations: Vec<(String, Option<u64>, CaseRun)> = cases
+        .into_iter()
+        .map(|case| {
+            let run = case.run.clone();
+            (case.name, case.timeout_ms, run)
+        })
+        .collect();
+    describe(
+        name,
+        Box::new(move || {
+            for (case_name, timeout_ms, run) in registrations {
+                it(
+                    &case_name,
+                    Box::new(move || Box::pin(async move { run().await })),
+                    timeout_ms,
+                );
+            }
+        }),
+    );
 }

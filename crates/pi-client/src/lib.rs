@@ -26,6 +26,7 @@ pub use connection::ServerHello;
 pub use errors::{ClientDisposedError, DisconnectedError, ServerError};
 pub use transport::{ByteTransport, ByteTransportFactory, ByteTransportHandlers};
 pub use types::{
-	AttachmentChangeListener, ClientOptions, ConnectionChangeListener, ConnectionState, ConnectionStateChange,
-	ListenerErrorHandler, RpcTarget, ServiceSubscription, SessionTarget, Unsubscribe,
+    AttachmentChangeListener, ClientOptions, ConnectionChangeListener, ConnectionState,
+    ConnectionStateChange, ListenerErrorHandler, RpcTarget, ServiceSubscription, SessionTarget,
+    Unsubscribe,
 };

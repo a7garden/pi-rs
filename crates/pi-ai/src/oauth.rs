@@ -9,24 +9,29 @@
 
 pub use crate::auth::types::OAuthCredentials;
 pub use crate::compat::extension_oauth_types::{
-	OAuthAuthInfo, OAuthDeviceCodeInfo, OAuthLoginCallbacks, OAuthPrompt, OAuthSelectOption, OAuthSelectPrompt,
+    OAuthAuthInfo, OAuthDeviceCodeInfo, OAuthLoginCallbacks, OAuthPrompt, OAuthSelectOption,
+    OAuthSelectPrompt,
 };
 
 #[cfg(test)]
 mod tests {
-	use super::*;
-	// Port of test/oauth-auth.test.ts "keeps the extension OAuth barrel free of
-	// built-in flow implementations": the barrel exposes no login functions.
-	#[test]
-	fn extension_oauth_barre_types_compile_without_flows() {
-		let credentials = OAuthCredentials {
-			refresh: "r".to_string(),
-			access: "a".to_string(),
-			expires: 0,
-			extra: Default::default(),
-		};
-		assert_eq!(credentials.access, "a");
-		let prompt = OAuthPrompt { message: "m".to_string(), placeholder: None, allow_empty: None };
-		assert_eq!(prompt.message, "m");
-	}
+    use super::*;
+    // Port of test/oauth-auth.test.ts "keeps the extension OAuth barrel free of
+    // built-in flow implementations": the barrel exposes no login functions.
+    #[test]
+    fn extension_oauth_barre_types_compile_without_flows() {
+        let credentials = OAuthCredentials {
+            refresh: "r".to_string(),
+            access: "a".to_string(),
+            expires: 0,
+            extra: Default::default(),
+        };
+        assert_eq!(credentials.access, "a");
+        let prompt = OAuthPrompt {
+            message: "m".to_string(),
+            placeholder: None,
+            allow_empty: None,
+        };
+        assert_eq!(prompt.message, "m");
+    }
 }

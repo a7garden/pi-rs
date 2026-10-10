@@ -14,35 +14,35 @@ use crate::types::EntryRecord;
 /// Typed entry kind with a narrowing guard.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Entry {
-	pub kind: String,
+    pub kind: String,
 }
 
 impl Entry {
-	/// Define a typed entry kind whose `is` guard narrows by `EntryRecord.kind`.
-	pub fn define(kind: impl Into<String>) -> Self {
-		let kind = kind.into();
-		assert!(!kind.is_empty(), "Entry kind must be a non-empty string");
-		Self { kind }
-	}
+    /// Define a typed entry kind whose `is` guard narrows by `EntryRecord.kind`.
+    pub fn define(kind: impl Into<String>) -> Self {
+        let kind = kind.into();
+        assert!(!kind.is_empty(), "Entry kind must be a non-empty string");
+        Self { kind }
+    }
 
-	/// True when `entry` is present and carries this kind.
-	pub fn is(&self, entry: Option<&EntryRecord>) -> bool {
-		entry.is_some_and(|entry| entry.kind == self.kind)
-	}
+    /// True when `entry` is present and carries this kind.
+    pub fn is(&self, entry: Option<&EntryRecord>) -> bool {
+        entry.is_some_and(|entry| entry.kind == self.kind)
+    }
 
-	/// The entry's typed `data` payload when `is(entry)` holds.
-	pub fn data<'a>(&self, entry: Option<&'a EntryRecord>) -> Option<&'a Value> {
-		if self.is(entry) {
-			entry.and_then(|entry| entry.data.as_ref())
-		} else {
-			None
-		}
-	}
+    /// The entry's typed `data` payload when `is(entry)` holds.
+    pub fn data<'a>(&self, entry: Option<&'a EntryRecord>) -> Option<&'a Value> {
+        if self.is(entry) {
+            entry.and_then(|entry| entry.data.as_ref())
+        } else {
+            None
+        }
+    }
 }
 
 /// Define a typed entry kind whose `is` guard narrows by `EntryRecord.kind`.
 pub fn define_entry(kind: impl Into<String>) -> Entry {
-	Entry::define(kind)
+    Entry::define(kind)
 }
 
 /// User input: `model` is `[UserMessage]`. Written by submissions.

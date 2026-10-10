@@ -7,21 +7,21 @@
 //! termination. Cases whose assertions live inside the VM's JavaScript semantics are deferred
 //! to pi-runtime's QuickJS integration (see the crate-level deviation notes in `lib.rs`).
 
+use parking_lot::Mutex;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicI32, Ordering};
-use std::sync::{Arc};
-use {parking_lot::Mutex};
+use std::sync::Arc;
 
 use parking_lot::Mutex as ParkingMutex;
 use serde_json::{json, Value};
 use tokio::sync::mpsc;
 
+use pi_codemode::runtime::host::{
+    CodeModeWorkerFactory, CodemodeSandbox, CodemodeSandboxOptions, RunningWorker, WorkerHandle,
+};
 use pi_codemode::runtime::protocol::{
     CallTarget, DoneOutcome, HostToWorkerMessage, WorkerData, WorkerToHostMessage,
-};
-use pi_codemode::runtime::host::{
-    CodemodeSandbox, CodemodeSandboxOptions, CodeModeWorkerFactory, RunningWorker, WorkerHandle,
 };
 use pi_codemode::types::{
     AbortSignal, CodemodeErrorKind, CodemodeExecuteOptions, CodemodeResult, CodemodeStoreWrites,
@@ -34,7 +34,9 @@ fn dummy_loader() -> Arc<dyn pi_codemode::wasm::WasmLoader> {
     impl pi_codemode::wasm::WasmLoader for DummyLoader {
         fn load(
             &self,
-        ) -> Pin<Box<dyn Future<Output = Result<pi_codemode::CodemodeWasmModule, String>> + Send + '_>> {
+        ) -> Pin<
+            Box<dyn Future<Output = Result<pi_codemode::CodemodeWasmModule, String>> + Send + '_>,
+        > {
             let module: pi_codemode::CodemodeWasmModule = Arc::new(());
             Box::pin(async move { Ok(module) })
         }
@@ -42,15 +44,15 @@ fn dummy_loader() -> Arc<dyn pi_codemode::wasm::WasmLoader> {
     Arc::new(DummyLoader)
 }
 
-type Behavior = Arc<
-    dyn Fn(FakeWorkerApi) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync,
->;
+type Behavior =
+    Arc<dyn Fn(FakeWorkerApi) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync>;
 
 /// The API a fake worker behavior uses to talk to the host, mirroring the real worker's
 /// `post`/message surface.
 struct FakeWorkerApi {
     data: WorkerData,
-    to_host: mpsc::Sender<WorkerToHostMessage>,
+    /// Raw worker-to-host payloads, exactly as the real worker posts them.
+    to_host: mpsc::Sender<Value>,
     /// Completed replies by call id; the prelude's `pending` map routes by id, so replies
     /// arriving out of order must not be dropped.
     replies: Arc<ParkingMutex<std::collections::HashMap<u64, (bool, Option<String>)>>>,
@@ -59,11 +61,22 @@ struct FakeWorkerApi {
 
 impl FakeWorkerApi {
     async fn send(&self, message: WorkerToHostMessage) {
-        let _ = self.to_host.send(message).await;
+        self.post(serde_json::to_value(message).unwrap()).await;
+    }
+
+    /// Posts a raw payload, like the upstream `raw-worker` fixture: the host must validate
+    /// what arrives instead of trusting the protocol.
+    async fn post(&self, raw: Value) {
+        let _ = self.to_host.send(raw).await;
     }
 
     /// Emulates the prelude's tool/global caller: posts a `call` and awaits the host's reply.
-    async fn call(&self, target: CallTarget, name: &str, args: Option<Value>) -> Result<Option<Value>, String> {
+    async fn call(
+        &self,
+        target: CallTarget,
+        name: &str,
+        args: Option<Value>,
+    ) -> Result<Option<Value>, String> {
         // Call ids count up like the prelude's `nextId`.
         static NEXT_ID: AtomicI32 = AtomicI32::new(1);
         let id = NEXT_ID.fetch_add(1, Ordering::SeqCst) as u64;
@@ -101,7 +114,10 @@ impl FakeWorkerApi {
 
     async fn output_text(&self, text: &str) {
         self.send(WorkerToHostMessage::Output {
-            item: pi_codemode::types::CodemodeOutputItem::Text { text: text.to_string() },
+            item: pi_codemode::types::CodemodeOutputItem::Text {
+                text: text.to_string(),
+                console: None,
+            },
         })
         .await;
     }
@@ -126,7 +142,9 @@ impl FakeWorkerApi {
     async fn done_err(&self, error_json: &str) {
         self.send(WorkerToHostMessage::Done {
             ok: false,
-            outcome: DoneOutcome::Err { error: error_json.to_string() },
+            outcome: DoneOutcome::Err {
+                error: error_json.to_string(),
+            },
         })
         .await;
     }
@@ -175,7 +193,12 @@ struct FakeWorkerFactory {
 }
 
 impl FakeWorkerFactory {
-    fn new(behavior: impl Fn(FakeWorkerApi) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync + 'static) -> Self {
+    fn new(
+        behavior: impl Fn(FakeWorkerApi) -> Pin<Box<dyn Future<Output = ()> + Send>>
+            + Send
+            + Sync
+            + 'static,
+    ) -> Self {
         Self {
             inner: Arc::new(ParkingMutex::new(FakeWorkerFactoryInner {
                 behavior: Some(Arc::new(behavior)),
@@ -184,7 +207,13 @@ impl FakeWorkerFactory {
         }
     }
 
-    fn with_exit_code(behavior: impl Fn(FakeWorkerApi) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync + 'static, exit_code: i32) -> Self {
+    fn with_exit_code(
+        behavior: impl Fn(FakeWorkerApi) -> Pin<Box<dyn Future<Output = ()> + Send>>
+            + Send
+            + Sync
+            + 'static,
+        exit_code: i32,
+    ) -> Self {
         Self {
             inner: Arc::new(ParkingMutex::new(FakeWorkerFactoryInner {
                 behavior: Some(Arc::new(behavior)),
@@ -193,7 +222,6 @@ impl FakeWorkerFactory {
             })),
         }
     }
-
 }
 
 impl CodeModeWorkerFactory for FakeWorkerFactory {
@@ -219,7 +247,9 @@ impl CodeModeWorkerFactory for FakeWorkerFactory {
             let reply_notify = reply_notify.clone();
             let mut from_host_rx_2 = from_host_rx_2;
             tokio::spawn(async move {
-                while let Some(HostToWorkerMessage::Result { id, ok, payload }) = from_host_rx_2.recv().await {
+                while let Some(HostToWorkerMessage::Result { id, ok, payload }) =
+                    from_host_rx_2.recv().await
+                {
                     replies.lock().insert(id, (ok, payload));
                     reply_notify.notify_waiters();
                 }
@@ -242,12 +272,17 @@ impl CodeModeWorkerFactory for FakeWorkerFactory {
             to_worker: to_worker_tx,
             from_worker: from_host_rx,
             interrupt: worker_interrupt,
-            handle: Box::new(FakeHandle { join: ParkingMutex::new(Some(join)), exit_code }),
+            handle: Box::new(FakeHandle {
+                join: ParkingMutex::new(Some(join)),
+                exit_code,
+            }),
         })
     }
 }
 
-fn sandbox_with(behavior: impl Fn(FakeWorkerApi) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync + 'static) -> CodemodeSandbox {
+fn sandbox_with(
+    behavior: impl Fn(FakeWorkerApi) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync + 'static,
+) -> CodemodeSandbox {
     CodemodeSandbox::new(CodemodeSandboxOptions {
         worker_factory: Some(Arc::new(FakeWorkerFactory::new(behavior))),
         wasm_loader: Some(dummy_loader()),
@@ -277,7 +312,11 @@ async fn returns_the_scripts_value_after_a_json_round_trip() {
         Box::pin(async move {
             let _ = api.data.code.as_str();
             // The value crossed as JSON text; the host parses it back.
-            api.done_ok(Some(json!({ "a": 1, "b": [true, "x"] })), CodemodeStoreWrites::default()).await;
+            api.done_ok(
+                Some(json!({ "a": 1, "b": [true, "x"] })),
+                CodemodeStoreWrites::default(),
+            )
+            .await;
         })
     });
     let result = result_of(sandbox.execute(String::new(), CodemodeExecuteOptions::default())).await;
@@ -290,10 +329,12 @@ async fn returns_the_scripts_value_after_a_json_round_trip() {
     let _ = result;
     let sandbox2 = sandbox_with(|api| {
         Box::pin(async move {
-            api.done_ok(Some(json!("plain")), CodemodeStoreWrites::default()).await;
+            api.done_ok(Some(json!("plain")), CodemodeStoreWrites::default())
+                .await;
         })
     });
-    let result = result_of(sandbox2.execute(String::new(), CodemodeExecuteOptions::default())).await;
+    let result =
+        result_of(sandbox2.execute(String::new(), CodemodeExecuteOptions::default())).await;
     assert_eq!(result.value(), Some(&json!("plain")));
 
     let sandbox3 = sandbox_with(|api| {
@@ -301,8 +342,13 @@ async fn returns_the_scripts_value_after_a_json_round_trip() {
             api.done_ok(None, CodemodeStoreWrites::default()).await;
         })
     });
-    let result = result_of(sandbox3.execute(String::new(), CodemodeExecuteOptions::default())).await;
-    assert_eq!(result.value(), None, "empty script completes with value undefined");
+    let result =
+        result_of(sandbox3.execute(String::new(), CodemodeExecuteOptions::default())).await;
+    assert_eq!(
+        result.value(),
+        None,
+        "empty script completes with value undefined"
+    );
 }
 
 #[tokio::test]
@@ -316,11 +362,20 @@ async fn terminates_a_script_that_never_settles_on_timeout() {
         })
     });
     let started = std::time::Instant::now();
-    let result = result_of(
-        sandbox.execute(String::new(), CodemodeExecuteOptions { timeout_ms: Some(200.0), ..Default::default() }),
-    )
+    let result = result_of(sandbox.execute(
+        String::new(),
+        CodemodeExecuteOptions {
+            timeout_ms: Some(200.0),
+            ..Default::default()
+        },
+    ))
     .await;
-    assert_eq!(result.error().map(|error| error.kind), Some(CodemodeErrorKind::Timeout), "msg={:?}", result.error().map(|e| e.message.clone()));
+    assert_eq!(
+        result.error().map(|error| error.kind),
+        Some(CodemodeErrorKind::Timeout),
+        "msg={:?}",
+        result.error().map(|e| e.message.clone())
+    );
     assert_eq!(
         result.error().map(|error| error.message.clone()),
         Some("Execution timed out after 200 ms".to_string())
@@ -332,7 +387,10 @@ async fn terminates_a_script_that_never_settles_on_timeout() {
 async fn runs_without_a_deadline_when_timeout_is_infinity() {
     let sandbox = sandbox_with(|api| {
         Box::pin(async move {
-            let value = api.call(CallTarget::Tool, "wait", Some(json!(1))).await.unwrap();
+            let value = api
+                .call(CallTarget::Tool, "wait", Some(json!(1)))
+                .await
+                .unwrap();
             api.done_ok(value, CodemodeStoreWrites::default()).await;
         })
     });
@@ -342,12 +400,13 @@ async fn runs_without_a_deadline_when_timeout_is_infinity() {
             Ok(args)
         }))
         .unwrap();
-    let result = result_of(
-        sandbox.execute(
-            String::new(),
-            CodemodeExecuteOptions { timeout_ms: Some(f64::INFINITY), ..Default::default() },
-        ),
-    )
+    let result = result_of(sandbox.execute(
+        String::new(),
+        CodemodeExecuteOptions {
+            timeout_ms: Some(f64::INFINITY),
+            ..Default::default()
+        },
+    ))
     .await;
     assert_eq!(result.value(), Some(&json!(1)));
 }
@@ -367,12 +426,13 @@ async fn fails_a_script_that_waits_on_a_promise_nothing_can_settle() {
             .await;
         })
     });
-    let result = result_of(
-        sandbox.execute(
-            String::new(),
-            CodemodeExecuteOptions { timeout_ms: Some(f64::INFINITY), ..Default::default() },
-        ),
-    )
+    let result = result_of(sandbox.execute(
+        String::new(),
+        CodemodeExecuteOptions {
+            timeout_ms: Some(f64::INFINITY),
+            ..Default::default()
+        },
+    ))
     .await;
     let error = result.error().unwrap();
     assert_eq!(error.kind, CodemodeErrorKind::Script);
@@ -384,6 +444,9 @@ async fn collects_output_in_order() {
     let sandbox = sandbox_with(|api| {
         Box::pin(async move {
             api.output_text("hello 1 {\"a\":1}").await;
+            // `console.*` items arrive with `console: true` (the host decodes what the
+            // prelude reports; the VM-side mapping is exercised in pi-runtime).
+            api.post(json!({ "type": "output", "item": { "type": "text", "text": "logged", "console": true } })).await;
             api.output_text("second").await;
             api.send(WorkerToHostMessage::Output {
                 item: pi_codemode::types::CodemodeOutputItem::Image {
@@ -397,13 +460,23 @@ async fn collects_output_in_order() {
     });
     let result = result_of(sandbox.execute(String::new(), CodemodeExecuteOptions::default())).await;
     assert!(result.is_ok());
-    assert_eq!(result.output().len(), 3);
+    assert_eq!(result.output().len(), 4);
     assert_eq!(
         result.output()[0],
-        pi_codemode::types::CodemodeOutputItem::Text { text: "hello 1 {\"a\":1}".to_string() }
+        pi_codemode::types::CodemodeOutputItem::Text {
+            text: "hello 1 {\"a\":1}".to_string(),
+            console: None
+        }
     );
     assert_eq!(
-        result.output()[2],
+        result.output()[1],
+        pi_codemode::types::CodemodeOutputItem::Text {
+            text: "logged".to_string(),
+            console: Some(pi_codemode::types::True)
+        }
+    );
+    assert_eq!(
+        result.output()[3],
         pi_codemode::types::CodemodeOutputItem::Image {
             data: "iVBORw0KGgo=".to_string(),
             mime_type: "image/png".to_string()
@@ -415,7 +488,10 @@ async fn collects_output_in_order() {
 async fn reports_a_crash_as_a_sandbox_error() {
     let sandbox = sandbox_with(|api| {
         Box::pin(async move {
-            api.send(WorkerToHostMessage::Crash { message: "RuntimeError: unreachable".to_string() }).await;
+            api.send(WorkerToHostMessage::Crash {
+                message: "RuntimeError: unreachable".to_string(),
+            })
+            .await;
         })
     });
     let result = result_of(sandbox.execute(String::new(), CodemodeExecuteOptions::default())).await;
@@ -441,7 +517,10 @@ async fn reports_a_worker_exit_before_settle_as_a_sandbox_error() {
     let result = result_of(sandbox.execute(String::new(), CodemodeExecuteOptions::default())).await;
     let error = result.error().unwrap();
     assert_eq!(error.kind, CodemodeErrorKind::Sandbox);
-    assert_eq!(error.message, "Worker exited with code 3 before the script settled");
+    assert_eq!(
+        error.message,
+        "Worker exited with code 3 before the script settled"
+    );
 }
 
 #[tokio::test]
@@ -464,7 +543,9 @@ async fn reports_a_failing_wasm_module_as_a_sandbox_error() {
     impl pi_codemode::wasm::WasmLoader for FailingLoader {
         fn load(
             &self,
-        ) -> Pin<Box<dyn Future<Output = Result<pi_codemode::CodemodeWasmModule, String>> + Send + '_>> {
+        ) -> Pin<
+            Box<dyn Future<Output = Result<pi_codemode::CodemodeWasmModule, String>> + Send + '_>,
+        > {
             Box::pin(async { Err("no wasm".to_string()) })
         }
     }
@@ -479,6 +560,112 @@ async fn reports_a_failing_wasm_module_as_a_sandbox_error() {
     assert_eq!(error.message, "Failed to load QuickJS: no wasm");
 }
 
+/// #10444: a malformed payload from the worker must fail the run as a sandbox error instead
+/// of throwing in the host's message listener and never settling. The fake worker stands in
+/// for the upstream `raw-worker` fixture: it posts the JSON message passed as the script
+/// source, so these cases send the host payloads the real prelude never produces.
+#[tokio::test]
+async fn reports_a_broken_bridge_as_a_sandbox_error() {
+    let cases: Vec<(Value, &str)> = vec![
+        (
+            json!({ "type": "done", "ok": true, "value": "1", "writes": "null" }),
+            "store writes are not an array",
+        ),
+        (
+            json!({ "type": "done", "ok": true, "value": "1", "writes": "[1]" }),
+            "store writes contain a malformed entry",
+        ),
+        (
+            json!({ "type": "done", "ok": true, "value": "1", "writes": r#"[["k", "{"]]"# }),
+            r#"store value for "k" is not valid JSON"#,
+        ),
+        (
+            json!({ "type": "done", "ok": true, "value": "{", "writes": "[]" }),
+            "return value is not valid JSON",
+        ),
+        (
+            json!({ "type": "done", "ok": false, "error": "5" }),
+            "script error is not an object",
+        ),
+        (
+            json!({ "type": "done", "ok": false, "error": "{}" }),
+            "script error is malformed",
+        ),
+        (
+            json!({ "type": "nonsense" }),
+            "unknown message from the worker",
+        ),
+    ];
+    for (message, reason) in cases {
+        let sandbox = sandbox_with(|api| {
+            Box::pin(async move {
+                // The script source is the raw payload, like the raw-worker fixture.
+                api.post(serde_json::from_str(&api.data.code).unwrap())
+                    .await;
+            })
+        });
+        let result = result_of(sandbox.execute(
+            serde_json::to_string(&message).unwrap(),
+            CodemodeExecuteOptions::default(),
+        ))
+        .await;
+        assert!(
+            matches!(result, CodemodeResult::Err { .. }),
+            "message: {message}"
+        );
+        let error = result.error().unwrap();
+        assert_eq!(error.kind, CodemodeErrorKind::Sandbox, "message: {message}");
+        assert!(
+            error
+                .message
+                .contains(&format!("Sandbox bridge broken: {reason}")),
+            "message: {message}, error: {}",
+            error.message
+        );
+    }
+}
+
+/// #10444: a second `call` for an id the host already tracks breaks the bridge instead of
+/// registering a shadow pending entry.
+#[tokio::test]
+async fn reports_a_duplicate_call_id_as_a_broken_bridge() {
+    let sandbox = sandbox_with(|api| {
+        Box::pin(async move {
+            let raw =
+                json!({ "type": "call", "id": 7, "target": "tool", "name": "echo", "args": "1" });
+            api.post(raw.clone()).await;
+            api.post(raw).await;
+            // Never settles on its own; the host must fail the execution.
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
+            }
+        })
+    });
+    sandbox
+        .register_tool(CodemodeTool::new("echo", |args, _ctx| async move {
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            Ok(args)
+        }))
+        .unwrap();
+    let result = result_of(sandbox.execute(
+        String::new(),
+        CodemodeExecuteOptions {
+            timeout_ms: Some(2000.0),
+            ..Default::default()
+        },
+    ))
+    .await;
+    let error = result.error().unwrap();
+    assert_eq!(error.kind, CodemodeErrorKind::Sandbox);
+    assert!(
+        error
+            .message
+            .contains("Sandbox bridge broken: duplicate call id 7"),
+        "{}",
+        error.message
+    );
+}
+
 #[tokio::test]
 async fn exposes_tools_and_records_calls() {
     let seen: Arc<Mutex<Vec<Value>>> = Arc::new(Mutex::new(Vec::new()));
@@ -486,19 +673,34 @@ async fn exposes_tools_and_records_calls() {
     let sandbox = sandbox_with(move |api| {
         let seen = seen_tool.clone();
         Box::pin(async move {
-            let first = api.call(CallTarget::Tool, "add", Some(json!({ "a": 1, "b": 2 }))).await.unwrap();
-            let second = api.call(CallTarget::Tool, "add", Some(json!({ "a": 3, "b": 10 }))).await.unwrap();
+            let first = api
+                .call(CallTarget::Tool, "add", Some(json!({ "a": 1, "b": 2 })))
+                .await
+                .unwrap();
+            let second = api
+                .call(CallTarget::Tool, "add", Some(json!({ "a": 3, "b": 10 })))
+                .await
+                .unwrap();
             let sum = second.as_ref().and_then(|v| v.get("sum")).cloned().unwrap();
             drop(first);
-            api.done_ok(Some(json!({ "sum": sum })), CodemodeStoreWrites::default()).await;
+            api.done_ok(Some(json!({ "sum": sum })), CodemodeStoreWrites::default())
+                .await;
             seen.lock().push(json!({ "a": 1, "b": 2 }));
             seen.lock().push(json!({ "a": 3, "b": 10 }));
         })
     });
     sandbox
         .register_tool(CodemodeTool::new("add", |args, _ctx| async move {
-            let a = args.as_ref().and_then(|args| args.get("a")).and_then(Value::as_i64).unwrap();
-            let b = args.as_ref().and_then(|args| args.get("b")).and_then(Value::as_i64).unwrap();
+            let a = args
+                .as_ref()
+                .and_then(|args| args.get("a"))
+                .and_then(Value::as_i64)
+                .unwrap();
+            let b = args
+                .as_ref()
+                .and_then(|args| args.get("b"))
+                .and_then(Value::as_i64)
+                .unwrap();
             Ok(Some(json!({ "sum": a + b })))
         }))
         .unwrap();
@@ -510,7 +712,9 @@ async fn exposes_tools_and_records_calls() {
     );
     let calls = result.calls();
     assert_eq!(calls.len(), 2);
-    assert!(calls.iter().all(|call| call.name == "add" && call.status == pi_codemode::types::CodemodeCallStatus::Ok));
+    assert!(calls.iter().all(
+        |call| call.name == "add" && call.status == pi_codemode::types::CodemodeCallStatus::Ok
+    ));
     assert!(calls.iter().all(|call| call.duration_ms >= 0.0));
 }
 
@@ -522,10 +726,15 @@ async fn turns_tool_errors_into_catchable_errors() {
             match outcome {
                 Err(message) => {
                     // The script catches it as an Error with the same message.
-                    api.done_ok(Some(json!({ "isError": true, "message": message })), CodemodeStoreWrites::default()).await;
+                    api.done_ok(
+                        Some(json!({ "isError": true, "message": message })),
+                        CodemodeStoreWrites::default(),
+                    )
+                    .await;
                 }
                 Ok(_) => {
-                    api.done_ok(Some(json!("no error")), CodemodeStoreWrites::default()).await;
+                    api.done_ok(Some(json!("no error")), CodemodeStoreWrites::default())
+                        .await;
                 }
             }
         })
@@ -536,11 +745,17 @@ async fn turns_tool_errors_into_catchable_errors() {
         }))
         .unwrap();
     let result = result_of(sandbox.execute(String::new(), CodemodeExecuteOptions::default())).await;
-    assert_eq!(result.value(), Some(&json!({ "isError": true, "message": "tool exploded" })));
+    assert_eq!(
+        result.value(),
+        Some(&json!({ "isError": true, "message": "tool exploded" }))
+    );
     let calls = result.calls();
     assert_eq!(calls.len(), 1);
     assert_eq!(calls[0].name, "fail");
-    assert_eq!(calls[0].status, pi_codemode::types::CodemodeCallStatus::Error);
+    assert_eq!(
+        calls[0].status,
+        pi_codemode::types::CodemodeCallStatus::Error
+    );
 }
 
 #[tokio::test]
@@ -554,9 +769,16 @@ async fn rejects_calls_to_unknown_tools() {
             match outcome {
                 Err(message) => {
                     reply.lock().push(message);
-                    api.done_err(&script_error_json("TypeError", "tools.missing is not a function")).await;
+                    api.done_err(&script_error_json(
+                        "TypeError",
+                        "tools.missing is not a function",
+                    ))
+                    .await;
                 }
-                Ok(_) => api.done_ok(Some(json!("imported")), CodemodeStoreWrites::default()).await,
+                Ok(_) => {
+                    api.done_ok(Some(json!("imported")), CodemodeStoreWrites::default())
+                        .await
+                }
             }
         })
     });
@@ -574,31 +796,38 @@ async fn aborts_unawaited_calls_when_the_script_returns() {
     let sandbox = sandbox_with(move |api| {
         Box::pin(async move {
             // The script fires the call without awaiting and returns.
-            let _ = api.to_host.send(WorkerToHostMessage::Call {
-                id: 1,
-                target: CallTarget::Tool,
-                name: "slow".to_string(),
-                args: None,
-            }).await;
-            api.done_ok(Some(json!("early")), CodemodeStoreWrites::default()).await;
+            let _ = api
+                .to_host
+                .send(json!({
+                    "type": "call", "id": 1, "target": "tool", "name": "slow"
+                }))
+                .await;
+            api.done_ok(Some(json!("early")), CodemodeStoreWrites::default())
+                .await;
         })
     });
     sandbox
-        .register_tool(CodemodeTool::new("slow", move |_args, ctx: CodemodeToolContext| {
-            let aborted = aborted_tool.clone();
-            async move {
-                ctx.signal.wait_aborted().await;
-                aborted.store(1, Ordering::SeqCst);
-                Err("aborted".to_string())
-            }
-        }))
+        .register_tool(CodemodeTool::new(
+            "slow",
+            move |_args, ctx: CodemodeToolContext| {
+                let aborted = aborted_tool.clone();
+                async move {
+                    ctx.signal.wait_aborted().await;
+                    aborted.store(1, Ordering::SeqCst);
+                    Err("aborted".to_string())
+                }
+            },
+        ))
         .unwrap();
     let result = result_of(sandbox.execute(String::new(), CodemodeExecuteOptions::default())).await;
     assert_eq!(result.value(), Some(&json!("early")));
     let calls = result.calls();
     assert_eq!(calls.len(), 1);
     assert_eq!(calls[0].name, "slow");
-    assert_eq!(calls[0].status, pi_codemode::types::CodemodeCallStatus::Cancelled);
+    assert_eq!(
+        calls[0].status,
+        pi_codemode::types::CodemodeCallStatus::Cancelled
+    );
     for _ in 0..100 {
         if aborted.load(Ordering::SeqCst) == 1 {
             break;
@@ -625,7 +854,10 @@ async fn runs_concurrent_calls() {
         })
     });
     sandbox
-        .register_tool(CodemodeTool::new("echo", |args, _ctx| async move { Ok(args) }))
+        .register_tool(CodemodeTool::new(
+            "echo",
+            |args, _ctx| async move { Ok(args) },
+        ))
         .unwrap();
     sandbox
         .register_tool(CodemodeTool::new("delay", |args, _ctx| async move {
@@ -643,12 +875,19 @@ async fn passes_undefined_arguments_and_results_through() {
     let sandbox = sandbox_with(|api| {
         Box::pin(async move {
             let first = api.call(CallTarget::Tool, "noop", None).await.unwrap();
-            let second = api.call(CallTarget::Tool, "noop", Some(json!(null))).await.unwrap();
-            api.done_ok(Some(json!([first, second])), CodemodeStoreWrites::default()).await;
+            let second = api
+                .call(CallTarget::Tool, "noop", Some(json!(null)))
+                .await
+                .unwrap();
+            api.done_ok(Some(json!([first, second])), CodemodeStoreWrites::default())
+                .await;
         })
     });
     sandbox
-        .register_tool(CodemodeTool::new("noop", |args, _ctx| async move { Ok(args) }))
+        .register_tool(CodemodeTool::new(
+            "noop",
+            |args, _ctx| async move { Ok(args) },
+        ))
         .unwrap();
     let result = result_of(sandbox.execute(String::new(), CodemodeExecuteOptions::default())).await;
     assert_eq!(result.value(), Some(&json!([null, null])));
@@ -661,15 +900,29 @@ async fn exposes_globals_without_recording_calls() {
     let sandbox = {
         let factory = FakeWorkerFactory::new(move |api| {
             Box::pin(async move {
-                let _ = api.call(CallTarget::Global, "attach", Some(json!({ "ref": 1 }))).await;
-                let _ = api.call(CallTarget::Global, "attach", Some(json!("not awaited"))).await;
-                let echo = api.call(CallTarget::Tool, "echo", Some(json!(2))).await.unwrap();
-                api.done_ok(Some(json!(["function", "function", echo])), CodemodeStoreWrites::default()).await;
+                let _ = api
+                    .call(CallTarget::Global, "attach", Some(json!({ "ref": 1 })))
+                    .await;
+                let _ = api
+                    .call(CallTarget::Global, "attach", Some(json!("not awaited")))
+                    .await;
+                let echo = api
+                    .call(CallTarget::Tool, "echo", Some(json!(2)))
+                    .await
+                    .unwrap();
+                api.done_ok(
+                    Some(json!(["function", "function", echo])),
+                    CodemodeStoreWrites::default(),
+                )
+                .await;
             })
         });
         CodemodeSandbox::new(CodemodeSandboxOptions {
             wasm_loader: Some(dummy_loader()),
-            tools: vec![CodemodeTool::new("echo", |args, _ctx| async move { Ok(args) })],
+            tools: vec![CodemodeTool::new(
+                "echo",
+                |args, _ctx| async move { Ok(args) },
+            )],
             globals: vec![CodemodeTool::new("attach", move |args, _ctx| {
                 let seen = seen_attach.clone();
                 async move {
@@ -686,7 +939,13 @@ async fn exposes_globals_without_recording_calls() {
     assert_eq!(result.value(), Some(&json!(["function", "function", 2])));
     // Globals are not recorded as calls.
     let calls = result.calls();
-    assert_eq!(calls.iter().map(|call| call.name.as_str()).collect::<Vec<_>>(), vec!["echo"]);
+    assert_eq!(
+        calls
+            .iter()
+            .map(|call| call.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["echo"]
+    );
     assert_eq!(
         seen.lock().as_slice(),
         &[json!({ "ref": 1 }), json!("not awaited")]
@@ -716,16 +975,25 @@ async fn reads_the_store_snapshot_and_reports_writes() {
     let mut store = serde_json::Map::new();
     store.insert("counter".to_string(), json!(41));
     store.insert("old".to_string(), json!("x"));
-    let result = result_of(
-        sandbox.execute(
-            String::new(),
-            CodemodeExecuteOptions { store: Some(store), ..Default::default() },
-        ),
-    )
+    let result = result_of(sandbox.execute(
+        String::new(),
+        CodemodeExecuteOptions {
+            store: Some(store),
+            ..Default::default()
+        },
+    ))
     .await;
     // The worker receives key -> JSON text.
-    assert_eq!(snapshot.lock()[0], json!({ "counter": "41", "old": "\"x\"" }));
-    assert_eq!(result.value(), Some(&json!([41, 42, null, null])), "result: {:?}", result);
+    assert_eq!(
+        snapshot.lock()[0],
+        json!({ "counter": "41", "old": "\"x\"" })
+    );
+    assert_eq!(
+        result.value(),
+        Some(&json!([41, 42, null, null])),
+        "result: {:?}",
+        result
+    );
     let writes = result.store_writes().unwrap();
     assert_eq!(writes.set.get("counter"), Some(&json!(42)));
     assert_eq!(writes.set.get("list"), Some(&json!([1, { "a": null }])));
@@ -736,18 +1004,32 @@ async fn reads_the_store_snapshot_and_reports_writes() {
 async fn supports_register_and_unregister_between_executions() {
     let sandbox = sandbox_with(|api| {
         Box::pin(async move {
-            let _ = api.call(CallTarget::Tool, "echo", Some(json!("a"))).await.unwrap();
-            api.done_ok(Some(json!("a")), CodemodeStoreWrites::default()).await;
+            let _ = api
+                .call(CallTarget::Tool, "echo", Some(json!("a")))
+                .await
+                .unwrap();
+            api.done_ok(Some(json!("a")), CodemodeStoreWrites::default())
+                .await;
         })
     });
     sandbox.register_tool(sync_tool("echo", json!(0))).unwrap();
     assert!(sandbox.register_tool(sync_tool("echo", json!(0))).is_err());
-    assert!(!sandbox.register_tool(sync_tool("echo", json!(0))).unwrap_err().is_empty());
+    assert!(!sandbox
+        .register_tool(sync_tool("echo", json!(0)))
+        .unwrap_err()
+        .is_empty());
     assert!(sandbox
         .register_tool(sync_tool("echo", json!(0)))
         .unwrap_err()
         .contains("already registered"));
-    assert_eq!(sandbox.tools().iter().map(|tool| tool.name.as_str()).collect::<Vec<_>>(), vec!["echo"]);
+    assert_eq!(
+        sandbox
+            .tools()
+            .iter()
+            .map(|tool| tool.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["echo"]
+    );
     let result = result_of(sandbox.execute(String::new(), CodemodeExecuteOptions::default())).await;
     assert_eq!(result.value(), Some(&json!("a")));
     assert!(sandbox.unregister_tool("echo"));
@@ -807,7 +1089,10 @@ async fn rejects_duplicate_tool_registration() {
         ..Default::default()
     })
     .unwrap();
-    assert!(sandbox.register_tool(sync_tool("echo", json!(2))).unwrap_err().contains("already registered"));
+    assert!(sandbox
+        .register_tool(sync_tool("echo", json!(2)))
+        .unwrap_err()
+        .contains("already registered"));
 }
 
 #[tokio::test]
@@ -831,16 +1116,19 @@ async fn aborts_via_signal_and_cancels_in_flight_calls() {
         let tool_signal = tool_signal.clone();
         let called_tx = called_tx.clone();
         CodemodeSandbox::new(CodemodeSandboxOptions {
-            tools: vec![CodemodeTool::new("hang", move |_args, ctx: CodemodeToolContext| {
-                let tool_signal = tool_signal.clone();
-                let called_tx = called_tx.clone();
-                async move {
-                    *tool_signal.lock() = Some(ctx.signal.clone());
-                    let _ = called_tx.send(()).await;
-                    ctx.signal.wait_aborted().await;
-                    Err("cancelled".to_string())
-                }
-            })],
+            tools: vec![CodemodeTool::new(
+                "hang",
+                move |_args, ctx: CodemodeToolContext| {
+                    let tool_signal = tool_signal.clone();
+                    let called_tx = called_tx.clone();
+                    async move {
+                        *tool_signal.lock() = Some(ctx.signal.clone());
+                        let _ = called_tx.send(()).await;
+                        ctx.signal.wait_aborted().await;
+                        Err("cancelled".to_string())
+                    }
+                },
+            )],
             worker_factory: Some(factory),
             wasm_loader: Some(dummy_loader()),
             ..Default::default()
@@ -852,19 +1140,24 @@ async fn aborts_via_signal_and_cancels_in_flight_calls() {
     // starts eagerly, like an upstream promise.
     let promise = {
         let sandbox = sandbox.clone();
-        tokio::spawn(async move { sandbox.execute(String::new(), CodemodeExecuteOptions::default()).await })
+        tokio::spawn(async move {
+            sandbox
+                .execute(String::new(), CodemodeExecuteOptions::default())
+                .await
+        })
     };
     let _ = called_rx.recv().await;
 
     let controller = AbortSignal::new();
     controller.abort("user cancelled");
     // An already-aborted signal aborts the execution immediately.
-    let result = result_of(
-        sandbox.execute(
-            String::new(),
-            CodemodeExecuteOptions { signal: Some(controller.clone()), ..Default::default() },
-        ),
-    )
+    let result = result_of(sandbox.execute(
+        String::new(),
+        CodemodeExecuteOptions {
+            signal: Some(controller.clone()),
+            ..Default::default()
+        },
+    ))
     .await;
     let error = result.error().unwrap();
     assert_eq!(error.kind, CodemodeErrorKind::Aborted);
@@ -879,7 +1172,10 @@ async fn aborts_via_signal_and_cancels_in_flight_calls() {
             sandbox
                 .execute(
                     String::new(),
-                    CodemodeExecuteOptions { signal: Some(second), ..Default::default() },
+                    CodemodeExecuteOptions {
+                        signal: Some(second),
+                        ..Default::default()
+                    },
                 )
                 .await
         })
@@ -889,8 +1185,15 @@ async fn aborts_via_signal_and_cancels_in_flight_calls() {
     let aborted = pending.await.unwrap().unwrap();
     assert_eq!(aborted.error().unwrap().kind, CodemodeErrorKind::Aborted);
     assert_eq!(aborted.calls().len(), 1);
-    assert_eq!(aborted.calls()[0].status, pi_codemode::types::CodemodeCallStatus::Cancelled);
-    assert!(tool_signal.lock().as_ref().map(|signal| signal.is_aborted()).unwrap_or(false));
+    assert_eq!(
+        aborted.calls()[0].status,
+        pi_codemode::types::CodemodeCallStatus::Cancelled
+    );
+    assert!(tool_signal
+        .lock()
+        .as_ref()
+        .map(|signal| signal.is_aborted())
+        .unwrap_or(false));
 
     while called_rx.try_recv().is_ok() {}
     // close() aborts in-flight executions.
@@ -907,7 +1210,10 @@ async fn aborts_via_signal_and_cancels_in_flight_calls() {
 async fn rejects_execute_after_close() {
     let sandbox = sandbox_with(|_api| Box::pin(async {}));
     sandbox.close().await;
-    let error = sandbox.execute(String::new(), CodemodeExecuteOptions::default()).await.unwrap_err();
+    let error = sandbox
+        .execute(String::new(), CodemodeExecuteOptions::default())
+        .await
+        .unwrap_err();
     assert!(error.contains("closed"));
 }
 
@@ -917,8 +1223,15 @@ async fn runs_executions_in_parallel_without_sharing_state() {
         Box::pin(async move {
             // Each worker sees only its own data; the fake echoes the code it was handed,
             // which is the per-execution state the real VM would isolate.
-            let shared = if api.data.code == "a" { "a" } else if api.data.code == "b" { "b" } else { "undefined" };
-            api.done_ok(Some(json!(shared)), CodemodeStoreWrites::default()).await;
+            let shared = if api.data.code == "a" {
+                "a"
+            } else if api.data.code == "b" {
+                "b"
+            } else {
+                "undefined"
+            };
+            api.done_ok(Some(json!(shared)), CodemodeStoreWrites::default())
+                .await;
         })
     });
     let results = tokio::join!(
@@ -946,7 +1259,10 @@ async fn keeps_output_before_a_failure() {
     assert!(!result.is_ok());
     assert_eq!(
         result.output(),
-        &[pi_codemode::types::CodemodeOutputItem::Text { text: "partial".to_string() }]
+        &[pi_codemode::types::CodemodeOutputItem::Text {
+            text: "partial".to_string(),
+            console: None
+        }]
     );
     assert_eq!(result.error().unwrap().message, "boom");
 }
@@ -971,7 +1287,10 @@ async fn reports_script_errors_with_parsed_name_and_stack() {
     assert_eq!(error.kind, CodemodeErrorKind::Script);
     assert_eq!(error.name.as_deref(), Some("TypeError"));
     assert_eq!(error.message, "boom 1");
-    assert_eq!(error.stack.as_deref(), Some("TypeError: boom 1\n  at codemode.js:2"));
+    assert_eq!(
+        error.stack.as_deref(),
+        Some("TypeError: boom 1\n  at codemode.js:2")
+    );
 }
 
 #[tokio::test]
@@ -1000,9 +1319,13 @@ async fn sets_the_interrupt_flag_before_terminating() {
         })
         .unwrap()
     };
-    let result = result_of(
-        sandbox.execute(String::new(), CodemodeExecuteOptions { timeout_ms: Some(150.0), ..Default::default() }),
-    )
+    let result = result_of(sandbox.execute(
+        String::new(),
+        CodemodeExecuteOptions {
+            timeout_ms: Some(150.0),
+            ..Default::default()
+        },
+    ))
     .await;
     assert_eq!(result.error().unwrap().kind, CodemodeErrorKind::Timeout);
     assert_eq!(interrupt_seen.load(Ordering::SeqCst), 1);

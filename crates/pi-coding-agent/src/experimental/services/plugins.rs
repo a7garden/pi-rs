@@ -21,10 +21,10 @@ use pi_chord::json::JsonValue;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PrepareSessionRequest {
-	pub session_id: String,
-	/// `null` upstream when unselected.
-	#[serde(skip_serializing_if = "Option::is_none")]
-	pub package_paths: Option<Vec<String>>,
+    pub session_id: String,
+    /// `null` upstream when unselected.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub package_paths: Option<Vec<String>>,
 }
 
 /// `defineService<PresentationPlugins>("pi.presentation-plugins")`; remote-only
@@ -32,71 +32,90 @@ pub struct PrepareSessionRequest {
 pub struct PresentationPluginsToken;
 
 pub static PRESENTATION_PLUGINS: LazyLock<pi_chord::Service<PresentationPluginsToken>> =
-	LazyLock::new(|| define_service("pi.presentation-plugins", false).expect("service id is valid"));
+    LazyLock::new(|| {
+        define_service("pi.presentation-plugins", false).expect("service id is valid")
+    });
 
 /// `defineService<SessionPlugins>("pi.session-plugins")`; local service typed
 /// by the concrete reload handle (D144).
 #[derive(Clone)]
 pub struct SessionPluginsService {
-	reload: Arc<dyn Fn(Context) -> Pin<Box<dyn Future<Output = Result<(), String>> + Send>> + Send + Sync>,
+    reload: Arc<
+        dyn Fn(Context) -> Pin<Box<dyn Future<Output = Result<(), String>> + Send>> + Send + Sync,
+    >,
 }
 
 impl SessionPluginsService {
-	pub fn new(
-		reload: impl Fn(Context) -> Pin<Box<dyn Future<Output = Result<(), String>> + Send>> + Send + Sync + 'static,
-	) -> SessionPluginsService {
-		SessionPluginsService { reload: Arc::new(reload) }
-	}
+    pub fn new(
+        reload: impl Fn(Context) -> Pin<Box<dyn Future<Output = Result<(), String>> + Send>>
+            + Send
+            + Sync
+            + 'static,
+    ) -> SessionPluginsService {
+        SessionPluginsService {
+            reload: Arc::new(reload),
+        }
+    }
 
-	/// Cheap shared clone (the reload closure is behind an `Arc`).
-	pub fn clone_handle(&self) -> SessionPluginsService {
-		self.clone()
-	}
+    /// Cheap shared clone (the reload closure is behind an `Arc`).
+    pub fn clone_handle(&self) -> SessionPluginsService {
+        self.clone()
+    }
 
-	/// Upstream `SessionPlugins.reload(context)`.
-	pub async fn reload(&self, context: Context) -> Result<(), String> {
-		(self.reload)(context).await
-	}
+    /// Upstream `SessionPlugins.reload(context)`.
+    pub async fn reload(&self, context: Context) -> Result<(), String> {
+        (self.reload)(context).await
+    }
 }
 
 pub static SESSION_PLUGINS: LazyLock<pi_chord::Service<SessionPluginsService>> =
-	LazyLock::new(|| define_service("pi.session-plugins", true).expect("service id is valid"));
+    LazyLock::new(|| define_service("pi.session-plugins", true).expect("service id is valid"));
 
 /// JSON member names of the remote `PresentationPlugins` service (upstream
 /// object keys).
 pub mod members {
-	pub const PREPARE_SESSION: &str = "prepareSession";
-	pub const RELOAD: &str = "reload";
+    pub const PREPARE_SESSION: &str = "prepareSession";
+    pub const RELOAD: &str = "reload";
 }
 
 /// Serialize `prepareSession` arguments the way the TS caller passes them (one
 /// positional object argument).
 pub fn prepare_session_args(request: &PrepareSessionRequest) -> JsonValue {
-	serde_json::to_value(request).expect("PrepareSessionRequest serializes")
+    serde_json::to_value(request).expect("PrepareSessionRequest serializes")
 }
 
 #[cfg(test)]
 mod tests {
-	use super::*;
+    use super::*;
 
-	#[test]
-	fn prepare_session_request_serializes_camel_case() {
-		let request = PrepareSessionRequest {
-			session_id: "s".into(),
-			package_paths: Some(vec!["/pkg".into()]),
-		};
-		let value = prepare_session_args(&request);
-		assert_eq!(value["sessionId"], "s");
-		assert_eq!(value["packagePaths"][0], "/pkg");
-		let none = PrepareSessionRequest { session_id: "s".into(), package_paths: None };
-		assert_eq!(prepare_session_args(&none), serde_json::json!({"sessionId": "s"}));
-	}
+    #[test]
+    fn prepare_session_request_serializes_camel_case() {
+        let request = PrepareSessionRequest {
+            session_id: "s".into(),
+            package_paths: Some(vec!["/pkg".into()]),
+        };
+        let value = prepare_session_args(&request);
+        assert_eq!(value["sessionId"], "s");
+        assert_eq!(value["packagePaths"][0], "/pkg");
+        let none = PrepareSessionRequest {
+            session_id: "s".into(),
+            package_paths: None,
+        };
+        assert_eq!(
+            prepare_session_args(&none),
+            serde_json::json!({"sessionId": "s"})
+        );
+    }
 
-	#[tokio::test]
-	async fn session_plugins_reload_delegates() {
-		let service = SessionPluginsService::new(|_context| {
-			Box::pin(async { Err("not ready".to_string()) })
-		});
-		assert_eq!(service.reload(pi_chord::context::BACKGROUND_CONTEXT.clone()).await, Err("not ready".to_string()));
-	}
+    #[tokio::test]
+    async fn session_plugins_reload_delegates() {
+        let service =
+            SessionPluginsService::new(|_context| Box::pin(async { Err("not ready".to_string()) }));
+        assert_eq!(
+            service
+                .reload(pi_chord::context::BACKGROUND_CONTEXT.clone())
+                .await,
+            Err("not ready".to_string())
+        );
+    }
 }

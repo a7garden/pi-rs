@@ -14,7 +14,8 @@ use crate::delta::{Decoder, Encoder};
 use crate::json::JsonValue;
 use crate::services::errors::{error, AnyError};
 use crate::services::wire::{
-    WireServiceInstanceSnapshot, WireServiceProviderUpdate, WireServiceMemberSnapshot, WireServiceSubscriptionSnapshot,
+    WireServiceInstanceSnapshot, WireServiceMemberSnapshot, WireServiceProviderUpdate,
+    WireServiceSubscriptionSnapshot,
 };
 use crate::types::{
     ServiceInstanceAddress, ServiceInstanceSnapshot, ServiceMemberSnapshot, ServiceProviderUpdate,
@@ -56,7 +57,11 @@ impl<C> StateCodecRegistry<C> {
         self.entries.clear();
     }
 
-    fn add(&mut self, instance: Option<&ServiceInstanceAddress>, member: &str) -> Result<&mut C, AnyError> {
+    fn add(
+        &mut self,
+        instance: Option<&ServiceInstanceAddress>,
+        member: &str,
+    ) -> Result<&mut C, AnyError> {
         let key = state_key(instance, member);
         if self.entries.contains_key(&key) {
             return Err(error(format!(
@@ -65,12 +70,21 @@ impl<C> StateCodecRegistry<C> {
             )));
         }
         let codec = (self.create)();
-        self.entries
-            .insert(key.clone(), CodecEntry { instance: instance.cloned(), codec });
+        self.entries.insert(
+            key.clone(),
+            CodecEntry {
+                instance: instance.cloned(),
+                codec,
+            },
+        );
         Ok(&mut self.entries.get_mut(&key).expect("just inserted").codec)
     }
 
-    fn get(&mut self, instance: Option<&ServiceInstanceAddress>, member: &str) -> Result<&mut C, AnyError> {
+    fn get(
+        &mut self,
+        instance: Option<&ServiceInstanceAddress>,
+        member: &str,
+    ) -> Result<&mut C, AnyError> {
         let key = state_key(instance, member);
         let Some(entry) = self.entries.get_mut(&key) else {
             return Err(error(format!(
@@ -116,11 +130,24 @@ impl ServiceStateEncoder {
         })
     }
 
-    pub fn encode_update(&mut self, update: ServiceProviderUpdate) -> Result<WireServiceProviderUpdate, AnyError> {
+    pub fn encode_update(
+        &mut self,
+        update: ServiceProviderUpdate,
+    ) -> Result<WireServiceProviderUpdate, AnyError> {
         Ok(match update {
-            ServiceProviderUpdate::State { instance, member, sequence, ops } => {
+            ServiceProviderUpdate::State {
+                instance,
+                member,
+                sequence,
+                ops,
+            } => {
                 let ops = self.codecs.get(instance.as_ref(), &member)?.encode(&ops);
-                WireServiceProviderUpdate::State { instance, member, sequence, ops }
+                WireServiceProviderUpdate::State {
+                    instance,
+                    member,
+                    sequence,
+                    ops,
+                }
             }
             ServiceProviderUpdate::Reset { snapshot } => {
                 self.codecs.reset();
@@ -174,9 +201,17 @@ impl ServiceStateDecoder {
         })
     }
 
-    pub fn decode_update(&mut self, update: WireServiceProviderUpdate) -> Result<ServiceProviderUpdate, AnyError> {
+    pub fn decode_update(
+        &mut self,
+        update: WireServiceProviderUpdate,
+    ) -> Result<ServiceProviderUpdate, AnyError> {
         Ok(match update {
-            WireServiceProviderUpdate::State { instance, member, sequence, ops } => ServiceProviderUpdate::State {
+            WireServiceProviderUpdate::State {
+                instance,
+                member,
+                sequence,
+                ops,
+            } => ServiceProviderUpdate::State {
                 ops: self.codecs.get(instance.as_ref(), &member)?.decode(&ops)?,
                 instance,
                 member,
@@ -229,7 +264,11 @@ fn encode_instance(
             .into_iter()
             .map(|member| {
                 Ok(match member {
-                    ServiceMemberSnapshot::State { name, sequence, ops } => {
+                    ServiceMemberSnapshot::State {
+                        name,
+                        sequence,
+                        ops,
+                    } => {
                         let wire_ops = codecs.add(instance_address.as_ref(), &name)?.encode(&ops);
                         WireServiceMemberSnapshot::State {
                             name,
@@ -237,7 +276,9 @@ fn encode_instance(
                             ops: wire_ops,
                         }
                     }
-                    ServiceMemberSnapshot::Method { name } => WireServiceMemberSnapshot::Method { name },
+                    ServiceMemberSnapshot::Method { name } => {
+                        WireServiceMemberSnapshot::Method { name }
+                    }
                 })
             })
             .collect::<Result<Vec<_>, AnyError>>()?,
@@ -256,12 +297,18 @@ fn decode_instance(
             .into_iter()
             .map(|member| {
                 Ok(match member {
-                    WireServiceMemberSnapshot::State { name, sequence, ops } => ServiceMemberSnapshot::State {
+                    WireServiceMemberSnapshot::State {
+                        name,
+                        sequence,
+                        ops,
+                    } => ServiceMemberSnapshot::State {
                         ops: codecs.add(instance_address.as_ref(), &name)?.decode(&ops)?,
                         name,
                         sequence,
                     },
-                    WireServiceMemberSnapshot::Method { name } => ServiceMemberSnapshot::Method { name },
+                    WireServiceMemberSnapshot::Method { name } => {
+                        ServiceMemberSnapshot::Method { name }
+                    }
                 })
             })
             .collect::<Result<Vec<_>, AnyError>>()?,
@@ -303,14 +350,15 @@ fn describe_state(instance: Option<&ServiceInstanceAddress>, member: &str) -> St
 mod tests {
     use super::*;
     use crate::json::JsonValue;
-    use serde_json::json;
     use crate::services::wire::{
-        create_service_catalogue_call, create_service_subscribe_call, create_service_unsubscribe_call,
-        decode_service_control_call, parse_service_call, parse_service_catalogue, parse_service_provider_update,
+        create_service_catalogue_call, create_service_subscribe_call,
+        create_service_unsubscribe_call, decode_service_control_call, parse_service_call,
+        parse_service_catalogue, parse_service_provider_update,
         parse_service_subscription_snapshot, parse_wire_service_provider_update,
         parse_wire_service_subscription_snapshot, ServiceControlCall,
     };
     use crate::types::{ServiceCatalogueEntry, ServiceMode};
+    use serde_json::json;
 
     fn to_value<T: serde::Serialize>(value: &T) -> JsonValue {
         serde_json::to_value(value).expect("test values are serializable")
@@ -365,11 +413,18 @@ mod tests {
             ]))
             .expect("catalogue parses"),
             vec![
-                ServiceCatalogueEntry { service_id: "pi.models".into(), mode: ServiceMode::Singleton },
-                ServiceCatalogueEntry { service_id: "pi.dialogs".into(), mode: ServiceMode::Keyed },
+                ServiceCatalogueEntry {
+                    service_id: "pi.models".into(),
+                    mode: ServiceMode::Singleton
+                },
+                ServiceCatalogueEntry {
+                    service_id: "pi.dialogs".into(),
+                    mode: ServiceMode::Keyed
+                },
             ]
         );
-        let subscribe = create_service_subscribe_call("subscription-1", "pi.models", ServiceMode::Singleton);
+        let subscribe =
+            create_service_subscribe_call("subscription-1", "pi.models", ServiceMode::Singleton);
         assert_eq!(
             decode_service_control_call(&subscribe),
             Some(ServiceControlCall::Subscribe {
@@ -406,8 +461,9 @@ mod tests {
         .expect_err("extra keys are rejected");
         assert_error(&error, "Invalid service call");
 
-        let error = parse_service_catalogue(&json!([{ "serviceId": "pi.models", "mode": "unknown" }]))
-            .expect_err("unknown modes are rejected");
+        let error =
+            parse_service_catalogue(&json!([{ "serviceId": "pi.models", "mode": "unknown" }]))
+                .expect_err("unknown modes are rejected");
         assert_error(&error, "Invalid service catalogue");
 
         // Adapted: upstream also exercises a JS-side NaN sequence; serde_json
@@ -441,7 +497,8 @@ mod tests {
             }],
         };
         assert_eq!(
-            parse_service_subscription_snapshot(&to_value(&snapshot)).expect("decoded snapshot validates"),
+            parse_service_subscription_snapshot(&to_value(&snapshot))
+                .expect("decoded snapshot validates"),
             snapshot
         );
         let mut encoder = create_service_state_encoder();
@@ -463,7 +520,8 @@ mod tests {
         );
         let wire_update = encoder.encode_update(update).expect("update encodes");
         assert_eq!(
-            parse_wire_service_provider_update(&to_value(&wire_update)).expect("wire update validates"),
+            parse_wire_service_provider_update(&to_value(&wire_update))
+                .expect("wire update validates"),
             wire_update
         );
     }
@@ -476,7 +534,11 @@ mod tests {
         let snapshot = singleton_state_snapshot();
         assert_eq!(
             decoder
-                .decode_snapshot(encoder.encode_snapshot(snapshot.clone()).expect("snapshot encodes"))
+                .decode_snapshot(
+                    encoder
+                        .encode_snapshot(snapshot.clone())
+                        .expect("snapshot encodes")
+                )
                 .expect("snapshot decodes"),
             snapshot
         );
@@ -484,7 +546,9 @@ mod tests {
         let first = state_update("state", 1, 1);
         let second = state_update("state", 2, 2);
         let first_wire = encoder.encode_update(first.clone()).expect("first encodes");
-        let second_wire = encoder.encode_update(second.clone()).expect("second encodes");
+        let second_wire = encoder
+            .encode_update(second.clone())
+            .expect("second encodes");
         assert_eq!(
             to_value(&first_wire),
             json!({ "type": "state", "member": "state", "sequence": 1, "ops": [["s", ["revision"], 1]] })
@@ -496,8 +560,14 @@ mod tests {
                 ["s", 0, 2],
             ] })
         );
-        assert_eq!(decoder.decode_update(first_wire).expect("first decodes"), first);
-        assert_eq!(decoder.decode_update(second_wire).expect("second decodes"), second);
+        assert_eq!(
+            decoder.decode_update(first_wire).expect("first decodes"),
+            first
+        );
+        assert_eq!(
+            decoder.decode_update(second_wire).expect("second decodes"),
+            second
+        );
     }
 
     // service-wire.test.ts:
@@ -519,7 +589,11 @@ mod tests {
             }],
         };
         decoder
-            .decode_snapshot(encoder.encode_snapshot(snapshot.clone()).expect("snapshot encodes"))
+            .decode_snapshot(
+                encoder
+                    .encode_snapshot(snapshot.clone())
+                    .expect("snapshot encodes"),
+            )
             .expect("snapshot decodes");
         for sequence in 1..=2u64 {
             let update = ServiceProviderUpdate::State {
@@ -529,7 +603,11 @@ mod tests {
                 ops: dec_ops(json!([["s", ["before"], sequence]])),
             };
             decoder
-                .decode_update(encoder.encode_update(update.clone()).expect("update encodes"))
+                .decode_update(
+                    encoder
+                        .encode_update(update.clone())
+                        .expect("update encodes"),
+                )
                 .expect("update decodes");
         }
         let reset = ServiceProviderUpdate::Reset {
@@ -549,7 +627,10 @@ mod tests {
         assert!(parse_service_provider_update(&to_value(&reset)).is_ok());
         let wire_reset = encoder.encode_update(reset.clone()).expect("reset encodes");
         assert!(parse_wire_service_provider_update(&to_value(&wire_reset)).is_ok());
-        assert_eq!(decoder.decode_update(wire_reset).expect("reset decodes"), reset);
+        assert_eq!(
+            decoder.decode_update(wire_reset).expect("reset decodes"),
+            reset
+        );
         for sequence in 104..=106u64 {
             let update = ServiceProviderUpdate::State {
                 instance: None,
@@ -559,7 +640,11 @@ mod tests {
             };
             assert_eq!(
                 decoder
-                    .decode_update(encoder.encode_update(update.clone()).expect("update encodes"))
+                    .decode_update(
+                        encoder
+                            .encode_update(update.clone())
+                            .expect("update encodes")
+                    )
                     .expect("update decodes"),
                 update
             );
@@ -571,8 +656,13 @@ mod tests {
             .insert("extra".into(), json!(true));
         assert!(parse_service_provider_update(&reset_with_extra).is_err());
         assert!(parse_wire_service_provider_update(&reset_with_extra).is_err());
-        assert!(parse_service_provider_update(&json!({ "type": "reset", "snapshot": {} })).is_err());
-        assert!(parse_wire_service_provider_update(&json!({ "type": "reset", "snapshot": {} })).is_err());
+        assert!(
+            parse_service_provider_update(&json!({ "type": "reset", "snapshot": {} })).is_err()
+        );
+        assert!(
+            parse_wire_service_provider_update(&json!({ "type": "reset", "snapshot": {} }))
+                .is_err()
+        );
         let non_replacement_reset = json!({
             "type": "reset",
             "snapshot": {
@@ -585,10 +675,11 @@ mod tests {
                 ],
             },
         });
-        let error = parse_service_provider_update(&non_replacement_reset).expect_err("non-replacement rejected");
+        let error = parse_service_provider_update(&non_replacement_reset)
+            .expect_err("non-replacement rejected");
         assert_error(&error, "full root replacements");
-        let error =
-            parse_wire_service_provider_update(&non_replacement_reset).expect_err("non-replacement rejected");
+        let error = parse_wire_service_provider_update(&non_replacement_reset)
+            .expect_err("non-replacement rejected");
         assert_error(&error, "full root replacements");
     }
 
@@ -619,16 +710,32 @@ mod tests {
         let mut second_encoder = create_service_state_encoder();
         let mut second_decoder = create_service_state_decoder();
         first_decoder
-            .decode_snapshot(first_encoder.encode_snapshot(snapshot.clone()).expect("snapshot encodes"))
+            .decode_snapshot(
+                first_encoder
+                    .encode_snapshot(snapshot.clone())
+                    .expect("snapshot encodes"),
+            )
             .expect("snapshot decodes");
         second_decoder
-            .decode_snapshot(second_encoder.encode_snapshot(snapshot).expect("snapshot encodes"))
+            .decode_snapshot(
+                second_encoder
+                    .encode_snapshot(snapshot)
+                    .expect("snapshot encodes"),
+            )
             .expect("snapshot decodes");
 
-        let first_left = first_encoder.encode_update(state_update("left", 1, 1)).expect("encodes");
-        let first_right = first_encoder.encode_update(state_update("right", 1, 1)).expect("encodes");
-        let second_left = first_encoder.encode_update(state_update("left", 2, 2)).expect("encodes");
-        let second_right = first_encoder.encode_update(state_update("right", 2, 2)).expect("encodes");
+        let first_left = first_encoder
+            .encode_update(state_update("left", 1, 1))
+            .expect("encodes");
+        let first_right = first_encoder
+            .encode_update(state_update("right", 1, 1))
+            .expect("encodes");
+        let second_left = first_encoder
+            .encode_update(state_update("left", 2, 2))
+            .expect("encodes");
+        let second_right = first_encoder
+            .encode_update(state_update("right", 2, 2))
+            .expect("encodes");
         assert_eq!(
             to_value(&first_left),
             json!({ "type": "state", "member": "left", "sequence": 1, "ops": [["s", ["revision"], 1]] })
@@ -652,29 +759,41 @@ mod tests {
             ] })
         );
         assert_eq!(
-            first_decoder.decode_update(first_left.clone()).expect("decodes"),
+            first_decoder
+                .decode_update(first_left.clone())
+                .expect("decodes"),
             state_update("left", 1, 1)
         );
         assert_eq!(
-            first_decoder.decode_update(first_right.clone()).expect("decodes"),
+            first_decoder
+                .decode_update(first_right.clone())
+                .expect("decodes"),
             state_update("right", 1, 1)
         );
         assert_eq!(
-            first_decoder.decode_update(second_left.clone()).expect("decodes"),
+            first_decoder
+                .decode_update(second_left.clone())
+                .expect("decodes"),
             state_update("left", 2, 2)
         );
         assert_eq!(
-            first_decoder.decode_update(second_right.clone()).expect("decodes"),
+            first_decoder
+                .decode_update(second_right.clone())
+                .expect("decodes"),
             state_update("right", 2, 2)
         );
 
-        let independent_left = second_encoder.encode_update(state_update("left", 1, 1)).expect("encodes");
+        let independent_left = second_encoder
+            .encode_update(state_update("left", 1, 1))
+            .expect("encodes");
         assert_eq!(
             to_value(&independent_left),
             json!({ "type": "state", "member": "left", "sequence": 1, "ops": [["s", ["revision"], 1]] })
         );
         assert_eq!(
-            second_decoder.decode_update(independent_left).expect("decodes"),
+            second_decoder
+                .decode_update(independent_left)
+                .expect("decodes"),
             state_update("left", 1, 1)
         );
 
@@ -686,11 +805,17 @@ mod tests {
         };
         assert_eq!(
             first_decoder
-                .decode_update(first_encoder.encode_update(left_base.clone()).expect("encodes"))
+                .decode_update(
+                    first_encoder
+                        .encode_update(left_base.clone())
+                        .expect("encodes")
+                )
                 .expect("decodes"),
             left_base
         );
-        let third_right = first_encoder.encode_update(state_update("right", 3, 3)).expect("encodes");
+        let third_right = first_encoder
+            .encode_update(state_update("right", 3, 3))
+            .expect("encodes");
         assert_eq!(
             to_value(&third_right),
             json!({ "type": "state", "member": "right", "sequence": 3, "ops": [["s", 0, 3]] })
@@ -717,7 +842,10 @@ mod tests {
                 .expect("decodes"),
             snapshot
         );
-        let address = ServiceInstanceAddress { key: "dialog-1".into(), generation: 1 };
+        let address = ServiceInstanceAddress {
+            key: "dialog-1".into(),
+            generation: 1,
+        };
         let spawned = ServiceProviderUpdate::Spawned {
             instance: ServiceInstanceSnapshot {
                 instance: Some(address.clone()),
@@ -746,7 +874,9 @@ mod tests {
                 .expect("decodes"),
             update
         );
-        let closed = ServiceProviderUpdate::Closed { instance: address.clone() };
+        let closed = ServiceProviderUpdate::Closed {
+            instance: address.clone(),
+        };
         assert_eq!(
             decoder
                 .decode_update(encoder.encode_update(closed.clone()).expect("encodes"))
@@ -759,7 +889,9 @@ mod tests {
             sequence: 2,
             ops: dec_ops(json!([["s", ["value"], 2]])),
         };
-        let error = encoder.encode_update(after_close).expect_err("closed codecs are removed");
+        let error = encoder
+            .encode_update(after_close)
+            .expect_err("closed codecs are removed");
         assert_error(&error, "Unknown service state");
     }
 
@@ -772,7 +904,10 @@ mod tests {
             service_id: "pi.dialogs".into(),
             mode: ServiceMode::Keyed,
             instances: vec![ServiceInstanceSnapshot {
-                instance: Some(ServiceInstanceAddress { key: "dialog-1".into(), generation: 1 }),
+                instance: Some(ServiceInstanceAddress {
+                    key: "dialog-1".into(),
+                    generation: 1,
+                }),
                 members: vec![
                     ServiceMemberSnapshot::State {
                         name: "request".into(),
@@ -787,7 +922,9 @@ mod tests {
                 ],
             }],
         };
-        let error = encoder.encode_snapshot(snapshot).expect_err("duplicate names rejected");
+        let error = encoder
+            .encode_snapshot(snapshot)
+            .expect_err("duplicate names rejected");
         assert_error(&error, "Duplicate service state dialog-1@1.request");
     }
 
@@ -796,12 +933,13 @@ mod tests {
     async fn remote_service_endpoints_publish_and_clean_up_provider_subscriptions() {
         use crate::context::BACKGROUND_CONTEXT;
         use crate::services::provider::{
-            create_remote_service_endpoint, ProviderDefinition, RemoteServiceProvider, ServiceUpdatePublisher,
+            create_remote_service_endpoint, ProviderDefinition, RemoteServiceProvider,
+            ServiceUpdatePublisher,
         };
         use crate::services::state::MutableReplicatedState;
         use crate::types::{RemoteServiceImpl, ServiceMember, ServiceMode};
-        use std::sync::{Arc};
-        use {parking_lot::Mutex};
+        use parking_lot::Mutex;
+        use std::sync::Arc;
 
         fn ctx() -> &'static crate::context::Context {
             &BACKGROUND_CONTEXT
@@ -818,33 +956,48 @@ mod tests {
         }
 
         let provider = Arc::new(
-            RemoteServiceProvider::new(vec![ProviderDefinition::new("test.counter", ServiceMode::Singleton)])
-                .expect("catalogue is unique"),
+            RemoteServiceProvider::new(vec![ProviderDefinition::new(
+                "test.counter",
+                ServiceMode::Singleton,
+            )])
+            .expect("catalogue is unique"),
         );
         let state = MutableReplicatedState::new(json!({ "value": 0 }));
         provider
-            .provide("test.counter", Arc::new(CounterObject { state: state.clone() }))
+            .provide(
+                "test.counter",
+                Arc::new(CounterObject {
+                    state: state.clone(),
+                }),
+            )
             .expect("provide succeeds");
         let endpoint = create_remote_service_endpoint(provider.clone());
         let updates: Arc<Mutex<Vec<JsonValue>>> = Arc::new(Mutex::new(Vec::new()));
         let updates_sink = updates.clone();
-        let publish: ServiceUpdatePublisher = Arc::new(move |_subscription_id, update, _context| {
-            updates_sink
-                .lock()
-                
-                .push(serde_json::to_value(update).expect("update serializes"));
-            Box::pin(async {})
-        });
+        let publish: ServiceUpdatePublisher =
+            Arc::new(move |_subscription_id, update, _context| {
+                updates_sink
+                    .lock()
+                    .push(serde_json::to_value(update).expect("update serializes"));
+                Box::pin(async {})
+            });
 
         let catalogue = endpoint
             .invoke(&create_service_catalogue_call(), &publish, ctx())
             .await
             .expect("catalogue invoke succeeds")
             .expect("catalogue result");
-        assert_eq!(catalogue, json!([{ "serviceId": "test.counter", "mode": "singleton" }]));
+        assert_eq!(
+            catalogue,
+            json!([{ "serviceId": "test.counter", "mode": "singleton" }])
+        );
         let snapshot = endpoint
             .invoke(
-                &create_service_subscribe_call("subscription-1", "test.counter", ServiceMode::Singleton),
+                &create_service_subscribe_call(
+                    "subscription-1",
+                    "test.counter",
+                    ServiceMode::Singleton,
+                ),
                 &publish,
                 ctx(),
             )
@@ -855,18 +1008,23 @@ mod tests {
         assert_eq!(snapshot.get("mode"), Some(&json!("singleton")));
 
         state
-            .change(ctx(), |draft| draft.set(&[], "value", json!(1)).map_err(AnyError::from))
+            .change(ctx(), |draft| {
+                draft.set(&[], "value", json!(1)).map_err(AnyError::from)
+            })
             .expect("change succeeds");
         assert_eq!(
             updates.lock().clone(),
-            vec![json!({ "type": "state", "member": "state", "sequence": 1, "ops": [["s", ["value"], 1]] })]
+            vec![
+                json!({ "type": "state", "member": "state", "sequence": 1, "ops": [["s", ["value"], 1]] })
+            ]
         );
         endpoint.dispose().await;
         state
-            .change(ctx(), |draft| draft.set(&[], "value", json!(2)).map_err(AnyError::from))
+            .change(ctx(), |draft| {
+                draft.set(&[], "value", json!(2)).map_err(AnyError::from)
+            })
             .expect("change after dispose succeeds");
         assert_eq!(updates.lock().len(), 1);
         provider.dispose().expect("provider disposes");
     }
 }
-

@@ -4,7 +4,7 @@ members = ["crates/*"]
 
 # Workspace version mirrors the upstream pi release that has been ported.
 [workspace.package]
-version = "1.0.3"
+version = "1.1.0"
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/earendil-works/pi"

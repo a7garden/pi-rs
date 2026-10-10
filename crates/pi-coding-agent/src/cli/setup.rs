@@ -5,6 +5,6 @@
 //! (the dispatcher itself is deferred — D83).
 
 pub fn setup_cli() {
-	std::env::set_var("PI_CODING_AGENT", "true");
-	std::env::set_var("AI_AGENT", "pi");
+    std::env::set_var("PI_CODING_AGENT", "true");
+    std::env::set_var("AI_AGENT", "pi");
 }

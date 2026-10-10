@@ -50,7 +50,11 @@ pub async fn bundle_facet_package(
     let metadata = read_facet_package_metadata(&options.package_path)?;
     let entries = resolve_facet_entries(&metadata, &options.default_facets)?;
     let mut external = Vec::new();
-    for specifier in metadata.peer_dependencies.iter().chain(metadata.external.iter()) {
+    for specifier in metadata
+        .peer_dependencies
+        .iter()
+        .chain(metadata.external.iter())
+    {
         external.push(specifier.clone());
         external.push(format!("{specifier}/*"));
     }
@@ -97,14 +101,27 @@ fn read_facet_package_metadata(package_path: &Path) -> Result<FacetPackageMetada
         }
     };
     let (package_directory, package_json_path) = if candidate_stats.is_dir() {
-        let real = fs::canonicalize(&candidate)
-            .map_err(|e| error(format!("Could not resolve facet package {}: {e}", candidate.display())))?;
+        let real = fs::canonicalize(&candidate).map_err(|e| {
+            error(format!(
+                "Could not resolve facet package {}: {e}",
+                candidate.display()
+            ))
+        })?;
         let manifest = real.join("package.json");
         (real, manifest)
-    } else if candidate_stats.is_file() && candidate.file_name().and_then(|n| n.to_str()) == Some("package.json") {
-        let real = fs::canonicalize(&candidate)
-            .map_err(|e| error(format!("Could not resolve facet package {}: {e}", candidate.display())))?;
-        let dir = real.parent().map(Path::to_path_buf).unwrap_or_else(|| PathBuf::from("."));
+    } else if candidate_stats.is_file()
+        && candidate.file_name().and_then(|n| n.to_str()) == Some("package.json")
+    {
+        let real = fs::canonicalize(&candidate).map_err(|e| {
+            error(format!(
+                "Could not resolve facet package {}: {e}",
+                candidate.display()
+            ))
+        })?;
+        let dir = real
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| PathBuf::from("."));
         (dir, real)
     } else {
         return Err(error(format!(
@@ -157,7 +174,8 @@ fn read_facet_package_metadata(package_path: &Path) -> Result<FacetPackageMetada
                 package_json_path.display()
             ))
         })?;
-    let peer_dependencies = parse_peer_dependencies(parsed.get("peerDependencies"), &package_json_path)?;
+    let peer_dependencies =
+        parse_peer_dependencies(parsed.get("peerDependencies"), &package_json_path)?;
     let chord = parse_chord_configuration(parsed.get("chord"), &package_json_path)?;
     Ok(FacetPackageMetadata {
         package_directory,
@@ -171,7 +189,10 @@ fn read_facet_package_metadata(package_path: &Path) -> Result<FacetPackageMetada
     })
 }
 
-fn parse_peer_dependencies(value: Option<&JsonValue>, package_json_path: &Path) -> Result<Vec<String>, AnyError> {
+fn parse_peer_dependencies(
+    value: Option<&JsonValue>,
+    package_json_path: &Path,
+) -> Result<Vec<String>, AnyError> {
     let Some(value) = non_null(value) else {
         return Ok(Vec::new());
     };
@@ -201,7 +222,10 @@ struct ChordConfiguration {
     source_map: bool,
 }
 
-fn parse_chord_configuration(value: Option<&JsonValue>, package_json_path: &Path) -> Result<ChordConfiguration, AnyError> {
+fn parse_chord_configuration(
+    value: Option<&JsonValue>,
+    package_json_path: &Path,
+) -> Result<ChordConfiguration, AnyError> {
     let Some(value) = non_null(value) else {
         return Ok(ChordConfiguration {
             facets: BTreeMap::new(),
@@ -298,7 +322,11 @@ fn resolve_facet_entries(
         let path = resolve_package_entry(&metadata.package_directory, source, name)?;
         match stat_file(&path) {
             Ok(canonical_path) => {
-                validate_canonical_package_entry(&metadata.package_directory, &canonical_path, name)?;
+                validate_canonical_package_entry(
+                    &metadata.package_directory,
+                    &canonical_path,
+                    name,
+                )?;
                 entries.insert(name.clone(), canonical_path.to_string_lossy().into_owned());
             }
             Err(EntryError::Missing) => continue,
@@ -318,12 +346,10 @@ fn resolve_facet_entries(
         validate_facet_mapping(name, source, "configured")?;
         let path = resolve_package_entry(&metadata.package_directory, source, name)?;
         let canonical_path = stat_file(&path).map_err(|e| match e {
-            EntryError::Missing => {
-                error(format!(
-                    "Could not access configured facet entry {name}: {}",
-                    path.display()
-                ))
-            }
+            EntryError::Missing => error(format!(
+                "Could not access configured facet entry {name}: {}",
+                path.display()
+            )),
             EntryError::Other(err) => error(format!(
                 "Configured facet entry {name} is not a file: {}: {err}",
                 path.display()
@@ -373,7 +399,11 @@ fn validate_facet_mapping(name: &str, source: &str, kind: &str) -> Result<(), An
     Ok(())
 }
 
-fn resolve_package_entry(package_directory: &Path, source: &str, name: &str) -> Result<PathBuf, AnyError> {
+fn resolve_package_entry(
+    package_directory: &Path,
+    source: &str,
+    name: &str,
+) -> Result<PathBuf, AnyError> {
     let source_path = Path::new(source);
     if source_path.is_absolute() {
         return Err(error(format!(
@@ -381,9 +411,11 @@ fn resolve_package_entry(package_directory: &Path, source: &str, name: &str) -> 
         )));
     }
     let path = package_directory.join(source_path);
-    let relative_path = path
-        .strip_prefix(package_directory)
-        .map_err(|_| error(format!("Facet package entry {name} escapes the package directory")))?;
+    let relative_path = path.strip_prefix(package_directory).map_err(|_| {
+        error(format!(
+            "Facet package entry {name} escapes the package directory"
+        ))
+    })?;
     let relative_str = relative_path.to_string_lossy();
     if relative_str.is_empty()
         || relative_str == ".."
@@ -397,7 +429,11 @@ fn resolve_package_entry(package_directory: &Path, source: &str, name: &str) -> 
     Ok(path)
 }
 
-fn validate_canonical_package_entry(package_directory: &Path, path: &Path, name: &str) -> Result<(), AnyError> {
+fn validate_canonical_package_entry(
+    package_directory: &Path,
+    path: &Path,
+    name: &str,
+) -> Result<(), AnyError> {
     let escape = match path.strip_prefix(package_directory) {
         Ok(relative_path) => {
             let relative_str = relative_path.to_string_lossy();
@@ -442,7 +478,10 @@ mod tests {
     struct UnusedCompiler;
     #[async_trait]
     impl FacetCompiler for UnusedCompiler {
-        async fn build(&self, _request: crate::node::bundle::FacetBuildRequest) -> Result<crate::node::bundle::FacetBuildOutput, AnyError> {
+        async fn build(
+            &self,
+            _request: crate::node::bundle::FacetBuildRequest,
+        ) -> Result<crate::node::bundle::FacetBuildOutput, AnyError> {
             Err(error("compiler must not be used"))
         }
     }
@@ -485,16 +524,17 @@ mod tests {
     #[test]
     fn rejects_absolute_configured_entries() {
         let dir = tempdir();
-        let err = resolve_package_entry(&dir, "/abs/entry.ts", "tui").unwrap_err().to_string();
+        let err = resolve_package_entry(&dir, "/abs/entry.ts", "tui")
+            .unwrap_err()
+            .to_string();
         assert_eq!(
             err,
             "Facet package entry tui must be relative to the package directory"
         );
-        let err = resolve_package_entry(&dir, "../outside.ts", "tui").unwrap_err().to_string();
-        assert_eq!(
-            err,
-            "Facet package entry tui escapes the package directory"
-        );
+        let err = resolve_package_entry(&dir, "../outside.ts", "tui")
+            .unwrap_err()
+            .to_string();
+        assert_eq!(err, "Facet package entry tui escapes the package directory");
     }
 
     #[test]
@@ -502,6 +542,9 @@ mod tests {
         let dir = tempdir();
         fs::write(dir.join("package.json"), r#"{"name":"","version":"1.0.0"}"#).unwrap();
         let err = read_facet_package_metadata(&dir).unwrap_err().to_string();
-        assert!(err.starts_with("Facet package must have a non-empty name: "), "{err}");
+        assert!(
+            err.starts_with("Facet package must have a non-empty name: "),
+            "{err}"
+        );
     }
 }

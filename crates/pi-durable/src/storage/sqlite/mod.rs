@@ -25,8 +25,10 @@ mod migrations_tests;
 mod storage_tests;
 
 pub use database::{
-	NodeSqliteStorageOptions, SqliteDatabase, SqliteStorageError, DEFAULT_BUSY_TIMEOUT_MS,
-	DEFAULT_WAL_AUTO_CHECKPOINT_PAGES,
+    NodeSqliteStorageOptions, SqliteDatabase, SqliteStorageError, DEFAULT_BUSY_TIMEOUT_MS,
+    DEFAULT_WAL_AUTO_CHECKPOINT_PAGES,
 };
-pub use migrations::{apply_sqlite_migrations, current_sqlite_schema_version, sqlite_migrations, SqliteMigration};
+pub use migrations::{
+    apply_sqlite_migrations, current_sqlite_schema_version, sqlite_migrations, SqliteMigration,
+};
 pub use storage::SqliteStorage;

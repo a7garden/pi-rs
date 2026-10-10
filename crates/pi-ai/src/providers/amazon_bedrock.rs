@@ -284,8 +284,8 @@ mod tests {
     use super::*;
     use crate::auth::types::{AuthContext, BoxFuture};
     use crate::models::{Models, MutableModels};
-    use std::collections::BTreeMap;
     use parking_lot::Mutex;
+    use std::collections::BTreeMap;
 
     /// `fakeAuthContext` from `test/helpers.ts`: env lookups from a map.
     struct MapContext {

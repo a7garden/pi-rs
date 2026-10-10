@@ -19,22 +19,22 @@ use pi_chord::context::Context;
 /// Upstream `PresentationSelectItem`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PresentationSelectItem {
-	pub value: String,
-	pub label: String,
-	pub description: Option<String>,
+    pub value: String,
+    pub label: String,
+    pub description: Option<String>,
 }
 
 /// Upstream `PresentationUI` shape as a trait (async select, sync
 /// `showStatus`).
 pub trait PresentationUi: Send + Sync {
-	fn select(
-		&self,
-		title: &str,
-		items: &[PresentationSelectItem],
-		selected_value: Option<&str>,
-		context: Context,
-	) -> Pin<Box<dyn Future<Output = Result<Option<String>, String>> + Send + '_>>;
-	fn show_status(&self, message: &str, context: Context);
+    fn select(
+        &self,
+        title: &str,
+        items: &[PresentationSelectItem],
+        selected_value: Option<&str>,
+        context: Context,
+    ) -> Pin<Box<dyn Future<Output = Result<Option<String>, String>> + Send + '_>>;
+    fn show_status(&self, message: &str, context: Context);
 }
 
 /// Concrete local service value (upstream provides the object itself).
@@ -42,42 +42,49 @@ pub trait PresentationUi: Send + Sync {
 pub struct PresentationUiHandle(pub Arc<dyn PresentationUi>);
 
 pub static PRESENTATION_UI: LazyLock<pi_chord::Service<PresentationUiHandle>> =
-	LazyLock::new(|| define_service("pi.local.presentation-ui", true).expect("service id is valid"));
+    LazyLock::new(|| {
+        define_service("pi.local.presentation-ui", true).expect("service id is valid")
+    });
 
 #[cfg(test)]
 mod tests {
-	use super::*;
+    use super::*;
 
-	struct NoopUi;
+    struct NoopUi;
 
-	impl PresentationUi for NoopUi {
-		fn select(
-			&self,
-			_title: &str,
-			items: &[PresentationSelectItem],
-			_selected_value: Option<&str>,
-			_context: Context,
-		) -> Pin<Box<dyn Future<Output = Result<Option<String>, String>> + Send + '_>> {
-			assert_eq!(items.len(), 1);
-			Box::pin(async { Ok(None) })
-		}
+    impl PresentationUi for NoopUi {
+        fn select(
+            &self,
+            _title: &str,
+            items: &[PresentationSelectItem],
+            _selected_value: Option<&str>,
+            _context: Context,
+        ) -> Pin<Box<dyn Future<Output = Result<Option<String>, String>> + Send + '_>> {
+            assert_eq!(items.len(), 1);
+            Box::pin(async { Ok(None) })
+        }
 
-		fn show_status(&self, _message: &str, _context: Context) {}
-	}
+        fn show_status(&self, _message: &str, _context: Context) {}
+    }
 
-	#[tokio::test]
-	async fn handle_selects_through_trait() {
-		let handle = PresentationUiHandle(Arc::new(NoopUi));
-		let item = PresentationSelectItem {
-			value: "a".into(),
-			label: "A".into(),
-			description: None,
-		};
-		let selected = handle
-			.0
-			.select("Title", &[item], None, pi_chord::context::BACKGROUND_CONTEXT.clone())
-			.await
-			.unwrap();
-		assert_eq!(selected, None);
-	}
+    #[tokio::test]
+    async fn handle_selects_through_trait() {
+        let handle = PresentationUiHandle(Arc::new(NoopUi));
+        let item = PresentationSelectItem {
+            value: "a".into(),
+            label: "A".into(),
+            description: None,
+        };
+        let selected = handle
+            .0
+            .select(
+                "Title",
+                &[item],
+                None,
+                pi_chord::context::BACKGROUND_CONTEXT.clone(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(selected, None);
+    }
 }

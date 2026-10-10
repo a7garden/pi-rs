@@ -82,5 +82,5 @@ mod cli_tests;
 /// Upstream `export default createMcpExtension()`: the built-in factory with
 /// default options.
 pub fn create_mcp_extension() -> crate::core::extensions::types::ExtensionFactory {
-	factory::create_mcp_extension(factory::McpExtensionOptions::default())
+    factory::create_mcp_extension(factory::McpExtensionOptions::default())
 }

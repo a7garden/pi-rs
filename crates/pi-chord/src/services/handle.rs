@@ -9,7 +9,7 @@
 
 use std::any::Any;
 use std::marker::PhantomData;
-use std::sync::{Arc};
+use std::sync::Arc;
 use {parking_lot::Mutex, parking_lot::MutexGuard};
 
 use crate::services::errors::{error, type_error, AnyError};
@@ -58,9 +58,9 @@ impl ServiceSlot {
     ) -> Result<LocalServiceView<T>, AnyError> {
         {
             let implementation = lock(&self.inner.implementation);
-            let implementation = implementation
-                .as_ref()
-                .ok_or_else(|| error(format!("Service {} is disconnected", self.inner.service_id)))?;
+            let implementation = implementation.as_ref().ok_or_else(|| {
+                error(format!("Service {} is disconnected", self.inner.service_id))
+            })?;
             if !implementation.is::<T>() {
                 return Err(type_error(format!(
                     "Service {} implementation has an incompatible type",
@@ -85,15 +85,21 @@ impl ServiceSlot {
 
     /// Upstream `resolve(property)`: assert access, then read from the live binding.
     /// Rust has no property keys; the typed view resolves the whole binding.
-    fn resolve<T: Any + Send + Sync>(&self, assert_access: &AccessChecker) -> Result<Arc<T>, AnyError> {
+    fn resolve<T: Any + Send + Sync>(
+        &self,
+        assert_access: &AccessChecker,
+    ) -> Result<Arc<T>, AnyError> {
         (assert_access)()?;
         let implementation = lock(&self.inner.implementation);
         let implementation = implementation
             .as_ref()
             .ok_or_else(|| error(format!("Service {} is disconnected", self.inner.service_id)))?;
-        Arc::clone(implementation)
-            .downcast::<T>()
-            .map_err(|_| type_error(format!("Service {} implementation has an incompatible type", self.inner.service_id)))
+        Arc::clone(implementation).downcast::<T>().map_err(|_| {
+            type_error(format!(
+                "Service {} implementation has an incompatible type",
+                self.inner.service_id
+            ))
+        })
     }
 }
 

@@ -82,8 +82,12 @@ impl Prepared {
     fn error(&self) -> Option<DeltaError> {
         match self.status() {
             PreparedStatus::Ready => None,
-            PreparedStatus::Consumed => Some(DeltaError::invalid("Prepared change has already been used")),
-            PreparedStatus::Aborted => Some(DeltaError::invalid("Prepared change has been aborted")),
+            PreparedStatus::Consumed => {
+                Some(DeltaError::invalid("Prepared change has already been used"))
+            }
+            PreparedStatus::Aborted => {
+                Some(DeltaError::invalid("Prepared change has been aborted"))
+            }
             PreparedStatus::Stale => Some(DeltaError::invalid("Prepared change is stale")),
         }
     }
@@ -166,7 +170,13 @@ impl Tracker {
     }
 
     pub fn begin_change(&mut self) -> Change<'_> {
-        let context = OverlayContext::new(self.owner, self.value.clone(), self.value.clone(), self.revision, false);
+        let context = OverlayContext::new(
+            self.owner,
+            self.value.clone(),
+            self.value.clone(),
+            self.revision,
+            false,
+        );
         Change {
             context,
             _tracker: self,
@@ -183,7 +193,11 @@ impl Tracker {
             vec![Op::Replace(value.clone())]
         };
         let base = self.value.clone();
-        let prepared_value = if replacement_noop { base.clone() } else { value };
+        let prepared_value = if replacement_noop {
+            base.clone()
+        } else {
+            value
+        };
         Ok(Prepared {
             owner: self.owner,
             base,
@@ -199,7 +213,9 @@ impl Tracker {
     /// touching authority.
     pub fn adopt(&mut self, prepared: Prepared) -> Result<(), DeltaError> {
         if prepared.owner != self.owner {
-            return Err(DeltaError::invalid("Prepared change belongs to a different tracker"));
+            return Err(DeltaError::invalid(
+                "Prepared change belongs to a different tracker",
+            ));
         }
         if let Some(error) = prepared.error() {
             return Err(error);
@@ -243,7 +259,10 @@ mod tests {
         // `value()` borrows it, so structural equality is the observable.
         assert_eq!(tracker.value(), &input);
         assert_eq!(tracker.value()["point"], input["point"]);
-        assert_eq!(tracker.value()["rows"][0]["values"][4], input["rows"][0]["values"][4]);
+        assert_eq!(
+            tracker.value()["rows"][0]["values"][4],
+            input["rows"][0]["values"][4]
+        );
         assert_eq!(tracker.revision(), 0);
     }
 
@@ -327,16 +346,16 @@ mod tests {
         let prepared = {
             let mut state = change.state();
             state
-                .set(&[Seg::key("safe"), Seg::key("__proto__")], "value", json!(2))
+                .set(
+                    &[Seg::key("safe"), Seg::key("__proto__")],
+                    "value",
+                    json!(2),
+                )
                 .unwrap();
             // Reads through the draft observe the edit before preparation.
             assert_eq!(
                 state
-                    .get(&[
-                        Seg::key("safe"),
-                        Seg::key("__proto__"),
-                        Seg::key("value")
-                    ])
+                    .get(&[Seg::key("safe"), Seg::key("__proto__"), Seg::key("value")])
                     .unwrap(),
                 Some(&json!(2))
             );
@@ -370,7 +389,7 @@ mod tests {
 #[cfg(test)]
 mod tracker_tests {
     use super::*;
-    use crate::delta::{Draft, Op, Seg, apply, decoder, encoder};
+    use crate::delta::{apply, decoder, encoder, Draft, Op, Seg};
     use serde_json::json;
 
     type R = Result<(), DeltaError>;
@@ -399,7 +418,10 @@ mod tracker_tests {
 
     fn assert_error<T: std::fmt::Debug>(result: Result<T, DeltaError>, needle: &str) {
         let message = result.unwrap_err().to_string();
-        assert!(message.contains(needle), "message `{message}` lacks `{needle}`");
+        assert!(
+            message.contains(needle),
+            "message `{message}` lacks `{needle}`"
+        );
     }
 
     /// Canonical JS `Object.keys` order for a committed object: integer-like
@@ -446,7 +468,10 @@ mod tracker_tests {
             state.push(&[Seg::key("values")], vec![json!(2)]).unwrap();
             change.prepare().unwrap()
         };
-        assert_eq!(initial, json!({"count": 1, "nested": {"text": "a"}, "values": [1]}));
+        assert_eq!(
+            initial,
+            json!({"count": 1, "nested": {"text": "a"}, "values": [1]})
+        );
         assert_eq!(prepared.base_revision, 0);
         assert_eq!(prepared.base, initial);
         assert_eq!(
@@ -456,7 +481,10 @@ mod tracker_tests {
         assert_eq!(
             prepared.ops,
             vec![
-                Op::Set { path: vec![Seg::key("count")], value: json!(2) },
+                Op::Set {
+                    path: vec![Seg::key("count")],
+                    value: json!(2)
+                },
                 Op::Append {
                     path: vec![Seg::key("nested"), Seg::key("text")],
                     text: "b".to_string(),
@@ -471,7 +499,10 @@ mod tracker_tests {
         );
         assert_eq!(tracker.value(), &initial);
         tracker.adopt(prepared).unwrap();
-        assert_eq!(initial, json!({"count": 1, "nested": {"text": "a"}, "values": [1]}));
+        assert_eq!(
+            initial,
+            json!({"count": 1, "nested": {"text": "a"}, "values": [1]})
+        );
         assert_eq!(
             tracker.value(),
             &json!({"count": 2, "nested": {"text": "ab"}, "values": [1, 2]})
@@ -597,7 +628,10 @@ mod tracker_tests {
         // Retained immutable publications remain at their original revision.
         assert_ne!(published.value, *tracker.value());
         assert_eq!(published.value, json!({"value": 1, "nested": {"count": 1}}));
-        assert_eq!(tracker.value(), &json!({"value": 2, "nested": {"count": 1}}));
+        assert_eq!(
+            tracker.value(),
+            &json!({"value": 2, "nested": {"count": 1}})
+        );
     }
 
     #[test]
@@ -708,9 +742,13 @@ mod tracker_tests {
         let prepared = {
             let mut change = tracker.begin_change();
             let mut state = change.state();
-            state.set(&[], "object", json!({"nested": {"value": 1}})).unwrap();
+            state
+                .set(&[], "object", json!({"nested": {"value": 1}}))
+                .unwrap();
             state.set(&[], "array", json!([{"value": 1}])).unwrap();
-            state.set_index(&[Seg::key("rows")], 0, json!({"value": 1})).unwrap();
+            state
+                .set_index(&[Seg::key("rows")], 0, json!({"value": 1}))
+                .unwrap();
             change.prepare().unwrap()
         };
         assert!(prepared.ops.is_empty());
@@ -759,8 +797,14 @@ mod tracker_tests {
                 .unwrap();
             state.set(&[Seg::key("object")], "b", json!(2)).unwrap();
             assert_eq!(state.length(&[Seg::key("values")]).unwrap(), 4);
-            assert_eq!(state.get_index(&[Seg::key("values")], 0).unwrap().unwrap(), &json!(1));
-            assert_eq!(state.get_index(&[Seg::key("values")], 2).unwrap().unwrap(), &json!(5));
+            assert_eq!(
+                state.get_index(&[Seg::key("values")], 0).unwrap().unwrap(),
+                &json!(1)
+            );
+            assert_eq!(
+                state.get_index(&[Seg::key("values")], 2).unwrap().unwrap(),
+                &json!(5)
+            );
             // Rust read_keys appends "length" for arrays; the index half
             // matches upstream's `Object.keys` order.
             assert_eq!(
@@ -781,7 +825,9 @@ mod tracker_tests {
         let prepared = {
             let mut change = tracker.begin_change();
             let mut state = change.state();
-            state.set(&[Seg::key("object")], "context", json!(7)).unwrap();
+            state
+                .set(&[Seg::key("object")], "context", json!(7))
+                .unwrap();
             state.set(&[Seg::key("object")], "proxy", json!(8)).unwrap();
             assert_eq!(
                 state.keys(&[Seg::key("object")]).unwrap(),
@@ -801,7 +847,8 @@ mod tracker_tests {
         // Upstream drives a splice through an object with a side-effecting
         // valueOf; coercion side effects are non-portable. The string-slice
         // append/truncate decomposition and codec round-trip are portable.
-        let mut tracker = Tracker::new(json!({"text": "abcdefgh", "values": [1, 2, 3], "marker": 0}));
+        let mut tracker =
+            Tracker::new(json!({"text": "abcdefgh", "values": [1, 2, 3], "marker": 0}));
         let prepared = {
             let mut change = tracker.begin_change();
             let mut state = change.state();
@@ -815,7 +862,9 @@ mod tracker_tests {
             state
                 .set(&[], "text", json!(format!("{}xyz", &text[3..])))
                 .unwrap();
-            state.splice(&[Seg::key("values")], 1, Some(1), vec![json!(4)]).unwrap();
+            state
+                .splice(&[Seg::key("values")], 1, Some(1), vec![json!(4)])
+                .unwrap();
             change.prepare().unwrap()
         };
         assert_eq!(
@@ -876,7 +925,10 @@ mod tracker_tests {
             let mut state = change.state();
             state.set(&[Seg::key("object")], "2", json!("two")).unwrap();
             state.set(&[Seg::key("object")], "1", json!("one")).unwrap();
-            assert_eq!(state.keys(&[Seg::key("object")]).unwrap(), vec!["1", "2", "label"]);
+            assert_eq!(
+                state.keys(&[Seg::key("object")]).unwrap(),
+                vec!["1", "2", "label"]
+            );
             let first = state.keys(&[Seg::key("object")]).unwrap()[0].clone();
             state.set(&[], "first", json!(first)).unwrap();
             change.prepare().unwrap()
@@ -903,7 +955,10 @@ mod tracker_tests {
         let replayed = replay(&initial, &prepared.ops);
         assert_eq!(
             prepared.ops,
-            vec![Op::Set { path: vec![Seg::key("count")], value: json!(1) }]
+            vec![Op::Set {
+                path: vec![Seg::key("count")],
+                value: json!(1)
+            }]
         );
         assert_eq!(js_keys(&prepared.value["child"]), vec!["a", "b"]);
         assert_eq!(js_keys(&replayed["child"]), vec!["a", "b"]);
@@ -922,9 +977,15 @@ mod tracker_tests {
             state.delete(&[Seg::key("object")], "2").unwrap();
             state.set(&[Seg::key("object")], "2", json!("two")).unwrap();
             state.delete(&[Seg::key("object")], "first").unwrap();
-            state.set(&[Seg::key("object")], "first", json!("a")).unwrap();
-            state.set(&[Seg::key("object")], "3", json!("three")).unwrap();
-            state.set(&[Seg::key("object")], "0", json!("zero")).unwrap();
+            state
+                .set(&[Seg::key("object")], "first", json!("a"))
+                .unwrap();
+            state
+                .set(&[Seg::key("object")], "3", json!("three"))
+                .unwrap();
+            state
+                .set(&[Seg::key("object")], "0", json!("zero"))
+                .unwrap();
             assert_eq!(
                 state.keys(&[Seg::key("object")]).unwrap(),
                 vec!["0", "1", "2", "3", "second", "first"]
@@ -954,7 +1015,10 @@ mod tracker_tests {
             let mut state = change.state();
             state.set(&[Seg::key("object")], "2", json!("two")).unwrap();
             state.set(&[Seg::key("object")], "1", json!("one")).unwrap();
-            assert_eq!(state.keys(&[Seg::key("object")]).unwrap(), vec!["1", "2", "label"]);
+            assert_eq!(
+                state.keys(&[Seg::key("object")]).unwrap(),
+                vec!["1", "2", "label"]
+            );
             change.prepare().unwrap()
         };
         assert_eq!(js_keys(&prepared.value["object"]), vec!["1", "2", "label"]);
@@ -1021,13 +1085,24 @@ mod tracker_tests {
         settle(&mut tracker, |draft| {
             draft.set(&[], "value", json!(1)).unwrap();
             draft.set(&[], "value", json!(1)).unwrap();
-            draft.set_index(&[Seg::key("values")], 0, JsonValue::Null).unwrap();
-            draft.set_index(&[Seg::key("values")], 0, JsonValue::Null).unwrap();
+            draft
+                .set_index(&[Seg::key("values")], 0, JsonValue::Null)
+                .unwrap();
+            draft
+                .set_index(&[Seg::key("values")], 0, JsonValue::Null)
+                .unwrap();
             draft.push(&[Seg::key("values")], vec![json!(2)]).unwrap();
-            draft.set_index(&[Seg::key("values")], 1, JsonValue::Null).unwrap();
-            draft.set_index(&[Seg::key("values")], 1, JsonValue::Null).unwrap();
+            draft
+                .set_index(&[Seg::key("values")], 1, JsonValue::Null)
+                .unwrap();
+            draft
+                .set_index(&[Seg::key("values")], 1, JsonValue::Null)
+                .unwrap();
         });
-        assert_eq!(tracker.value(), &json!({"value": 1, "values": [null, null]}));
+        assert_eq!(
+            tracker.value(),
+            &json!({"value": 1, "values": [null, null]})
+        );
     }
 
     #[test]
@@ -1037,7 +1112,10 @@ mod tracker_tests {
             let mut change = tracker.begin_change();
             let mut state = change.state();
             assert_error(
-                state.set_index(&[Seg::key("values")], 3, json!(4)).map_err(|e| e).map(|_| ()),
+                state
+                    .set_index(&[Seg::key("values")], 3, json!(4))
+                    .map_err(|e| e)
+                    .map(|_| ()),
                 "holes",
             );
             assert_eq!(state.length(&[Seg::key("values")]).unwrap(), 2);
@@ -1078,7 +1156,13 @@ mod tracker_tests {
             let grown: Vec<JsonValue> = (0..5).map(|index| read_value(draft, index)).collect();
             assert_eq!(
                 grown,
-                vec![json!(3), json!(1), json!(2), JsonValue::Null, JsonValue::Null]
+                vec![
+                    json!(3),
+                    json!(1),
+                    json!(2),
+                    JsonValue::Null,
+                    JsonValue::Null
+                ]
             );
             draft.set_length(&[Seg::key("values")], 4).unwrap();
             draft.sort_default(&[Seg::key("values")]).unwrap();
@@ -1094,7 +1178,11 @@ mod tracker_tests {
         let mut state = change.state();
         for index in 0..20_000usize {
             state
-                .set(&[Seg::key("values")], &format!("field{index}"), json!(index))
+                .set(
+                    &[Seg::key("values")],
+                    &format!("field{index}"),
+                    json!(index),
+                )
                 .unwrap();
         }
         let keys = state.keys(&[Seg::key("values")]).unwrap();
@@ -1112,7 +1200,12 @@ mod tracker_tests {
             let state = change.state();
             assert_eq!(
                 state
-                    .get(&[Seg::key("nested"), Seg::key("rows"), Seg::index(0), Seg::key("value")])
+                    .get(&[
+                        Seg::key("nested"),
+                        Seg::key("rows"),
+                        Seg::index(0),
+                        Seg::key("value")
+                    ])
                     .unwrap()
                     .unwrap(),
                 &json!(1)
@@ -1140,9 +1233,15 @@ mod tracker_tests {
             let mut change = tracker.begin_change();
             let mut state = change.state();
             state.set(&[], "property", external.clone()).unwrap();
-            state.set_index(&[Seg::key("values")], 0, external.clone()).unwrap();
-            state.push(&[Seg::key("values")], vec![external.clone()]).unwrap();
-            state.unshift(&[Seg::key("values")], vec![external.clone()]).unwrap();
+            state
+                .set_index(&[Seg::key("values")], 0, external.clone())
+                .unwrap();
+            state
+                .push(&[Seg::key("values")], vec![external.clone()])
+                .unwrap();
+            state
+                .unshift(&[Seg::key("values")], vec![external.clone()])
+                .unwrap();
             state
                 .splice(&[Seg::key("values")], 2, Some(0), vec![external.clone()])
                 .unwrap();
@@ -1151,8 +1250,12 @@ mod tracker_tests {
                 .unwrap()
                 .unwrap()
                 .clone();
-            state.fill(&[Seg::key("values")], first, Some(1), Some(3)).unwrap();
-            state.copy_within(&[Seg::key("values")], 3, 0, Some(2)).unwrap();
+            state
+                .fill(&[Seg::key("values")], first, Some(1), Some(3))
+                .unwrap();
+            state
+                .copy_within(&[Seg::key("values")], 3, 0, Some(2))
+                .unwrap();
             change.prepare().unwrap()
         };
         // Every placement is an independent clone of `external` at its
@@ -1160,7 +1263,11 @@ mod tracker_tests {
         // 99` has no Rust counterpart because values copy on assignment.
         assert_eq!(prepared.value["property"], json!({"value": 5}));
         for index in 0..5 {
-            assert_eq!(prepared.value["values"][index], json!({"value": 5}), "index {index}");
+            assert_eq!(
+                prepared.value["values"][index],
+                json!({"value": 5}),
+                "index {index}"
+            );
         }
         // The sixth element is the entry appended by `push` before `unshift`
         // and `splice` shifted it; upstream only asserts `slice(0, 5)`.
@@ -1182,16 +1289,23 @@ mod tracker_tests {
             let mut change = tracker.begin_change();
             let mut state = change.state();
             assert_error(
-                state.set_index(&[Seg::key("values")], 3, json!(4)).map(|_| ()),
+                state
+                    .set_index(&[Seg::key("values")], 3, json!(4))
+                    .map(|_| ()),
                 "holes",
             );
-            assert_eq!(state.get_index(&[Seg::key("values")], 1).unwrap().unwrap(), &json!(2));
+            assert_eq!(
+                state.get_index(&[Seg::key("values")], 1).unwrap().unwrap(),
+                &json!(2)
+            );
             assert_eq!(
                 state.get_index(&[Seg::key("values")], 0).unwrap().unwrap(),
                 &json!(1)
             );
             state.set(&[], "payload", json!({"valid": true})).unwrap();
-            state.push(&[Seg::key("values")], vec![json!({"valid": true})]).unwrap();
+            state
+                .push(&[Seg::key("values")], vec![json!({"valid": true})])
+                .unwrap();
             change.prepare().unwrap()
         };
         assert_eq!(
@@ -1260,7 +1374,11 @@ mod tracker_tests {
             let mut state = first.state();
             let a = state.get(&[Seg::key("a")]).unwrap().unwrap().clone();
             state.set(&[], "b", a).unwrap();
-            let row0 = state.get_index(&[Seg::key("rows")], 0).unwrap().unwrap().clone();
+            let row0 = state
+                .get_index(&[Seg::key("rows")], 0)
+                .unwrap()
+                .unwrap()
+                .clone();
             state.set_index(&[Seg::key("rows")], 1, row0).unwrap();
             first.prepare().unwrap()
         };
@@ -1304,7 +1422,9 @@ mod tracker_tests {
             // Overlay writes are visible through NodeView path reads.
             let view = state.at(&[Seg::key("source")]).unwrap();
             let draft_value = view.get(&[Seg::key("value")]).unwrap().unwrap().clone();
-            state.set(&[], "draftCopy", json!({"value": draft_value})).unwrap();
+            state
+                .set(&[], "draftCopy", json!({"value": draft_value}))
+                .unwrap();
             change.prepare().unwrap()
         };
         assert_eq!(
@@ -1320,7 +1440,9 @@ mod tracker_tests {
         let prepared = {
             let mut change = tracker.begin_change();
             let mut state = change.state();
-            state.set(&[], "nested", json!({"rows": [{"value": 1}]})).unwrap();
+            state
+                .set(&[], "nested", json!({"rows": [{"value": 1}]}))
+                .unwrap();
             state
                 .set(
                     &[Seg::key("nested"), Seg::key("rows"), Seg::index(0)],
@@ -1329,11 +1451,19 @@ mod tracker_tests {
                 )
                 .unwrap();
             state
-                .push(&[Seg::key("nested"), Seg::key("rows")], vec![json!({"value": 3})])
+                .push(
+                    &[Seg::key("nested"), Seg::key("rows")],
+                    vec![json!({"value": 3})],
+                )
                 .unwrap();
-            state.push(&[Seg::key("rows")], vec![json!({"values": [1]})]).unwrap();
             state
-                .push(&[Seg::key("rows"), Seg::index(0), Seg::key("values")], vec![json!(2)])
+                .push(&[Seg::key("rows")], vec![json!({"values": [1]})])
+                .unwrap();
+            state
+                .push(
+                    &[Seg::key("rows"), Seg::index(0), Seg::key("values")],
+                    vec![json!(2)],
+                )
                 .unwrap();
             change.prepare().unwrap()
         };
@@ -1396,7 +1526,10 @@ mod tracker_tests {
         };
         assert_eq!(sparse_prepared.ops.len(), 1);
         assert!(matches!(sparse_prepared.ops[0], Op::Replace(_)));
-        assert_eq!(replay(&sparse_base, &sparse_prepared.ops), sparse_prepared.value);
+        assert_eq!(
+            replay(&sparse_base, &sparse_prepared.ops),
+            sparse_prepared.value
+        );
         sparse_tracker.adopt(sparse_prepared).unwrap();
     }
 
@@ -1511,9 +1644,17 @@ mod tracker_tests {
         let prepared = {
             let mut change = tracker.begin_change();
             let mut state = change.state();
-            assert_eq!(state.push(&[Seg::key("values")], vec![json!(4)]).unwrap(), 4);
+            assert_eq!(
+                state.push(&[Seg::key("values")], vec![json!(4)]).unwrap(),
+                4
+            );
             assert_eq!(state.pop(&[Seg::key("values")]).unwrap(), Some(json!(4)));
-            assert_eq!(state.unshift(&[Seg::key("values")], vec![json!(0)]).unwrap(), 4);
+            assert_eq!(
+                state
+                    .unshift(&[Seg::key("values")], vec![json!(0)])
+                    .unwrap(),
+                4
+            );
             assert_eq!(state.shift(&[Seg::key("values")]).unwrap(), Some(json!(0)));
             assert_eq!(
                 state
@@ -1530,7 +1671,9 @@ mod tracker_tests {
             state
                 .fill(&[Seg::key("values")], json!(9), Some(1), Some(3))
                 .unwrap();
-            state.copy_within(&[Seg::key("values")], 1, 0, Some(2)).unwrap();
+            state
+                .copy_within(&[Seg::key("values")], 1, 0, Some(2))
+                .unwrap();
             change.prepare().unwrap()
         };
         assert_eq!(prepared.value, json!({"values": [5, 5, 9, 2]}));
@@ -1546,14 +1689,15 @@ mod tracker_tests {
         // held across sibling mutations; the element is re-addressed at its
         // moved position, and detached handles are unrepresentable by
         // ownership. The reindex-following write and final state are ported.
-        let mut tracker = Tracker::new(
-            json!({"values": [{"value": "a"}, {"value": "b"}, {"value": "c"}]}),
-        );
+        let mut tracker =
+            Tracker::new(json!({"values": [{"value": "a"}, {"value": "b"}, {"value": "c"}]}));
         let prepared = {
             let mut change = tracker.begin_change();
             let mut state = change.state();
             let values = &[Seg::key("values")];
-            state.unshift(values, vec![json!({"value": "front"})]).unwrap();
+            state
+                .unshift(values, vec![json!({"value": "front"})])
+                .unwrap();
             {
                 let mut held = state.at(&[Seg::key("values"), Seg::index(2)]).unwrap();
                 held.set(&[], "value", json!("moved")).unwrap();
@@ -1577,8 +1721,12 @@ mod tracker_tests {
             let mut change = tracker.begin_change();
             let mut state = change.state();
             let values = &[Seg::key("values")];
-            state.push(values, vec![json!({"id": 1, "nested": [1]})]).unwrap();
-            state.unshift(values, vec![json!({"id": 0, "nested": []})]).unwrap();
+            state
+                .push(values, vec![json!({"id": 1, "nested": [1]})])
+                .unwrap();
+            state
+                .unshift(values, vec![json!({"id": 0, "nested": []})])
+                .unwrap();
             {
                 let mut held = state.at(values).unwrap();
                 let mut nested = held.at(&[Seg::index(1), Seg::key("nested")]).unwrap();
@@ -1615,7 +1763,10 @@ mod tracker_tests {
             let mut state = change.state();
             state
                 .sort_by(&[Seg::key("values")], |left, right| {
-                    left["rank"].as_i64().unwrap().cmp(&right["rank"].as_i64().unwrap())
+                    left["rank"]
+                        .as_i64()
+                        .unwrap()
+                        .cmp(&right["rank"].as_i64().unwrap())
                 })
                 .unwrap();
             // The rank-3 element (upstream `held`) moved to index 2.
@@ -1740,7 +1891,11 @@ mod tracker_tests {
                     .as_i64()
                     .unwrap();
                 state
-                    .set(&[Seg::key("rows"), Seg::index(index)], "value", json!(value + 1))
+                    .set(
+                        &[Seg::key("rows"), Seg::index(index)],
+                        "value",
+                        json!(value + 1),
+                    )
                     .unwrap();
             }
             change.prepare().unwrap()
@@ -1765,7 +1920,10 @@ mod tracker_tests {
         };
         assert_eq!(values_prepared.ops.len(), 1);
         assert!(matches!(values_prepared.ops[0], Op::Splice { .. }));
-        assert_eq!(replay(&values_base, &values_prepared.ops), values_prepared.value);
+        assert_eq!(
+            replay(&values_base, &values_prepared.ops),
+            values_prepared.value
+        );
         values_tracker.adopt(values_prepared).unwrap();
     }
 
@@ -1799,9 +1957,12 @@ mod tracker_tests {
         };
         assert_eq!(prepared.ops.len(), 2);
         let regional = prepared.ops.iter().find_map(|op| match op {
-            Op::Splice { path, start, remove, items } if path == &vec![Seg::key("rows")] => {
-                Some((*start, *remove, items.len()))
-            }
+            Op::Splice {
+                path,
+                start,
+                remove,
+                items,
+            } if path == &vec![Seg::key("rows")] => Some((*start, *remove, items.len())),
             _ => None,
         });
         assert_eq!(regional, Some((500, 500, 500)));
@@ -1843,7 +2004,12 @@ mod tracker_tests {
         };
         assert_eq!(prepared.ops.len(), 1);
         match &prepared.ops[0] {
-            Op::Splice { path, start, remove, .. } => {
+            Op::Splice {
+                path,
+                start,
+                remove,
+                ..
+            } => {
                 assert_eq!(path, &vec![Seg::key("rows")]);
                 assert_eq!((*start, *remove), (0, 256));
             }
@@ -1903,13 +2069,24 @@ mod tracker_tests {
         };
         assert_eq!(prepared.ops.len(), 1);
         match &prepared.ops[0] {
-            Op::Splice { path, start, remove, .. } => {
+            Op::Splice {
+                path,
+                start,
+                remove,
+                ..
+            } => {
                 assert_eq!(path, &vec![Seg::key("rows")]);
                 assert_eq!((*start, *remove), (0, 256));
             }
             other => panic!("expected splice, got {other:?}"),
         }
-        assert_eq!(prepared.value["rows"][100]["values"].as_array().unwrap().len(), 401);
+        assert_eq!(
+            prepared.value["rows"][100]["values"]
+                .as_array()
+                .unwrap()
+                .len(),
+            401
+        );
         assert_eq!(replay(&base, &prepared.ops), prepared.value);
         tracker.adopt(prepared).unwrap();
     }
@@ -1955,9 +2132,12 @@ mod tracker_tests {
             .ops
             .iter()
             .filter_map(|op| match op {
-                Op::Splice { path, start, remove, .. } if path == &vec![Seg::key("values")] => {
-                    Some((*start, *remove))
-                }
+                Op::Splice {
+                    path,
+                    start,
+                    remove,
+                    ..
+                } if path == &vec![Seg::key("values")] => Some((*start, *remove)),
                 _ => None,
             })
             .collect();
@@ -1984,7 +2164,10 @@ mod tracker_tests {
             for index in 0..10_000usize {
                 state.shift(&[Seg::key("values")]).unwrap();
                 state
-                    .push(&[Seg::key("values")], vec![json!({"value": 20_000 + index})])
+                    .push(
+                        &[Seg::key("values")],
+                        vec![json!({"value": 20_000 + index})],
+                    )
                     .unwrap();
             }
             change.prepare().unwrap()
@@ -2021,7 +2204,11 @@ mod tracker_tests {
             }
             for index in [1usize, 1_001, 5_001, 10_001, 15_001, 19_999] {
                 state
-                    .set(&[Seg::key("values"), Seg::index(index)], "value", json!(index as i64 + 100_000))
+                    .set(
+                        &[Seg::key("values"), Seg::index(index)],
+                        "value",
+                        json!(index as i64 + 100_000),
+                    )
                     .unwrap();
                 let value = expected["values"][index]["value"].as_i64().unwrap();
                 expected["values"][index]["value"] = json!(value + 100_000);
@@ -2057,8 +2244,12 @@ mod tracker_tests {
         let values: Vec<JsonValue> = (0..10_000).map(|value| json!(value)).collect();
         let mut tracker = Tracker::new(json!({"values": values}));
         settle(&mut tracker, |draft| {
-            draft.set_index(&[Seg::key("values")], 17, JsonValue::Null).unwrap();
-            draft.set_index(&[Seg::key("values")], 9_000, JsonValue::Null).unwrap();
+            draft
+                .set_index(&[Seg::key("values")], 17, JsonValue::Null)
+                .unwrap();
+            draft
+                .set_index(&[Seg::key("values")], 9_000, JsonValue::Null)
+                .unwrap();
         });
         assert_eq!(tracker.value()["values"][17], JsonValue::Null);
         assert_eq!(tracker.value()["values"][9_000], JsonValue::Null);
@@ -2068,13 +2259,17 @@ mod tracker_tests {
     fn supports_self_overlapping_fill_and_copywithin_by_value() {
         let mut tracker = Tracker::new(json!({"values": [{"n": 0}, {"n": 1}, {"n": 2}, {"n": 3}]}));
         settle(&mut tracker, |draft| {
-            draft.copy_within(&[Seg::key("values")], 1, 0, Some(3)).unwrap();
+            draft
+                .copy_within(&[Seg::key("values")], 1, 0, Some(3))
+                .unwrap();
             let source = draft
                 .get_index(&[Seg::key("values")], 1)
                 .unwrap()
                 .unwrap()
                 .clone();
-            draft.fill(&[Seg::key("values")], source, Some(0), Some(2)).unwrap();
+            draft
+                .fill(&[Seg::key("values")], source, Some(0), Some(2))
+                .unwrap();
             draft
                 .set(&[Seg::key("values"), Seg::index(0)], "n", json!(9))
                 .unwrap();
@@ -2095,7 +2290,10 @@ mod tracker_tests {
         let items: Vec<JsonValue> = (0..100_000).map(|value| json!(value)).collect();
         let prepared = {
             let mut change = tracker.begin_change();
-            change.state().unshift(&[Seg::key("values")], items).unwrap();
+            change
+                .state()
+                .unshift(&[Seg::key("values")], items)
+                .unwrap();
             change.prepare().unwrap()
         };
         assert_eq!(prepared.value["values"].as_array().unwrap().len(), 100_001);
@@ -2130,9 +2328,7 @@ mod tracker_tests {
             seed = seed.wrapping_add(0x6d2b_79f5);
             let mut value = seed ^ (seed >> 15);
             value = value.wrapping_mul(1 | seed);
-            value = value
-                .wrapping_add((value ^ (value >> 7)).wrapping_mul(61 | value))
-                ^ value;
+            value = value.wrapping_add((value ^ (value >> 7)).wrapping_mul(61 | value)) ^ value;
             (value ^ (value >> 14)) as f64 / 4_294_967_296.0
         }
     }
@@ -2148,8 +2344,14 @@ mod tracker_tests {
                 let text = document["text"].as_str().unwrap().to_string();
                 document["text"] = json!(format!("{text}-{value}"));
             }
-            1 => document["values"].as_array_mut().unwrap().push(random_item(value)),
-            2 => document["values"].as_array_mut().unwrap().insert(0, random_item(value)),
+            1 => document["values"]
+                .as_array_mut()
+                .unwrap()
+                .push(random_item(value)),
+            2 => document["values"]
+                .as_array_mut()
+                .unwrap()
+                .insert(0, random_item(value)),
             3 => {
                 if !document["values"].as_array().unwrap().is_empty() {
                     document["values"].as_array_mut().unwrap().remove(0);
@@ -2160,7 +2362,11 @@ mod tracker_tests {
             }
             5 => {
                 let length = document["values"].as_array().unwrap().len();
-                let index = if length == 0 { 0 } else { (value as usize) % (length + 1) };
+                let index = if length == 0 {
+                    0
+                } else {
+                    (value as usize) % (length + 1)
+                };
                 let remove = if length == 0 { 0 } else { (value as usize) % 2 };
                 let array = document["values"].as_array_mut().unwrap();
                 let end = (index + remove).min(array.len());
@@ -2222,8 +2428,16 @@ mod tracker_tests {
             }
             5 => {
                 let length = state.length(values).unwrap();
-                let index = if length == 0 { 0 } else { (value as usize) % (length + 1) };
-                let remove = if length == 0 { Some(0) } else { Some((value as usize) % 2) };
+                let index = if length == 0 {
+                    0
+                } else {
+                    (value as usize) % (length + 1)
+                };
+                let remove = if length == 0 {
+                    Some(0)
+                } else {
+                    Some((value as usize) % 2)
+                };
                 state.splice(values, index, remove, vec![random_item(value)])?;
             }
             6 => {
@@ -2231,7 +2445,10 @@ mod tracker_tests {
             }
             7 => {
                 state.sort_by(values, |left, right| {
-                    left["id"].as_i64().unwrap().cmp(&right["id"].as_i64().unwrap())
+                    left["id"]
+                        .as_i64()
+                        .unwrap()
+                        .cmp(&right["id"].as_i64().unwrap())
                 })?;
             }
             8 => {
@@ -2286,13 +2503,15 @@ mod tracker_tests {
                         let choice = (rng() * 11.0) as usize;
                         let value = seed as i64 * 10_000 + transaction * 10 + operation;
                         expected_mutate(&mut expected, choice, value);
-                        draft_mutate(&mut state, choice, value).unwrap_or_else(|error| {
-                            panic!("seed {seed} choice {choice}: {error}")
-                        });
+                        draft_mutate(&mut state, choice, value)
+                            .unwrap_or_else(|error| panic!("seed {seed} choice {choice}: {error}"));
                     }
                     change.prepare().unwrap()
                 };
-                assert_eq!(prepared.value, expected, "policy seed {seed} transaction {transaction}");
+                assert_eq!(
+                    prepared.value, expected,
+                    "policy seed {seed} transaction {transaction}"
+                );
                 assert_eq!(
                     replay(&base, &prepared.ops),
                     prepared.value,
@@ -2362,7 +2581,11 @@ mod tracker_tests {
             let mut change = tracker.begin_change();
             change
                 .state()
-                .set(&[Seg::key("safe"), Seg::key("__proto__")], "value", json!(2))
+                .set(
+                    &[Seg::key("safe"), Seg::key("__proto__")],
+                    "value",
+                    json!(2),
+                )
                 .unwrap();
             change.prepare().unwrap()
         };
@@ -2383,7 +2606,9 @@ mod tracker_tests {
             state
                 .set(&[Seg::key("rows"), Seg::index(0)], "value", json!(2))
                 .unwrap();
-            state.push(&[Seg::key("rows")], vec![json!({"value": 3})]).unwrap();
+            state
+                .push(&[Seg::key("rows")], vec![json!({"value": 3})])
+                .unwrap();
             change.prepare().unwrap()
         };
         let storage_clone = prepared.value.clone();
@@ -2391,4 +2616,3 @@ mod tracker_tests {
         tracker.adopt(prepared).unwrap();
     }
 }
-

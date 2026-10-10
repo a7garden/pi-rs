@@ -11,19 +11,19 @@ use serde::Serialize;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ResourceType {
-	Extension,
-	Skill,
-	Prompt,
-	Theme,
+    Extension,
+    Skill,
+    Prompt,
+    Theme,
 }
 
 /// Severity/kind of a diagnostic (`type`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum DiagnosticType {
-	Warning,
-	Error,
-	Collision,
+    Warning,
+    Error,
+    Collision,
 }
 
 /// A collision between two resources claiming the same name
@@ -31,14 +31,14 @@ pub enum DiagnosticType {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ResourceCollision {
-	pub resource_type: ResourceType,
-	/// Skill name, command/tool/flag name, prompt name, theme name.
-	pub name: String,
-	pub winner_path: String,
-	pub loser_path: String,
-	/// e.g. `"npm:foo"`, `"git:..."`, `"local"`.
-	pub winner_source: Option<String>,
-	pub loser_source: Option<String>,
+    pub resource_type: ResourceType,
+    /// Skill name, command/tool/flag name, prompt name, theme name.
+    pub name: String,
+    pub winner_path: String,
+    pub loser_path: String,
+    /// e.g. `"npm:foo"`, `"git:..."`, `"local"`.
+    pub winner_source: Option<String>,
+    pub loser_source: Option<String>,
 }
 
 /// A warning/error/collision surfaced while loading resources
@@ -46,8 +46,8 @@ pub struct ResourceCollision {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ResourceDiagnostic {
-	pub r#type: DiagnosticType,
-	pub message: String,
-	pub path: Option<String>,
-	pub collision: Option<ResourceCollision>,
+    pub r#type: DiagnosticType,
+    pub message: String,
+    pub path: Option<String>,
+    pub collision: Option<ResourceCollision>,
 }

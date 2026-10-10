@@ -41,7 +41,9 @@ pub struct CodemodeSourceError {
 
 impl CodemodeSourceError {
     fn new(message: impl Into<String>) -> Self {
-        Self { message: message.into() }
+        Self {
+            message: message.into(),
+        }
     }
 }
 
@@ -124,7 +126,9 @@ fn parse_options(directive: &str) -> Result<CodemodeSourceOptions, CodemodeSourc
     }
     if let Some(timeout_ms) = fields.get("timeout_ms") {
         let valid = is_safe_integer(timeout_ms)
-            && timeout_ms.as_f64().map_or(false, |v| v > 0.0 && v <= MAX_TIMEOUT_MS);
+            && timeout_ms
+                .as_f64()
+                .map_or(false, |v| v > 0.0 && v <= MAX_TIMEOUT_MS);
         if !valid {
             return Err(CodemodeSourceError::new(format!(
                 "@options field `timeout_ms` must be a positive integer up to {MAX_TIMEOUT_MS}"
@@ -148,10 +152,15 @@ pub fn parse_codemode_source(input: &str) -> Result<ParsedCodemodeSource, Codemo
         Some(index) => &input[..index],
         None => input,
     };
-    let first_line = first_line_full.strip_suffix('\r').unwrap_or(first_line_full);
+    let first_line = first_line_full
+        .strip_suffix('\r')
+        .unwrap_or(first_line_full);
     let trimmed = first_line.trim_start();
     if !trimmed.starts_with(CODEMODE_OPTIONS_PREFIX) {
-        return Ok(ParsedCodemodeSource { code: input.to_string(), options: CodemodeSourceOptions::default() });
+        return Ok(ParsedCodemodeSource {
+            code: input.to_string(),
+            options: CodemodeSourceOptions::default(),
+        });
     }
     let code = match newline {
         Some(index) => input[index..].to_string(),
@@ -163,7 +172,10 @@ pub fn parse_codemode_source(input: &str) -> Result<ParsedCodemodeSource, Codemo
         ));
     }
     let directive = trimmed[CODEMODE_OPTIONS_PREFIX.len()..].trim();
-    Ok(ParsedCodemodeSource { code, options: parse_options(directive)? })
+    Ok(ParsedCodemodeSource {
+        code,
+        options: parse_options(directive)?,
+    })
 }
 
 #[cfg(test)]
@@ -182,13 +194,17 @@ mod tests {
 
     #[test]
     fn parses_the_options_line_and_keeps_line_numbers() {
-        let parsed = parse_codemode_source("// @options: {\"timeout_ms\": 10}\nconst a = 1;\ntext(a)").unwrap();
+        let parsed =
+            parse_codemode_source("// @options: {\"timeout_ms\": 10}\nconst a = 1;\ntext(a)")
+                .unwrap();
         assert_eq!(parsed.code, "\nconst a = 1;\ntext(a)");
         assert_eq!(parsed.options.timeout_ms, Some(10));
         assert_eq!(parsed.options.max_output_tokens, None);
 
-        let parsed =
-            parse_codemode_source("  // @options:{\"max_output_tokens\":0,\"timeout_ms\":1500}\r\ntext(1)").unwrap();
+        let parsed = parse_codemode_source(
+            "  // @options:{\"max_output_tokens\":0,\"timeout_ms\":1500}\r\ntext(1)",
+        )
+        .unwrap();
         assert_eq!(parsed.options.max_output_tokens, Some(0));
         assert_eq!(parsed.options.timeout_ms, Some(1500));
 
@@ -203,7 +219,12 @@ mod tests {
         let parsed = parse_codemode_source(input).unwrap();
         assert_eq!(parsed.code, input);
         assert_eq!(parsed.options, CodemodeSourceOptions::default());
-        assert_eq!(parse_codemode_source("// @optionsx {}\ntext(1)").unwrap().options, CodemodeSourceOptions::default());
+        assert_eq!(
+            parse_codemode_source("// @optionsx {}\ntext(1)")
+                .unwrap()
+                .options,
+            CodemodeSourceOptions::default()
+        );
     }
 
     #[test]
@@ -227,7 +248,11 @@ mod tests {
             if exact {
                 assert_eq!(error.message, message, "input: {input:?}");
             } else {
-                assert!(error.message.contains(message), "input: {input:?}, got: {}", error.message);
+                assert!(
+                    error.message.contains(message),
+                    "input: {input:?}, got: {}",
+                    error.message
+                );
             }
         }
     }

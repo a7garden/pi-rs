@@ -20,7 +20,7 @@ use std::any::Any;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc};
+use std::sync::Arc;
 use {parking_lot::Mutex, parking_lot::MutexGuard};
 
 use async_trait::async_trait;
@@ -35,10 +35,10 @@ use crate::services::state::service_delivery_context;
 use crate::services::state_internals::{SourceListener, StateInternals};
 use crate::services::wire::{decode_service_control_call, ServiceControlCall};
 use crate::types::{
-    BoxFuture, RemoteServiceImpl, RemoteMethod, ServiceProviderUpdate, ServiceCall,
-    ServiceCatalogueEntry, ServiceInstanceAddress, ServiceInstanceSnapshot, ServiceMember,
-    ServiceMemberSnapshot, ServiceMode, ServiceSubscription, ServiceSubscriptionSnapshot,
-    UpdateListener, Unsubscribe,
+    BoxFuture, RemoteMethod, RemoteServiceImpl, ServiceCall, ServiceCatalogueEntry,
+    ServiceInstanceAddress, ServiceInstanceSnapshot, ServiceMember, ServiceMemberSnapshot,
+    ServiceMode, ServiceProviderUpdate, ServiceSubscription, ServiceSubscriptionSnapshot,
+    Unsubscribe, UpdateListener,
 };
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -123,7 +123,9 @@ impl RemoteServiceProvider {
         let mut seen = HashSet::new();
         for entry in &entries {
             if !seen.insert(entry.service_id.as_str()) {
-                return Err(type_error("Remote service catalogue contains duplicate IDs"));
+                return Err(type_error(
+                    "Remote service catalogue contains duplicate IDs",
+                ));
             }
         }
         let catalogue = entries
@@ -198,7 +200,13 @@ impl RemoteServiceProvider {
         let members = classify(service_id, &implementation)?;
         let shape = service_member_shape(&members);
         assert_singleton_shape(registration, service_id, &shape)?;
-        let instance = create_instance(&Arc::clone(&self.inner), registration, members, implementation, None);
+        let instance = create_instance(
+            &Arc::clone(&self.inner),
+            registration,
+            members,
+            implementation,
+            None,
+        );
         registration.singleton_shape = Some(shape);
         registration.singleton = Some(instance);
         Ok(())
@@ -219,7 +227,12 @@ impl RemoteServiceProvider {
                 remove();
             }
         }
-        emit(&self.inner, service_id, ServiceProviderUpdate::Unavailable, None)
+        emit(
+            &self.inner,
+            service_id,
+            ServiceProviderUpdate::Unavailable,
+            None,
+        )
     }
 
     /// Check a singleton replacement without changing the active provider.
@@ -251,8 +264,13 @@ impl RemoteServiceProvider {
             let members = classify(service_id, &implementation)?;
             let shape = service_member_shape(&members);
             assert_singleton_shape(registration, service_id, &shape)?;
-            let replacement =
-                create_instance(&Arc::clone(&self.inner), registration, members, implementation, None);
+            let replacement = create_instance(
+                &Arc::clone(&self.inner),
+                registration,
+                members,
+                implementation,
+                None,
+            );
             if let Some(previous) = registration.singleton.take() {
                 previous.active.store(false, Ordering::SeqCst);
                 for remove in previous.remove_member_listeners {
@@ -310,7 +328,9 @@ impl RemoteServiceProvider {
             if registration.instances.contains_key(key) {
                 return Err(remote_service_error(
                     RemoteServiceErrorCode::ServiceModeMismatch,
-                    format!("Remote service {service_id} already has a live instance with key {key}"),
+                    format!(
+                        "Remote service {service_id} already has a live instance with key {key}"
+                    ),
                 ));
             }
             let generation = registration.generations.get(key).copied().unwrap_or(0) + 1;
@@ -320,8 +340,13 @@ impl RemoteServiceProvider {
                 generation,
             };
             let members = classify(service_id, &implementation)?;
-            let instance =
-                create_instance(&inner_arc, registration, members, implementation, Some(address.clone()));
+            let instance = create_instance(
+                &inner_arc,
+                registration,
+                members,
+                implementation,
+                Some(address.clone()),
+            );
             let snapshot = snapshot_instance(&instance);
             let active_flag = Arc::clone(&instance.active);
             registration.instances.insert(key.to_string(), instance);
@@ -394,7 +419,10 @@ impl RemoteServiceProvider {
                 None => {
                     return Err(remote_service_error(
                         RemoteServiceErrorCode::ServiceMemberNotFound,
-                        format!("Unknown remote service member {}.{}", call.service_id, call.member),
+                        format!(
+                            "Unknown remote service member {}.{}",
+                            call.service_id, call.member
+                        ),
                     ))
                 }
                 Some(InstanceMember::Method(method)) => Arc::clone(method),
@@ -445,7 +473,10 @@ impl RemoteServiceProvider {
         };
         {
             let mut subscriber_inner = lock(&subscriber.inner);
-            record_snapshot_sequences(&mut subscriber_inner.snapshot_sequences, &snapshot.instances);
+            record_snapshot_sequences(
+                &mut subscriber_inner.snapshot_sequences,
+                &snapshot.instances,
+            );
         }
         Ok(Box::new(ProviderSubscription {
             snapshot,
@@ -481,8 +512,14 @@ impl RemoteServiceProvider {
                     for remove in instance.remove_member_listeners {
                         remove();
                     }
-                    let address = instance.address.clone().expect("keyed instances have addresses");
-                    pending.push((id.clone(), ServiceProviderUpdate::Closed { instance: address }));
+                    let address = instance
+                        .address
+                        .clone()
+                        .expect("keyed instances have addresses");
+                    pending.push((
+                        id.clone(),
+                        ServiceProviderUpdate::Closed { instance: address },
+                    ));
                 }
                 // Subscriber termination happens after the lifecycle emissions above,
                 // mirroring upstream: a subscriber draining reentrantly still receives
@@ -558,20 +595,26 @@ fn create_instance(
         let listener_service_id = registration.service_id.clone();
         let listener_address = address.clone();
         let listener_member = name.clone();
-        let listener: SourceListener = Arc::new(move |ops: &[Op], sequence: u64, context: &Context| {
-            if !listener_active.load(Ordering::SeqCst) {
-                return;
-            }
-            let update = ServiceProviderUpdate::State {
-                instance: listener_address.clone(),
-                member: listener_member.clone(),
-                sequence,
-                ops: ops.to_vec(),
-            };
-            // Emission failures cannot propagate through the infallible source
-            // listener signature; upstream throws them into the state publisher.
-            let _ = emit(&listener_inner, &listener_service_id, update, Some(context.clone()));
-        });
+        let listener: SourceListener =
+            Arc::new(move |ops: &[Op], sequence: u64, context: &Context| {
+                if !listener_active.load(Ordering::SeqCst) {
+                    return;
+                }
+                let update = ServiceProviderUpdate::State {
+                    instance: listener_address.clone(),
+                    member: listener_member.clone(),
+                    sequence,
+                    ops: ops.to_vec(),
+                };
+                // Emission failures cannot propagate through the infallible source
+                // listener signature; upstream throws them into the state publisher.
+                let _ = emit(
+                    &listener_inner,
+                    &listener_service_id,
+                    update,
+                    Some(context.clone()),
+                );
+            });
         remove_member_listeners.push(internals.subscribe(listener));
     }
     ProviderInstance {
@@ -702,7 +745,10 @@ fn emit(
         queue_update(&mut guard, service_id, update, context)
     };
     let errors = drain_all(&subscribers);
-    throw_collected_errors(errors, &format!("Failed to publish remote service {service_id} update"))
+    throw_collected_errors(
+        errors,
+        &format!("Failed to publish remote service {service_id} update"),
+    )
 }
 
 /// Fill subscriber buffers (upstream `#emit` queueing phase). Returns the live
@@ -734,10 +780,14 @@ fn queue_update(
             let snapshot = snapshot_registration(registration);
             subscriber_inner.buffer.clear();
             subscriber_inner.snapshot_sequences.clear();
-            record_snapshot_sequences(&mut subscriber_inner.snapshot_sequences, &snapshot.instances);
-            subscriber_inner
-                .buffer
-                .push((ServiceProviderUpdate::Reset { snapshot }, delivery_context.clone()));
+            record_snapshot_sequences(
+                &mut subscriber_inner.snapshot_sequences,
+                &snapshot.instances,
+            );
+            subscriber_inner.buffer.push((
+                ServiceProviderUpdate::Reset { snapshot },
+                delivery_context.clone(),
+            ));
         } else {
             subscriber_inner
                 .buffer
@@ -789,7 +839,10 @@ fn record_snapshot_sequences(
     for instance in instances {
         for member in &instance.members {
             if let ServiceMemberSnapshot::State { name, sequence, .. } = member {
-                sequences.insert(state_member_key(instance.instance.as_ref(), name), *sequence);
+                sequences.insert(
+                    state_member_key(instance.instance.as_ref(), name),
+                    *sequence,
+                );
             }
         }
     }
@@ -801,7 +854,10 @@ fn update_covered_by_snapshot(
 ) -> bool {
     match update {
         ServiceProviderUpdate::State {
-            instance, member, sequence, ..
+            instance,
+            member,
+            sequence,
+            ..
         } => {
             let key = state_member_key(instance.as_ref(), member);
             let Some(recorded) = sequences.get(&key) else {
@@ -832,8 +888,9 @@ fn update_covered_by_snapshot(
             false
         }
         ServiceProviderUpdate::Closed { instance } => {
-            let encoded = serde_json::to_string(&serde_json::json!([instance.key, instance.generation]))
-                .expect("address serializes");
+            let encoded =
+                serde_json::to_string(&serde_json::json!([instance.key, instance.generation]))
+                    .expect("address serializes");
             let prefix = format!("{},", encoded.trim_end_matches(']'));
             let stale: Vec<String> = sequences
                 .keys()
@@ -882,7 +939,10 @@ impl ServiceSubscription for ProviderSubscription {
         // trait signature is infallible, so activation-time listener failures are
         // logged instead of propagated.
         if errors.len() == 1 {
-            tracing::warn!("Failed to activate remote service subscription: {}", errors[0]);
+            tracing::warn!(
+                "Failed to activate remote service subscription: {}",
+                errors[0]
+            );
         } else if !errors.is_empty() {
             tracing::warn!(
                 "Failed to activate remote service subscription: {} failures",
@@ -903,7 +963,9 @@ impl ServiceSubscription for ProviderSubscription {
         let mut inner = lock(&self.inner);
         if let Some(registration) = inner.registrations.get_mut(&self.service_id) {
             let target = Arc::as_ptr(&self.subscriber);
-            registration.subscribers.retain(|subscriber| Arc::as_ptr(subscriber) != target);
+            registration
+                .subscribers
+                .retain(|subscriber| Arc::as_ptr(subscriber) != target);
         }
     }
 }
@@ -916,7 +978,9 @@ fn classify(
     members.sort_by(|left, right| left.0.cmp(&right.0));
     members.dedup_by(|left, right| left.0 == right.0);
     if members.is_empty() {
-        return Err(type_error(format!("Remote service {service_id} has no members")));
+        return Err(type_error(format!(
+            "Remote service {service_id} has no members"
+        )));
     }
     Ok(members
         .into_iter()
@@ -964,7 +1028,9 @@ impl RemoteServiceImpl for RemoteServiceObject {
                     name.clone(),
                     match member {
                         ServiceMember::Method(method) => ServiceMember::Method(Arc::clone(method)),
-                        ServiceMember::State(internals) => ServiceMember::State(Arc::clone(internals)),
+                        ServiceMember::State(internals) => {
+                            ServiceMember::State(Arc::clone(internals))
+                        }
                     },
                 )
             })
@@ -987,9 +1053,9 @@ impl RemoteServiceObjectBuilder {
         mut self,
         name: impl Into<String>,
         method: impl Fn(Vec<JsonValue>, Context) -> BoxFuture<Result<Option<JsonValue>, AnyError>>
-        + Send
-        + Sync
-        + 'static,
+            + Send
+            + Sync
+            + 'static,
     ) -> RemoteServiceObjectBuilder {
         self.members
             .insert(name.into(), ServiceMember::Method(Arc::new(method)));
@@ -1001,13 +1067,17 @@ impl RemoteServiceObjectBuilder {
         name: impl Into<String>,
         internals: Arc<dyn StateInternals>,
     ) -> RemoteServiceObjectBuilder {
-        self.members.insert(name.into(), ServiceMember::State(internals));
+        self.members
+            .insert(name.into(), ServiceMember::State(internals));
         self
     }
 
     /// Registers the concrete object handed back by `use_singleton`
     /// (upstream: the implementation object itself).
-    pub fn local_object(mut self, object: Arc<dyn Any + Send + Sync>) -> RemoteServiceObjectBuilder {
+    pub fn local_object(
+        mut self,
+        object: Arc<dyn Any + Send + Sync>,
+    ) -> RemoteServiceObjectBuilder {
         self.local_object = Some(object);
         self
     }
@@ -1068,7 +1138,9 @@ pub struct RemoteServiceEndpoint {
     disposed: AtomicBool,
 }
 
-pub fn create_remote_service_endpoint(provider: Arc<RemoteServiceProvider>) -> RemoteServiceEndpoint {
+pub fn create_remote_service_endpoint(
+    provider: Arc<RemoteServiceProvider>,
+) -> RemoteServiceEndpoint {
     RemoteServiceEndpoint {
         provider,
         subscriptions: Mutex::new(HashMap::new()),
@@ -1217,7 +1289,8 @@ pub(crate) mod tests {
         pub(crate) fn publish(&self, ops: Vec<Op>, context: &Context) {
             {
                 let mut inner = lock(&self.inner);
-                let next = crate::delta::apply_immutable(&inner.value, &ops).expect("fake ops valid");
+                let next =
+                    crate::delta::apply_immutable(&inner.value, &ops).expect("fake ops valid");
                 inner.value = next;
                 let sequence = inner.sequence + 1;
                 inner.sequence = sequence;
@@ -1265,7 +1338,9 @@ pub(crate) mod tests {
 
     /// One `RemoteServiceObject` with one state member and one method member.
     pub(crate) type TestMethod = Box<
-        dyn Fn(Vec<JsonValue>, Context) -> BoxFuture<Result<Option<JsonValue>, AnyError>> + Send + Sync,
+        dyn Fn(Vec<JsonValue>, Context) -> BoxFuture<Result<Option<JsonValue>, AnyError>>
+            + Send
+            + Sync,
     >;
 
     pub(crate) fn object_with_state(
@@ -1282,9 +1357,12 @@ pub(crate) mod tests {
         method_name: &str,
         method: TestMethod,
     ) -> Arc<dyn RemoteServiceImpl> {
-        let mut builder =
-            RemoteServiceObject::builder().state(state_name, Arc::clone(state) as Arc<dyn StateInternals>);
-        builder = builder.method(method_name, move |args: Vec<JsonValue>, context: Context| method(args, context));
+        let mut builder = RemoteServiceObject::builder()
+            .state(state_name, Arc::clone(state) as Arc<dyn StateInternals>);
+        builder = builder.method(
+            method_name,
+            move |args: Vec<JsonValue>, context: Context| method(args, context),
+        );
         builder.build() as Arc<dyn RemoteServiceImpl>
     }
 
@@ -1293,7 +1371,11 @@ pub(crate) mod tests {
         response: JsonValue,
     ) -> TestMethod {
         Box::new(move |mut args: Vec<JsonValue>, _context: Context| {
-            let payload = if args.is_empty() { JsonValue::Null } else { args.remove(0) };
+            let payload = if args.is_empty() {
+                JsonValue::Null
+            } else {
+                args.remove(0)
+            };
             received.lock().push(payload.clone());
             let response = response.clone();
             Box::pin(async move { Ok(Some(response)) })
@@ -1313,9 +1395,11 @@ pub(crate) mod tests {
         let error = err_of(RemoteServiceProvider::new(vec![
             ProviderDefinition::new("test.dup", ServiceMode::Singleton),
             ProviderDefinition::new("test.dup", ServiceMode::Keyed),
-        ])
+        ]));
+        assert_eq!(
+            error.to_string(),
+            "Remote service catalogue contains duplicate IDs"
         );
-        assert_eq!(error.to_string(), "Remote service catalogue contains duplicate IDs");
     }
 
     #[test]
@@ -1326,8 +1410,14 @@ pub(crate) mod tests {
                 Vec::new()
             }
         }
-        let error = err_of(validate_remote_service_implementation("test.models", Arc::new(Empty)));
-        assert_eq!(error.to_string(), "Remote service test.models has no members");
+        let error = err_of(validate_remote_service_implementation(
+            "test.models",
+            Arc::new(Empty),
+        ));
+        assert_eq!(
+            error.to_string(),
+            "Remote service test.models has no members"
+        );
     }
 
     #[test]
@@ -1338,9 +1428,16 @@ pub(crate) mod tests {
         )])
         .expect("provider");
         let error = err_of(provider.use_singleton("test.unknown"));
-        assert_eq!(error.to_string(), "Remote service test.unknown is not allowlisted");
-        let error = err_of(provider.subscribe("test.unknown", ServiceMode::Singleton, Arc::new(|_, _| {})));
-        assert_eq!(error.to_string(), "Remote service test.unknown is not allowlisted");
+        assert_eq!(
+            error.to_string(),
+            "Remote service test.unknown is not allowlisted"
+        );
+        let error =
+            err_of(provider.subscribe("test.unknown", ServiceMode::Singleton, Arc::new(|_, _| {})));
+        assert_eq!(
+            error.to_string(),
+            "Remote service test.unknown is not allowlisted"
+        );
     }
 
     #[test]
@@ -1351,11 +1448,16 @@ pub(crate) mod tests {
         )])
         .expect("provider");
         let error = err_of(provider.use_singleton("test.models"));
-        assert_eq!(error.to_string(), "Remote service test.models has no local provider");
-        let error = err_of(provider
-            .subscribe("test.models", ServiceMode::Singleton, Arc::new(|_, _| {}))
-            );
-        assert_eq!(error.to_string(), "Remote service test.models has no provider");
+        assert_eq!(
+            error.to_string(),
+            "Remote service test.models has no local provider"
+        );
+        let error =
+            err_of(provider.subscribe("test.models", ServiceMode::Singleton, Arc::new(|_, _| {})));
+        assert_eq!(
+            error.to_string(),
+            "Remote service test.models has no provider"
+        );
     }
 
     #[test]
@@ -1365,10 +1467,12 @@ pub(crate) mod tests {
             ServiceMode::Singleton,
         )])
         .expect("provider");
-        let error = err_of(provider
-            .subscribe("test.models", ServiceMode::Keyed, Arc::new(|_, _| {}))
-            );
-        assert_eq!(error.to_string(), "Remote service test.models is singleton, not keyed");
+        let error =
+            err_of(provider.subscribe("test.models", ServiceMode::Keyed, Arc::new(|_, _| {})));
+        assert_eq!(
+            error.to_string(),
+            "Remote service test.models is singleton, not keyed"
+        );
     }
 
     #[test]
@@ -1379,22 +1483,37 @@ pub(crate) mod tests {
         )])
         .expect("provider");
         let state = FakeState::new(json!({ "question": "First?" }));
-        let error = err_of(provider
-            .spawn("test.keyed", "", object_with_state(&state, "submit", recording_method(Default::default(), json!(null))))
-            );
-        assert_eq!(error.to_string(), "Remote service instance key must not be empty");
+        let error = err_of(provider.spawn(
+            "test.keyed",
+            "",
+            object_with_state(
+                &state,
+                "submit",
+                recording_method(Default::default(), json!(null)),
+            ),
+        ));
+        assert_eq!(
+            error.to_string(),
+            "Remote service instance key must not be empty"
+        );
 
         let method: TestMethod = Box::new(|_args: Vec<JsonValue>, _context: Context| {
             Box::pin(async { Ok(Some(json!({ "accepted": true }))) })
         });
         let _close = provider
-            .spawn("test.keyed", "invocation-1", object_with_state(&state, "submit", method))
+            .spawn(
+                "test.keyed",
+                "invocation-1",
+                object_with_state(&state, "submit", method),
+            )
             .expect("spawn");
-        let method: TestMethod = Box::new(|_args: Vec<JsonValue>, _context: Context| {
-            Box::pin(async { Ok(None) })
-        });
-        let error = err_of(provider
-            .spawn("test.keyed", "invocation-1", object_with_state(&state, "submit", method)));
+        let method: TestMethod =
+            Box::new(|_args: Vec<JsonValue>, _context: Context| Box::pin(async { Ok(None) }));
+        let error = err_of(provider.spawn(
+            "test.keyed",
+            "invocation-1",
+            object_with_state(&state, "submit", method),
+        ));
         assert_eq!(
             error.to_string(),
             "Remote service test.keyed already has a live instance with key invocation-1"
@@ -1411,8 +1530,11 @@ pub(crate) mod tests {
         let state = FakeState::new(json!({ "selected": null, "revision": 0 }));
         let method: TestMethod =
             Box::new(|_args: Vec<JsonValue>, _context: Context| Box::pin(async { Ok(None) }));
-        let error = err_of(provider
-            .spawn("test.models", "wrong", object_with_state(&state, "select", method)));
+        let error = err_of(provider.spawn(
+            "test.models",
+            "wrong",
+            object_with_state(&state, "select", method),
+        ));
         assert!(
             error.to_string().contains("singleton"),
             "unexpected error: {error}"
@@ -1433,57 +1555,72 @@ pub(crate) mod tests {
             .provide("test.models", object_with_state(&state, "select", method))
             .expect("provide");
 
-        let error = err_of(provider
-            .invoke(
-                &ServiceCall {
-                    service_id: "test.models".into(),
-                    instance: None,
-                    member: "missing".into(),
-                    args: Vec::new(),
-                },
-                &BACKGROUND_CONTEXT,
-            )
-            .await
-            );
-        assert_eq!(error.to_string(), "Unknown remote service member test.models.missing");
+        let error = err_of(
+            provider
+                .invoke(
+                    &ServiceCall {
+                        service_id: "test.models".into(),
+                        instance: None,
+                        member: "missing".into(),
+                        args: Vec::new(),
+                    },
+                    &BACKGROUND_CONTEXT,
+                )
+                .await,
+        );
+        assert_eq!(
+            error.to_string(),
+            "Unknown remote service member test.models.missing"
+        );
 
-        let error = err_of(provider
-            .invoke(
-                &ServiceCall {
-                    service_id: "test.models".into(),
-                    instance: None,
-                    member: "state".into(),
-                    args: Vec::new(),
-                },
-                &BACKGROUND_CONTEXT,
-            )
-            .await
-            );
-        assert_eq!(error.to_string(), "Remote service member test.models.state is not a method");
+        let error = err_of(
+            provider
+                .invoke(
+                    &ServiceCall {
+                        service_id: "test.models".into(),
+                        instance: None,
+                        member: "state".into(),
+                        args: Vec::new(),
+                    },
+                    &BACKGROUND_CONTEXT,
+                )
+                .await,
+        );
+        assert_eq!(
+            error.to_string(),
+            "Remote service member test.models.state is not a method"
+        );
 
-        let error = err_of(provider
-            .invoke(
-                &ServiceCall {
-                    service_id: "test.unknown".into(),
-                    instance: None,
-                    member: "select".into(),
-                    args: Vec::new(),
-                },
-                &BACKGROUND_CONTEXT,
-            )
-            .await
-            );
+        let error = err_of(
+            provider
+                .invoke(
+                    &ServiceCall {
+                        service_id: "test.unknown".into(),
+                        instance: None,
+                        member: "select".into(),
+                        args: Vec::new(),
+                    },
+                    &BACKGROUND_CONTEXT,
+                )
+                .await,
+        );
         // Upstream also runs #assertAllowed before the registration lookup on invoke,
         // so an unknown service reports "not allowlisted"; the "Unknown remote
         // service {id}" registration error is defense-in-depth behind that check.
-        assert_eq!(error.to_string(), "Remote service test.unknown is not allowlisted");
+        assert_eq!(
+            error.to_string(),
+            "Remote service test.unknown is not allowlisted"
+        );
     }
 
     #[tokio::test]
     async fn invoke_dispatches_arguments_and_context_to_methods() {
         let provider = Arc::new(
-            RemoteServiceProvider::new(vec![ProviderDefinition::new("test.echo", ServiceMode::Singleton)])
-                .expect("provider"),
+            RemoteServiceProvider::new(vec![ProviderDefinition::new(
+                "test.echo",
+                ServiceMode::Singleton,
+            )])
+            .expect("provider"),
         );
         let received = Arc::new(Mutex::new(Vec::new()));
         let method: TestMethod = {
@@ -1539,7 +1676,11 @@ pub(crate) mod tests {
         let keyed_method: TestMethod =
             Box::new(|_args: Vec<JsonValue>, _context: Context| Box::pin(async { Ok(None) }));
         let _close = provider
-            .spawn("test.keyed", "one", object_with_state(&state, "submit", keyed_method))
+            .spawn(
+                "test.keyed",
+                "one",
+                object_with_state(&state, "submit", keyed_method),
+            )
             .expect("spawn");
 
         let call = |service_id: &str, instance: Option<ServiceInstanceAddress>| ServiceCall {
@@ -1548,32 +1689,66 @@ pub(crate) mod tests {
             member: "select".into(),
             args: Vec::new(),
         };
-        let error = err_of(provider
-            .invoke(&call("test.models", Some(ServiceInstanceAddress { key: "one".into(), generation: 1 })), &BACKGROUND_CONTEXT)
-            .await
-            );
+        let error = err_of(
+            provider
+                .invoke(
+                    &call(
+                        "test.models",
+                        Some(ServiceInstanceAddress {
+                            key: "one".into(),
+                            generation: 1,
+                        }),
+                    ),
+                    &BACKGROUND_CONTEXT,
+                )
+                .await,
+        );
         assert_eq!(error.to_string(), "Remote service test.models is singleton");
 
-        let error = err_of(provider.invoke(&call("test.keyed", None), &BACKGROUND_CONTEXT).await);
+        let error = err_of(
+            provider
+                .invoke(&call("test.keyed", None), &BACKGROUND_CONTEXT)
+                .await,
+        );
         assert_eq!(error.to_string(), "Remote service test.keyed is keyed");
 
-        let error = err_of(provider
-            .invoke(&call("test.keyed", Some(ServiceInstanceAddress { key: "nope".into(), generation: 1 })), &BACKGROUND_CONTEXT)
-            .await
-            );
-        assert_eq!(error.to_string(), "Remote service test.keyed has no instance nope");
+        let error = err_of(
+            provider
+                .invoke(
+                    &call(
+                        "test.keyed",
+                        Some(ServiceInstanceAddress {
+                            key: "nope".into(),
+                            generation: 1,
+                        }),
+                    ),
+                    &BACKGROUND_CONTEXT,
+                )
+                .await,
+        );
+        assert_eq!(
+            error.to_string(),
+            "Remote service test.keyed has no instance nope"
+        );
 
-        let error = err_of(provider
-            .invoke(
-                &call(
-                    "test.keyed",
-                    Some(ServiceInstanceAddress { key: "one".into(), generation: 2 }),
-                ),
-                &BACKGROUND_CONTEXT,
-            )
-            .await
-            );
-        assert_eq!(error.to_string(), "Remote service test.keyed instance one is stale");
+        let error = err_of(
+            provider
+                .invoke(
+                    &call(
+                        "test.keyed",
+                        Some(ServiceInstanceAddress {
+                            key: "one".into(),
+                            generation: 2,
+                        }),
+                    ),
+                    &BACKGROUND_CONTEXT,
+                )
+                .await,
+        );
+        assert_eq!(
+            error.to_string(),
+            "Remote service test.keyed instance one is stale"
+        );
     }
 
     #[test]
@@ -1707,11 +1882,16 @@ pub(crate) mod tests {
         subscription.activate();
 
         provider.withdraw("test.models").expect("withdraw");
-        assert_eq!(update_json(&lock_for_test(&updates)[0]), json!({ "type": "unavailable" }));
+        assert_eq!(
+            update_json(&lock_for_test(&updates)[0]),
+            json!({ "type": "unavailable" })
+        );
 
         // Replacing after withdraw keeps requiring the original member shape.
         let mismatched: Arc<dyn RemoteServiceImpl> = RemoteServiceObject::builder()
-            .method("select", |_args: Vec<JsonValue>, _context: Context| Box::pin(async { Ok(None) }))
+            .method("select", |_args: Vec<JsonValue>, _context: Context| {
+                Box::pin(async { Ok(None) })
+            })
             .build();
         let error = err_of(provider.replace("test.models", Arc::clone(&mismatched)));
         assert_eq!(
@@ -1818,8 +1998,14 @@ pub(crate) mod tests {
                 }),
             )
             .expect("subscribe");
-        state.replace_with(json!({ "selected": null, "revision": 1 }), &BACKGROUND_CONTEXT);
-        state.replace_with(json!({ "selected": null, "revision": 2 }), &BACKGROUND_CONTEXT);
+        state.replace_with(
+            json!({ "selected": null, "revision": 1 }),
+            &BACKGROUND_CONTEXT,
+        );
+        state.replace_with(
+            json!({ "selected": null, "revision": 2 }),
+            &BACKGROUND_CONTEXT,
+        );
 
         // Upstream also throws "Failed to activate remote service subscription";
         // the Rust `activate` is infallible, so only the replay order is asserted.
@@ -1846,7 +2032,8 @@ pub(crate) mod tests {
             .expect("provide");
         let late_updates: Arc<Mutex<Vec<u64>>> = Arc::new(Mutex::new(Vec::new()));
         let late_sink = Arc::clone(&late_updates);
-        let late_holder: Arc<Mutex<Option<Box<dyn ServiceSubscription>>>> = Arc::new(Mutex::new(None));
+        let late_holder: Arc<Mutex<Option<Box<dyn ServiceSubscription>>>> =
+            Arc::new(Mutex::new(None));
         let late_holder_for_listener = Arc::clone(&late_holder);
         let provider_for_listener = Arc::clone(&provider);
         let state_for_listener = Arc::clone(&state);
@@ -1862,7 +2049,10 @@ pub(crate) mod tests {
                     if sequence != 1 {
                         return;
                     }
-                    state_for_listener.replace_with(json!({ "selected": null, "revision": 2 }), &BACKGROUND_CONTEXT);
+                    state_for_listener.replace_with(
+                        json!({ "selected": null, "revision": 2 }),
+                        &BACKGROUND_CONTEXT,
+                    );
                     let late_sink = Arc::clone(&late_sink);
                     let late = provider_for_listener
                         .subscribe(
@@ -1890,9 +2080,15 @@ pub(crate) mod tests {
             )
             .expect("subscribe");
         first.activate();
-        state.replace_with(json!({ "selected": null, "revision": 1 }), &BACKGROUND_CONTEXT);
+        state.replace_with(
+            json!({ "selected": null, "revision": 1 }),
+            &BACKGROUND_CONTEXT,
+        );
         assert!(lock_for_test(&late_updates).is_empty());
-        state.replace_with(json!({ "selected": null, "revision": 3 }), &BACKGROUND_CONTEXT);
+        state.replace_with(
+            json!({ "selected": null, "revision": 3 }),
+            &BACKGROUND_CONTEXT,
+        );
         assert_eq!(*lock_for_test(&late_updates), vec![3]);
         if let Some(late) = lock_for_test(&late_holder).take() {
             futures::executor::block_on(late.close(None));
@@ -1955,7 +2151,8 @@ pub(crate) mod tests {
             provider
                 .provide("test.counter", object_with_state(&state, "bump", method))
                 .expect("provide");
-            let updates: Arc<Mutex<Vec<(ServiceProviderUpdate, bool)>>> = Arc::new(Mutex::new(Vec::new()));
+            let updates: Arc<Mutex<Vec<(ServiceProviderUpdate, bool)>>> =
+                Arc::new(Mutex::new(Vec::new()));
             let marked_context = crate::context::with_cancel(BACKGROUND_CONTEXT.clone()).context;
             let sink = Arc::clone(&updates);
             let subscription = provider
@@ -1963,10 +2160,8 @@ pub(crate) mod tests {
                     "test.counter",
                     ServiceMode::Singleton,
                     Arc::new(move |update: &ServiceProviderUpdate, context: &Context| {
-                        sink.lock().push((
-                            update.clone(),
-                            context.to_string().contains("WithValue"),
-                        ));
+                        sink.lock()
+                            .push((update.clone(), context.to_string().contains("WithValue")));
                     }),
                 )
                 .expect("subscribe");
@@ -2035,25 +2230,31 @@ pub(crate) mod tests {
             .subscribe(
                 "test.counter",
                 ServiceMode::Singleton,
-                Arc::new(move |update: &ServiceProviderUpdate, _| {
-                    match update {
-                        ServiceProviderUpdate::State { sequence, .. } => {
-                            sink.lock().push(("state".into(), *sequence));
-                            if *sequence == 1 {
-                                for value in 3..=103 {
-                                    state_for_listener.replace_with(json!({ "value": value }), &BACKGROUND_CONTEXT);
-                                }
+                Arc::new(move |update: &ServiceProviderUpdate, _| match update {
+                    ServiceProviderUpdate::State { sequence, .. } => {
+                        sink.lock().push(("state".into(), *sequence));
+                        if *sequence == 1 {
+                            for value in 3..=103 {
+                                state_for_listener
+                                    .replace_with(json!({ "value": value }), &BACKGROUND_CONTEXT);
                             }
                         }
-                        ServiceProviderUpdate::Reset { snapshot } => {
-                            let sequence = snapshot.instances[0].members.iter().find_map(|member| match member {
-                                crate::types::ServiceMemberSnapshot::State { sequence, .. } => Some(*sequence),
-                                _ => None,
-                            });
-                            sink.lock().push(("reset".into(), sequence.expect("state member")));
-                        }
-                        _ => {}
                     }
+                    ServiceProviderUpdate::Reset { snapshot } => {
+                        let sequence =
+                            snapshot.instances[0]
+                                .members
+                                .iter()
+                                .find_map(|member| match member {
+                                    crate::types::ServiceMemberSnapshot::State {
+                                        sequence, ..
+                                    } => Some(*sequence),
+                                    _ => None,
+                                });
+                        sink.lock()
+                            .push(("reset".into(), sequence.expect("state member")));
+                    }
+                    _ => {}
                 }),
             )
             .expect("subscribe");
@@ -2081,12 +2282,14 @@ pub(crate) mod tests {
         let state = FakeState::new(json!({ "value": 0 }));
         // Reentrant source listener mirrors the upstream getReplicatedStateInternals hook.
         let state_for_listener = Arc::clone(&state);
-        let _source_listener = state.subscribe(Arc::new(move |_ops: &[Op], sequence: u64, _context: &Context| {
-            if sequence == 101 {
-                state_for_listener.replace_with(json!({ "value": 102 }), &BACKGROUND_CONTEXT);
-                state_for_listener.replace_with(json!({ "value": 103 }), &BACKGROUND_CONTEXT);
-            }
-        }));
+        let _source_listener = state.subscribe(Arc::new(
+            move |_ops: &[Op], sequence: u64, _context: &Context| {
+                if sequence == 101 {
+                    state_for_listener.replace_with(json!({ "value": 102 }), &BACKGROUND_CONTEXT);
+                    state_for_listener.replace_with(json!({ "value": 103 }), &BACKGROUND_CONTEXT);
+                }
+            },
+        ));
         let method: TestMethod =
             Box::new(|_args: Vec<JsonValue>, _context: Context| Box::pin(async { Ok(None) }));
         provider
@@ -2094,27 +2297,31 @@ pub(crate) mod tests {
             .expect("provide");
         let updates: Arc<Mutex<Vec<(String, u64)>>> = Arc::new(Mutex::new(Vec::new()));
         let sink = Arc::clone(&updates);
-        let subscription = provider
-            .subscribe(
-                "test.counter",
-                ServiceMode::Singleton,
-                Arc::new(move |update: &ServiceProviderUpdate, _| {
-                    match update {
+        let subscription =
+            provider
+                .subscribe(
+                    "test.counter",
+                    ServiceMode::Singleton,
+                    Arc::new(move |update: &ServiceProviderUpdate, _| match update {
                         ServiceProviderUpdate::State { sequence, .. } => {
                             sink.lock().push(("state".into(), *sequence));
                         }
                         ServiceProviderUpdate::Reset { snapshot } => {
-                            let sequence = snapshot.instances[0].members.iter().find_map(|member| match member {
-                                crate::types::ServiceMemberSnapshot::State { sequence, .. } => Some(*sequence),
-                                _ => None,
-                            });
-                            sink.lock().push(("reset".into(), sequence.expect("state member")));
+                            let sequence = snapshot.instances[0].members.iter().find_map(
+                                |member| match member {
+                                    crate::types::ServiceMemberSnapshot::State {
+                                        sequence, ..
+                                    } => Some(*sequence),
+                                    _ => None,
+                                },
+                            );
+                            sink.lock()
+                                .push(("reset".into(), sequence.expect("state member")));
                         }
                         _ => {}
-                    }
-                }),
-            )
-            .expect("subscribe");
+                    }),
+                )
+                .expect("subscribe");
         for value in 1..=101u64 {
             state.replace_with(json!({ "value": value }), &BACKGROUND_CONTEXT);
         }
@@ -2162,9 +2369,14 @@ pub(crate) mod tests {
                     if *count == 1 {
                         let replacement_state = FakeState::new(json!({ "value": 2 }));
                         let method: TestMethod =
-                            Box::new(|_args: Vec<JsonValue>, _context: Context| Box::pin(async { Ok(None) }));
+                            Box::new(|_args: Vec<JsonValue>, _context: Context| {
+                                Box::pin(async { Ok(None) })
+                            });
                         provider_for_listener
-                            .replace("test.counter", object_with_state(&replacement_state, "bump", method))
+                            .replace(
+                                "test.counter",
+                                object_with_state(&replacement_state, "bump", method),
+                            )
                             .expect("reentrant replace");
                     }
                 }),
@@ -2186,7 +2398,10 @@ pub(crate) mod tests {
         let method: TestMethod =
             Box::new(|_args: Vec<JsonValue>, _context: Context| Box::pin(async { Ok(None) }));
         provider
-            .replace("test.counter", object_with_state(&replacement_state, "bump", method))
+            .replace(
+                "test.counter",
+                object_with_state(&replacement_state, "bump", method),
+            )
             .expect("replace");
         assert_eq!(*lock_for_test(&first), *lock_for_test(&second));
         assert_eq!(lock_for_test(&second).len(), 2);
@@ -2222,7 +2437,8 @@ pub(crate) mod tests {
         let sink = Arc::clone(&received);
         // The listener closes through a shared OnceLock handle: activation borrows the
         // subscription without holding any lock the listener could re-acquire.
-        let subscription: StdArc<std::sync::OnceLock<Box<dyn ServiceSubscription>>> = StdArc::new(std::sync::OnceLock::new());
+        let subscription: StdArc<std::sync::OnceLock<Box<dyn ServiceSubscription>>> =
+            StdArc::new(std::sync::OnceLock::new());
         let listener_subscription = StdArc::clone(&subscription);
         let boxed = provider
             .subscribe(
@@ -2302,15 +2518,20 @@ pub(crate) mod tests {
         let published: Arc<Mutex<Vec<(String, JsonValue)>>> = Arc::new(Mutex::new(Vec::new()));
         let publish: ServiceUpdatePublisher = {
             let published = Arc::clone(&published);
-            Arc::new(move |subscription_id: String, update: &ServiceProviderUpdate, _context: &Context| {
-                let published = Arc::clone(&published);
-                let update = update.clone();
-                Box::pin(async move {
-                    published
-                        .lock()
-                        .push((subscription_id, serde_json::to_value(update).expect("update serializes")));
-                })
-            })
+            Arc::new(
+                move |subscription_id: String,
+                      update: &ServiceProviderUpdate,
+                      _context: &Context| {
+                    let published = Arc::clone(&published);
+                    let update = update.clone();
+                    Box::pin(async move {
+                        published.lock().push((
+                            subscription_id,
+                            serde_json::to_value(update).expect("update serializes"),
+                        ));
+                    })
+                },
+            )
         };
 
         let catalogue = endpoint
@@ -2328,25 +2549,43 @@ pub(crate) mod tests {
 
         let snapshot = endpoint
             .invoke(
-                &crate::services::wire::create_service_subscribe_call("sub-1", "test.models", ServiceMode::Singleton),
+                &crate::services::wire::create_service_subscribe_call(
+                    "sub-1",
+                    "test.models",
+                    ServiceMode::Singleton,
+                ),
                 &publish,
                 &BACKGROUND_CONTEXT,
             )
             .await
             .expect("subscribe");
-        assert_eq!(snapshot.expect("snapshot")["serviceId"], json!("test.models"));
+        assert_eq!(
+            snapshot.expect("snapshot")["serviceId"],
+            json!("test.models")
+        );
 
-        let error = err_of(endpoint
-            .invoke(
-                &crate::services::wire::create_service_subscribe_call("sub-1", "test.models", ServiceMode::Singleton),
-                &publish,
-                &BACKGROUND_CONTEXT,
-            )
-            .await
-            );
-        assert_eq!(error.to_string(), "Service subscription ID is already active");
+        let error = err_of(
+            endpoint
+                .invoke(
+                    &crate::services::wire::create_service_subscribe_call(
+                        "sub-1",
+                        "test.models",
+                        ServiceMode::Singleton,
+                    ),
+                    &publish,
+                    &BACKGROUND_CONTEXT,
+                )
+                .await,
+        );
+        assert_eq!(
+            error.to_string(),
+            "Service subscription ID is already active"
+        );
 
-        state.replace_with(json!({ "selected": null, "revision": 1 }), &BACKGROUND_CONTEXT);
+        state.replace_with(
+            json!({ "selected": null, "revision": 1 }),
+            &BACKGROUND_CONTEXT,
+        );
         for _ in 0..200 {
             if !lock_for_test(&published).is_empty() {
                 break;
@@ -2368,26 +2607,27 @@ pub(crate) mod tests {
             .await
             .expect("unsubscribe");
         assert_eq!(result, None);
-        let error = err_of(endpoint
-            .invoke(
-                &crate::services::wire::create_service_unsubscribe_call("sub-1"),
-                &publish,
-                &BACKGROUND_CONTEXT,
-            )
-            .await
-            );
+        let error = err_of(
+            endpoint
+                .invoke(
+                    &crate::services::wire::create_service_unsubscribe_call("sub-1"),
+                    &publish,
+                    &BACKGROUND_CONTEXT,
+                )
+                .await,
+        );
         assert_eq!(error.to_string(), "Service subscription was not found");
 
         endpoint.dispose().await;
-        let error = err_of(endpoint
-            .invoke(
-                &crate::services::wire::create_service_catalogue_call(),
-                &publish,
-                &BACKGROUND_CONTEXT,
-            )
-            .await
-            );
+        let error = err_of(
+            endpoint
+                .invoke(
+                    &crate::services::wire::create_service_catalogue_call(),
+                    &publish,
+                    &BACKGROUND_CONTEXT,
+                )
+                .await,
+        );
         assert_eq!(error.to_string(), "Remote service endpoint is disposed");
     }
 }
-

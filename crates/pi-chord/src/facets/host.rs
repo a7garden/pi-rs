@@ -11,13 +11,13 @@
 //! - `Facet.setup` is synchronous by construction (`Result`), so the upstream
 //!   "setup must be synchronous" promise check cannot fire.
 
+use parking_lot::Mutex;
 use std::any::Any;
 use std::collections::VecDeque;
 use std::collections::{HashMap, HashSet};
 use std::marker::PhantomData;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc};
-use {parking_lot::Mutex};
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use futures::future::join_all;
@@ -178,25 +178,19 @@ impl FacetLifecycle {
 
     fn own(&self, disposal: Disposal) -> Result<(), AnyError> {
         self.assert_running("own resources")?;
-        (self.inner.lock())
-            .effects
-            .push(disposal);
+        (self.inner.lock()).effects.push(disposal);
         Ok(())
     }
 
     fn observe(&self, start: ObserveStart) -> Result<(), AnyError> {
         self.assert_setting_up("observe services")?;
-        (self.inner.lock())
-            .observations
-            .push(start);
+        (self.inner.lock()).observations.push(start);
         Ok(())
     }
 
     fn on_activate(&self, callback: Disposal) -> Result<(), AnyError> {
         self.assert_setting_up("register activation callbacks")?;
-        (self.inner.lock())
-            .activation_callbacks
-            .push(callback);
+        (self.inner.lock()).activation_callbacks.push(callback);
         Ok(())
     }
 
@@ -215,18 +209,12 @@ impl FacetLifecycle {
             inner.state = LifecycleState::Active;
             inner.service_access = true;
         }
-        let starts = (self.inner.lock())
-            .observations
-            .clone();
+        let starts = (self.inner.lock()).observations.clone();
         for start in starts {
             let stop = start()?;
-            (self.inner.lock())
-                .effects
-                .push(stop);
+            (self.inner.lock()).effects.push(stop);
         }
-        let callbacks = (self.inner.lock())
-            .activation_callbacks
-            .clone();
+        let callbacks = (self.inner.lock()).activation_callbacks.clone();
         for callback in callbacks {
             callback().await?;
         }
@@ -511,8 +499,7 @@ impl HostServiceSlots {
     }
 
     fn bind_keyed(&self, service_id: &str, source: Arc<dyn KeyedServiceSource>) {
-        (self.keyed_sources.lock())
-            .insert(service_id.to_string(), source);
+        (self.keyed_sources.lock()).insert(service_id.to_string(), source);
     }
 
     fn dispose(&self) {
@@ -1706,10 +1693,7 @@ impl FacetKernel {
             let internal = self.internal_binding()?;
             let readiness: Vec<BoxFuture<Result<(), AnyError>>> = {
                 let bindings: Vec<Arc<dyn RemoteServices>> =
-                    (self.source_bindings.lock())
-                        .values()
-                        .cloned()
-                        .collect();
+                    (self.source_bindings.lock()).values().cloned().collect();
                 bindings
                     .into_iter()
                     .map(|services| {
@@ -1798,9 +1782,7 @@ impl FacetKernel {
                         facet.id()
                     )));
                 }
-                self.validate_replacement_provisions(
-                    &(record.lock()).provisions,
-                )?;
+                self.validate_replacement_provisions(&(record.lock()).provisions)?;
                 candidates.push(record);
             }
             Ok(())
@@ -1847,9 +1829,7 @@ impl FacetKernel {
                 lifecycle.activate().await?;
             }
             for candidate in &candidate_order {
-                self.validate_replacement_provisions(
-                    &(candidate.lock()).provisions,
-                )?;
+                self.validate_replacement_provisions(&(candidate.lock()).provisions)?;
             }
             Ok(())
         }
@@ -2093,8 +2073,7 @@ impl FacetKernel {
                     on_error: self.on_error.clone(),
                 })
                 .await?;
-            (self.source_bindings.lock())
-                .insert(source_index, Arc::from(binding));
+            (self.source_bindings.lock()).insert(source_index, Arc::from(binding));
         }
         Ok(external)
     }
@@ -2525,10 +2504,7 @@ mod tests {
                 Arc::new(move |_args: Vec<JsonValue>, context: Context| {
                     let source = source.clone();
                     Box::pin(async move {
-                        let requirement = source
-                            .lock()
-                            .clone()
-                            .expect("source handle");
+                        let requirement = source.lock().clone().expect("source handle");
                         let client = requirement.client()?;
                         client.invoke("read", Vec::new(), &context).await
                     }) as BoxFuture<_>
@@ -2562,10 +2538,7 @@ mod tests {
                 "activate projection"
             ]
         );
-        let requirement = source_handle
-            .lock()
-            .clone()
-            .expect("source handle");
+        let requirement = source_handle.lock().clone().expect("source handle");
         let client = requirement.client().expect("client after activation");
         let value = client
             .invoke("read", Vec::new(), &BACKGROUND_CONTEXT)
@@ -2667,9 +2640,7 @@ mod tests {
                 let remote_values = remote_values_for_handler.clone();
                 Box::pin(async move {
                     if let Ok(Some(value)) = client.invoke("read", Vec::new(), &context).await {
-                        remote_values
-                            .lock()
-                            .push(value);
+                        remote_values.lock().push(value);
                     }
                 })
             },
@@ -2682,10 +2653,7 @@ mod tests {
             .await
             .expect("binding ready");
         wait_for(|| remote_values.lock().len() == 1).await;
-        assert_eq!(
-            *remote_values.lock(),
-            vec![json!("one")]
-        );
+        assert_eq!(*remote_values.lock(), vec![json!("one")]);
 
         remote_services
             .dispose(&BACKGROUND_CONTEXT)
@@ -2712,9 +2680,7 @@ mod tests {
                         move |client: Arc<dyn ServiceClientHandle>, context: Context| {
                             let observed = handler_observed.clone();
                             Box::pin(async move {
-                                observed
-                                    .lock()
-                                    .push((client, context));
+                                observed.lock().push((client, context));
                             })
                         },
                     );
@@ -2796,9 +2762,7 @@ mod tests {
                     move |view: LocalServiceView<LocalKeyedValue>, context: Context| {
                         let observed = handler_observed.clone();
                         Box::pin(async move {
-                            observed
-                                .lock()
-                                .push((view, context));
+                            observed.lock().push((view, context));
                         })
                     },
                 );
@@ -2933,10 +2897,7 @@ mod tests {
         let host = create_facet_host(options(vec![consumer, provider(1, sources.clone())]))
             .await
             .expect("host activates");
-        let retained_requirement = watched
-            .lock()
-            .clone()
-            .expect("watched");
+        let retained_requirement = watched.lock().clone().expect("watched");
         let retained_value = || async {
             let client = retained_requirement.client().expect("client");
             let state = client.state("state").expect("state").expect("state member");
@@ -2980,9 +2941,7 @@ mod tests {
                 let again = env.use_remote(SOURCE.id())?;
                 // Upstream: `env.use(Source)` is the same view per facet.
                 assert_eq!(source.identity, again.identity);
-                consumer_handles
-                    .lock()
-                    .push(source.clone());
+                consumer_handles.lock().push(source.clone());
                 assert_eq!(
                     client_error(source.client()).to_string(),
                     "Facet scoped-consumer service handles cannot be used while setting_up"
@@ -2998,12 +2957,10 @@ mod tests {
                             .invoke("read", Vec::new(), &BACKGROUND_CONTEXT)
                             .await?
                             .unwrap_or(json!(null));
-                        cleanup_values
-                            .lock()
-                            .push(format!(
-                                "{generation}:{}",
-                                value.as_str().unwrap_or_default()
-                            ));
+                        cleanup_values.lock().push(format!(
+                            "{generation}:{}",
+                            value.as_str().unwrap_or_default()
+                        ));
                         Ok(())
                     })
                 }))?;
@@ -3026,24 +2983,14 @@ mod tests {
         let host = create_facet_host(options(vec![consumer("A"), peer, provider]))
             .await
             .expect("host activates");
-        let handles = consumer_handles
-            .lock()
-            .clone();
-        let peer_requirement = peer_handle
-            .lock()
-            .clone()
-            .unwrap();
+        let handles = consumer_handles.lock().clone();
+        let peer_requirement = peer_handle.lock().clone().unwrap();
         // Upstream: views are distinct objects across facets.
         assert_ne!(handles[0].identity, peer_requirement.identity);
 
         host.reload(vec![consumer("B")]).await.expect("reload");
-        assert_eq!(
-            *cleanup_values.lock(),
-            ["A:value"]
-        );
-        let new_handles = consumer_handles
-            .lock()
-            .clone();
+        assert_eq!(*cleanup_values.lock(), ["A:value"]);
+        let new_handles = consumer_handles.lock().clone();
         assert_ne!(new_handles[1].identity, handles[0].identity);
         assert_eq!(
             client_error(handles[0].client()).to_string(),
@@ -3063,10 +3010,7 @@ mod tests {
         assert_eq!(value, Some(json!("value")));
 
         host.dispose().await.expect("dispose");
-        assert_eq!(
-            *cleanup_values.lock(),
-            ["A:value", "B:value"]
-        );
+        assert_eq!(*cleanup_values.lock(), ["A:value", "B:value"]);
         assert_eq!(
             client_error(new_handles[1].client()).to_string(),
             "Facet scoped-consumer service handles cannot be used while dead"
@@ -3424,10 +3368,7 @@ mod tests {
         .expect("second host");
         second.dispose().await.expect("second dispose");
 
-        assert_eq!(
-            *values.lock(),
-            [json!("left"), json!("right")]
-        );
+        assert_eq!(*values.lock(), [json!("left"), json!("right")]);
         assert_eq!(state.opened.load(Ordering::SeqCst), 2);
         assert_eq!(state.disposed.load(Ordering::SeqCst), 2);
         left_provider.dispose().expect("left provider dispose");
@@ -3579,12 +3520,7 @@ mod tests {
             &self,
             _context: &Context,
         ) -> Result<Vec<ServiceCatalogueEntry>, AnyError> {
-            Ok(self
-                .state
-                .current
-                .lock()
-                .catalogue()
-                .to_vec())
+            Ok(self.state.current.lock().catalogue().to_vec())
         }
 
         async fn open(
@@ -3592,11 +3528,7 @@ mod tests {
             options: RemoteServiceSourceOpenOptions,
         ) -> Result<Box<dyn RemoteServices>, AnyError> {
             self.state.opened.fetch_add(1, Ordering::SeqCst);
-            let provider = self
-                .state
-                .current
-                .lock()
-                .clone();
+            let provider = self.state.current.lock().clone();
             let binding = Arc::new(RemoteServiceBinding::new(RemoteServiceBindingOptions {
                 services: options.services,
                 transport: create_loopback_service_transport(provider),

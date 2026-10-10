@@ -13,22 +13,27 @@ use crate::models::{create_provider, ApiDispatch, CreateProviderOptions, Provide
 
 /// Upstream `moonshotai_cnProvider()`.
 pub fn moonshotai_cn_provider() -> Arc<dyn Provider> {
-	create_provider(CreateProviderOptions {
-		id: "moonshotai-cn".to_string(),
-		name: Some("Moonshot AI CN".to_string()),
-		base_url: Some("https://api.moonshot.cn/v1".to_string()),
-		headers: None,
-		auth: ProviderAuth {
-			api_key: Some(env_api_key_auth("Moonshot AI API key", &["MOONSHOT_API_KEY"])),
-			oauth: None,
-		},
-		models: super::moonshotai_cn_models::moonshotai_cn_any_models(),
-		fetch_models: None,
-		filter_models: None,
-		filter_all_models: None,
-		api: Some(ApiDispatch::Single(crate::api::openai_completions::openai_completions_api())),
-		images: Default::default(),
-		classifiers: Default::default(),
-	})
-	.expect("static moonshotai-cn provider configuration is valid")
+    create_provider(CreateProviderOptions {
+        id: "moonshotai-cn".to_string(),
+        name: Some("Moonshot AI CN".to_string()),
+        base_url: Some("https://api.moonshot.cn/v1".to_string()),
+        headers: None,
+        auth: ProviderAuth {
+            api_key: Some(env_api_key_auth(
+                "Moonshot AI API key",
+                &["MOONSHOT_API_KEY"],
+            )),
+            oauth: None,
+        },
+        models: super::moonshotai_cn_models::moonshotai_cn_any_models(),
+        fetch_models: None,
+        filter_models: None,
+        filter_all_models: None,
+        api: Some(ApiDispatch::Single(
+            crate::api::openai_completions::openai_completions_api(),
+        )),
+        images: Default::default(),
+        classifiers: Default::default(),
+    })
+    .expect("static moonshotai-cn provider configuration is valid")
 }

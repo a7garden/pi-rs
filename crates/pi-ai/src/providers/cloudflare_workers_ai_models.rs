@@ -16,44 +16,50 @@ use crate::types::{AnyModel, ClassifierModel, JsonValue, Model};
 pub const CLOUDFLARE_WORKERS_AI_DATA_JSON: &str = include_str!("data/cloudflare-workers-ai.json");
 
 fn groups() -> JsonValue {
-	serde_json::from_str(CLOUDFLARE_WORKERS_AI_DATA_JSON).expect("embedded cloudflare-workers-ai.json parses")
+    serde_json::from_str(CLOUDFLARE_WORKERS_AI_DATA_JSON)
+        .expect("embedded cloudflare-workers-ai.json parses")
 }
 
 /// `CLOUDFLARE_WORKERS_AI_MODELS` (`Object.values` order).
 pub fn cloudflare_workers_ai_models() -> Vec<Model> {
-	crate::model_catalog::flatten_chat_model_catalog("cloudflare-workers-ai", &groups())
-		.into_models()
-		.into_iter()
-		.filter_map(|model| match model {
-			AnyModel::Chat(model) => Some(model),
-			_ => None,
-		})
-		.collect()
+    crate::model_catalog::flatten_chat_model_catalog("cloudflare-workers-ai", &groups())
+        .into_models()
+        .into_iter()
+        .filter_map(|model| match model {
+            AnyModel::Chat(model) => Some(model),
+            _ => None,
+        })
+        .collect()
 }
 
 /// `CLOUDFLARE_WORKERS_AI_IMAGE_MODELS` (`Object.values` order).
 pub fn cloudflare_workers_ai_image_models() -> Vec<AnyModel> {
-	crate::model_catalog::flatten_image_model_catalog("cloudflare-workers-ai", &groups()).into_models()
+    crate::model_catalog::flatten_image_model_catalog("cloudflare-workers-ai", &groups())
+        .into_models()
 }
 
 /// `CLOUDFLARE_WORKERS_AI_CLASSIFIER_MODELS` (`Object.values` order).
 pub fn cloudflare_workers_ai_classifier_models() -> Vec<ClassifierModel> {
-	crate::model_catalog::flatten_classifier_model_catalog("cloudflare-workers-ai", &groups())
-		.into_models()
-		.into_iter()
-		.filter_map(|model| match model {
-			AnyModel::Classifier(model) => Some(model),
-			_ => None,
-		})
-		.collect()
+    crate::model_catalog::flatten_classifier_model_catalog("cloudflare-workers-ai", &groups())
+        .into_models()
+        .into_iter()
+        .filter_map(|model| match model {
+            AnyModel::Classifier(model) => Some(model),
+            _ => None,
+        })
+        .collect()
 }
 
 /// Chat plus classifier entries as `AnyModel`, in the order the provider
 /// factory lists them (`[...MODELS, ...CLASSIFIER_MODELS]` upstream).
 pub fn cloudflare_workers_ai_any_models() -> Vec<AnyModel> {
-	cloudflare_workers_ai_models()
-		.into_iter()
-		.map(AnyModel::Chat)
-		.chain(cloudflare_workers_ai_classifier_models().into_iter().map(AnyModel::Classifier))
-		.collect()
+    cloudflare_workers_ai_models()
+        .into_iter()
+        .map(AnyModel::Chat)
+        .chain(
+            cloudflare_workers_ai_classifier_models()
+                .into_iter()
+                .map(AnyModel::Classifier),
+        )
+        .collect()
 }

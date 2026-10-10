@@ -16,20 +16,20 @@ use pi_chord::services::state::AttachedReplicatedState;
 pub struct TranscriptToken;
 
 pub static TRANSCRIPT: LazyLock<pi_chord::Service<TranscriptService>> =
-	LazyLock::new(|| define_service("pi.transcript", false).expect("service id is valid"));
+    LazyLock::new(|| define_service("pi.transcript", false).expect("service id is valid"));
 
 /// Upstream `Transcript` service value: the attached durable view state.
 #[derive(Clone)]
 pub struct TranscriptService {
-	pub state: Arc<AttachedReplicatedState>,
+    pub state: Arc<AttachedReplicatedState>,
 }
 
 #[cfg(test)]
 mod tests {
-	use super::*;
+    use super::*;
 
-	#[test]
-	fn service_token_pins_the_upstream_id() {
-		assert_eq!(TRANSCRIPT.id(), "pi.transcript");
-	}
+    #[test]
+    fn service_token_pins_the_upstream_id() {
+        assert_eq!(TRANSCRIPT.id(), "pi.transcript");
+    }
 }

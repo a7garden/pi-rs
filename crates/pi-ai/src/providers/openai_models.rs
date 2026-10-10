@@ -15,39 +15,39 @@ use crate::types::{AnyModel, ClassifierModel, JsonValue, Model};
 pub const OPENAI_DATA_JSON: &str = include_str!("data/openai.json");
 
 fn groups() -> JsonValue {
-	serde_json::from_str(OPENAI_DATA_JSON).expect("embedded openai.json parses")
+    serde_json::from_str(OPENAI_DATA_JSON).expect("embedded openai.json parses")
 }
 
 /// `OPENAI_MODELS` (`Object.values` order).
 pub fn openai_models() -> Vec<Model> {
-	crate::model_catalog::flatten_chat_model_catalog("openai", &groups())
-		.into_models()
-		.into_iter()
-		.filter_map(|model| match model {
-			AnyModel::Chat(model) => Some(model),
-			_ => None,
-		})
-		.collect()
+    crate::model_catalog::flatten_chat_model_catalog("openai", &groups())
+        .into_models()
+        .into_iter()
+        .filter_map(|model| match model {
+            AnyModel::Chat(model) => Some(model),
+            _ => None,
+        })
+        .collect()
 }
 
 /// `OPENAI_IMAGE_MODELS` (`Object.values` order).
 pub fn openai_image_models() -> Vec<AnyModel> {
-	crate::model_catalog::flatten_image_model_catalog("openai", &groups()).into_models()
+    crate::model_catalog::flatten_image_model_catalog("openai", &groups()).into_models()
 }
 
 /// `OPENAI_CLASSIFIER_MODELS` (`Object.values` order).
 pub fn openai_classifier_models() -> Vec<ClassifierModel> {
-	crate::model_catalog::flatten_classifier_model_catalog("openai", &groups())
-		.into_models()
-		.into_iter()
-		.filter_map(|model| match model {
-			AnyModel::Classifier(model) => Some(model),
-			_ => None,
-		})
-		.collect()
+    crate::model_catalog::flatten_classifier_model_catalog("openai", &groups())
+        .into_models()
+        .into_iter()
+        .filter_map(|model| match model {
+            AnyModel::Classifier(model) => Some(model),
+            _ => None,
+        })
+        .collect()
 }
 
 /// All chat entries as `AnyModel` (what `create_provider` consumes).
 pub fn openai_any_models() -> Vec<AnyModel> {
-	openai_models().into_iter().map(AnyModel::Chat).collect()
+    openai_models().into_iter().map(AnyModel::Chat).collect()
 }

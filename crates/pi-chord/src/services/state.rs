@@ -37,22 +37,24 @@ use std::any::Any;
 use std::cell::UnsafeCell;
 use std::collections::VecDeque;
 use std::panic::{catch_unwind, AssertUnwindSafe};
-use std::sync::{Arc};
-use {parking_lot::Mutex, parking_lot::MutexGuard};
+use std::sync::Arc;
 use std::task::{Context as TaskContext, Poll};
+use {parking_lot::Mutex, parking_lot::MutexGuard};
 
 use futures::FutureExt;
 use tracing::error as tracing_error;
 
 use crate::context::{Context, BACKGROUND_CONTEXT};
-use crate::delta::{apply_immutable, is_base_decoded, Draft, JsonRevisionValidator, Op, Tracker, track};
+use crate::delta::{
+    apply_immutable, is_base_decoded, track, Draft, JsonRevisionValidator, Op, Tracker,
+};
 use crate::json::JsonValue;
 use crate::services::errors::{error, AggregateError, AnyError};
 use crate::services::state_internals::{SourceListener, StateInternals, StateSnapshot};
 use crate::types::{
-    arc_error::ErrorHandler, BoxFuture, ReplicatedState, ReplicatedStateDelivery, ReplicatedStateDeliveryKind,
-    ReplicatedStateSource, ReplicatedStateSourceAttachment, ReplicatedStateSourceFrame,
-    ReplicatedStateSourceOptions, StateListener, Unsubscribe,
+    arc_error::ErrorHandler, BoxFuture, ReplicatedState, ReplicatedStateDelivery,
+    ReplicatedStateDeliveryKind, ReplicatedStateSource, ReplicatedStateSourceAttachment,
+    ReplicatedStateSourceFrame, ReplicatedStateSourceOptions, StateListener, Unsubscribe,
 };
 
 /// Maximum deliveries buffered for one subscriber before overflow handling
@@ -200,7 +202,11 @@ fn subscriber_push(subscriber: &Subscriber, frame: StateDeliveryFrame) {
         // A cold replica can queue updates reentrantly before this subscriber's
         // first hydration starts; keep the hydration frame in that case, else
         // keep only the newest delivery.
-        let hydration = if state.started { None } else { state.pending.pop_front() };
+        let hydration = if state.started {
+            None
+        } else {
+            state.pending.pop_front()
+        };
         state.pending.clear();
         if let Some(hydration) = hydration {
             state.pending.push_front(hydration);
@@ -226,7 +232,9 @@ fn invoke_listener(
     report_error: &ReportError,
     frame: &StateDeliveryFrame,
 ) -> Option<BoxFuture<()>> {
-    let invoked = catch_unwind(AssertUnwindSafe(|| listener(&frame.value, &frame.context, &frame.delivery)));
+    let invoked = catch_unwind(AssertUnwindSafe(|| {
+        listener(&frame.value, &frame.context, &frame.delivery)
+    }));
     let mut future = match invoked {
         Ok(future) => future,
         Err(payload) => {
@@ -284,7 +292,11 @@ fn subscriber_drain(subscriber: &Subscriber) {
 
 /// Park one pending listener future on the runtime; when it settles, release the
 /// subscriber's running flag and continue the drain (upstream `#resume`).
-fn subscriber_park_and_resume(subscriber: &Subscriber, report_error: ReportError, future: BoxFuture<()>) {
+fn subscriber_park_and_resume(
+    subscriber: &Subscriber,
+    report_error: ReportError,
+    future: BoxFuture<()>,
+) {
     let resume_target = subscriber.clone();
     tokio::spawn(async move {
         // Isolate listener rejections exactly like the synchronous path.
@@ -341,13 +353,19 @@ impl Publisher {
     /// Atomically capture the immutable value and its matching sequence.
     fn snapshot(&self) -> (JsonValue, u64) {
         let state = publisher_lock(&self.0);
-        (state.committed.get().cloned().unwrap_or_default(), state.sequence)
+        (
+            state.committed.get().cloned().unwrap_or_default(),
+            state.sequence,
+        )
     }
 
     fn subscribe(&self, listener: StateListener) -> Unsubscribe {
         let subscriber = {
             let mut state = publisher_lock(&self.0);
-            let (value, sequence) = (state.committed.get().cloned().unwrap_or_default(), state.sequence);
+            let (value, sequence) = (
+                state.committed.get().cloned().unwrap_or_default(),
+                state.sequence,
+            );
             let subscriber = subscriber_new(listener, state.report_error.clone());
             state.listeners.push((subscriber.clone(), sequence));
             subscriber_push(
@@ -369,7 +387,9 @@ impl Publisher {
             // Close before touching the publisher lock: lock order is always
             // publisher → subscriber elsewhere.
             subscriber_close(&subscriber);
-            publisher_lock(&owner).listeners.retain(|(existing, _)| !Arc::ptr_eq(existing, &subscriber));
+            publisher_lock(&owner)
+                .listeners
+                .retain(|(existing, _)| !Arc::ptr_eq(existing, &subscriber));
         })
     }
 
@@ -408,11 +428,14 @@ impl Publisher {
         }
         loop {
             let publication = publisher_lock(&self.0).publications.pop_front();
-            let Some(publication) = publication else { break };
+            let Some(publication) = publication else {
+                break;
+            };
             let source_listeners = publisher_lock(&self.0).source_listeners.clone();
             for listener in &source_listeners {
-                let invoked =
-                    catch_unwind(AssertUnwindSafe(|| listener(&publication.ops, publication.sequence, &publication.context)));
+                let invoked = catch_unwind(AssertUnwindSafe(|| {
+                    listener(&publication.ops, publication.sequence, &publication.context)
+                }));
                 if let Err(payload) = invoked {
                     errors.push(panic_to_error(payload));
                 }
@@ -490,7 +513,9 @@ impl MutableReplicatedState {
 
     /// The committed immutable value.
     pub fn value(&self) -> &JsonValue {
-        self.committed.get().expect("mutable replicated state always has a value")
+        self.committed
+            .get()
+            .expect("mutable replicated state always has a value")
     }
 
     /// Apply a transactional mutation through a draft; aborts and rolls back on
@@ -506,7 +531,9 @@ impl MutableReplicatedState {
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
             .is_err()
         {
-            return Err(error("Replicated state cannot be changed reentrantly from a change callback"));
+            return Err(error(
+                "Replicated state cannot be changed reentrantly from a change callback",
+            ));
         }
         let revision: Result<Option<(JsonValue, Vec<Op>)>, AnyError> = (|| {
             let mut tracker = self.tracker.lock();
@@ -528,7 +555,9 @@ impl MutableReplicatedState {
         })();
         self.changing.store(false, Ordering::Release);
 
-        let Some((value, ops)) = revision? else { return Ok(()) };
+        let Some((value, ops)) = revision? else {
+            return Ok(());
+        };
         let errors = self.publisher.publish(value, ops, context);
         throw_collected(errors, "Replicated state listeners failed")
     }
@@ -537,7 +566,9 @@ impl MutableReplicatedState {
     pub fn replace(&self, context: &Context, value: JsonValue) -> Result<(), AnyError> {
         use std::sync::atomic::Ordering;
         if self.changing.load(Ordering::Acquire) {
-            return Err(error("Replicated state cannot be replaced from a change callback"));
+            return Err(error(
+                "Replicated state cannot be replaced from a change callback",
+            ));
         }
         let revision = (|| -> Result<Option<(JsonValue, Vec<Op>)>, AnyError> {
             let mut tracker = self.tracker.lock();
@@ -550,7 +581,9 @@ impl MutableReplicatedState {
             tracker.adopt(prepared).map_err(AnyError::from)?;
             Ok(payload)
         })()?;
-        let Some((value, ops)) = revision else { return Ok(()) };
+        let Some((value, ops)) = revision else {
+            return Ok(());
+        };
         let errors = self.publisher.publish(value, ops, context);
         throw_collected(errors, "Replicated state listeners failed")
     }
@@ -567,7 +600,11 @@ impl MutableReplicatedState {
 
 impl ReplicatedState for MutableReplicatedState {
     fn value(&self) -> Option<&JsonValue> {
-        Some(self.committed.get().expect("mutable replicated state always has a value"))
+        Some(
+            self.committed
+                .get()
+                .expect("mutable replicated state always has a value"),
+        )
     }
 
     fn subscribe(&self, listener: StateListener) -> Unsubscribe {
@@ -637,7 +674,9 @@ impl AttachedReplicatedState {
 
     /// The committed immutable value.
     pub fn value(&self) -> &JsonValue {
-        self.committed.get().expect("attached replicated state always has a value")
+        self.committed
+            .get()
+            .expect("attached replicated state always has a value")
     }
 
     pub fn subscribe(&self, listener: StateListener) -> Unsubscribe {
@@ -685,11 +724,16 @@ impl AttachedReplicatedState {
                     frame.cursor
                 )));
             }
-            let errors = self.publisher.publish(frame.value, frame.ops, &frame.context);
+            let errors = self
+                .publisher
+                .publish(frame.value, frame.ops, &frame.context);
             match errors.len() {
                 0 => Ok(()),
                 1 => Err(errors.into_iter().next().expect("one error")),
-                _ => Err(AggregateError::new("Replicated state listeners failed", errors)),
+                _ => Err(AggregateError::new(
+                    "Replicated state listeners failed",
+                    errors,
+                )),
             }
         }));
         match outcome {
@@ -725,7 +769,11 @@ impl AttachedReplicatedState {
 
 impl ReplicatedState for AttachedReplicatedState {
     fn value(&self) -> Option<&JsonValue> {
-        Some(self.committed.get().expect("attached replicated state always has a value"))
+        Some(
+            self.committed
+                .get()
+                .expect("attached replicated state always has a value"),
+        )
     }
 
     fn subscribe(&self, listener: StateListener) -> Unsubscribe {
@@ -813,7 +861,6 @@ impl ReplicatedStateReplica {
             subscriber_close(&subscriber);
             listeners
                 .lock()
-                
                 .retain(|existing| !Arc::ptr_eq(existing, &subscriber));
         })
     }
@@ -822,16 +869,14 @@ impl ReplicatedStateReplica {
     pub fn hydrate(&self, sequence: u64, ops: &[Op], context: &Context) -> Result<(), AnyError> {
         let next = (|| -> Result<JsonValue, AnyError> {
             if !is_base_decoded(ops) {
-                return Err(error("Replicated state snapshot is not a base operation batch"));
+                return Err(error(
+                    "Replicated state snapshot is not a base operation batch",
+                ));
             }
             let applied = apply_immutable(&JsonValue::Null, ops).map_err(AnyError::from)?;
             // Strict-JSON validation is upheld by construction in serde_json;
             // the validator remains as the upstream call-site (infallible).
-            Ok(self
-                .validator
-                .lock()
-                
-                .validate(applied))
+            Ok(self.validator.lock().validate(applied))
         })();
         match next {
             Err(err) => {
@@ -857,7 +902,9 @@ impl ReplicatedStateReplica {
     pub fn update(&self, sequence: u64, ops: &[Op], context: &Context) -> Result<(), AnyError> {
         let current_sequence = *self.sequence.lock();
         let Some(current_sequence) = current_sequence else {
-            return Err(error("Replicated state received an update before hydration"));
+            return Err(error(
+                "Replicated state received an update before hydration",
+            ));
         };
         if sequence != current_sequence + 1 {
             self.clear();
@@ -869,11 +916,7 @@ impl ReplicatedStateReplica {
                 ops,
             )
             .map_err(AnyError::from)?;
-            Ok(self
-                .validator
-                .lock()
-                
-                .validate(applied))
+            Ok(self.validator.lock().validate(applied))
         })();
         match applied {
             Err(err) => {
@@ -906,7 +949,9 @@ impl ReplicatedStateReplica {
     }
 
     fn deliver_all(&self, context: &Context, delivery: ReplicatedStateDelivery) {
-        let Some(value) = self.committed.get() else { return };
+        let Some(value) = self.committed.get() else {
+            return;
+        };
         let subscribers = self.listeners.lock().clone();
         // Enqueue for everyone before user code can publish another revision
         // reentrantly.
@@ -1001,7 +1046,10 @@ mod tests {
     impl Deferred {
         fn new() -> Deferred {
             let (tx, rx) = tokio::sync::oneshot::channel();
-            Deferred { tx: Some(tx), rx: Some(rx) }
+            Deferred {
+                tx: Some(tx),
+                rx: Some(rx),
+            }
         }
 
         fn resolve(&mut self) {
@@ -1040,29 +1088,29 @@ mod tests {
 
     /// Error collectors snapshot as message strings (`AnyError` is not `Clone`).
     fn snapshot_errors(events: &Events<AnyError>) -> Vec<String> {
-        events
-            .lock()
-            
-            .iter()
-            .map(ToString::to_string)
-            .collect()
+        events.lock().iter().map(ToString::to_string).collect()
     }
 
     /// Sync listener recording delivery metadata.
-    fn recording_listener(
-        received: Events<(u64, ReplicatedStateDelivery)>,
-    ) -> StateListener {
+    fn recording_listener(received: Events<(u64, ReplicatedStateDelivery)>) -> StateListener {
         Arc::new(move |value, _context, delivery| {
-            received
-                .lock()
-                
-                .push((value.as_object().and_then(|o| o.get("value")).and_then(JsonValue::as_u64).unwrap_or(0), delivery.clone()));
+            received.lock().push((
+                value
+                    .as_object()
+                    .and_then(|o| o.get("value"))
+                    .and_then(JsonValue::as_u64)
+                    .unwrap_or(0),
+                delivery.clone(),
+            ));
             Box::pin(std::future::ready(()))
         })
     }
 
     fn value_of(value: &JsonValue) -> u64 {
-        value.get("value").and_then(JsonValue::as_u64).expect("test values carry {value}")
+        value
+            .get("value")
+            .and_then(JsonValue::as_u64)
+            .expect("test values carry {value}")
     }
 
     // ── state.test.ts: transactional replicated state ───────────────────────
@@ -1070,7 +1118,9 @@ mod tests {
     // "publishes one immutable structurally shared revision"
     #[test]
     fn publishes_one_immutable_structurally_shared_revision() {
-        let state = MutableReplicatedState::new(json!({ "changed": { "value": 1 }, "retained": { "value": 2 } }));
+        let state = MutableReplicatedState::new(
+            json!({ "changed": { "value": 1 }, "retained": { "value": 2 } }),
+        );
         let previous: &JsonValue = state.value();
         let deliveries = events();
         state.subscribe(recording_listener(deliveries.clone()));
@@ -1081,7 +1131,10 @@ mod tests {
                 Ok(())
             })
             .expect("change succeeds");
-        assert_eq!(state.value(), &json!({ "changed": { "value": 4 }, "retained": { "value": 2 } }));
+        assert_eq!(
+            state.value(),
+            &json!({ "changed": { "value": 4 }, "retained": { "value": 2 } })
+        );
         // Root identity: a committed revision is a new value (upstream not.toBe).
         assert!(!std::ptr::eq(previous, state.value()));
         // Upstream also asserts `retained` branch sharing via object identity;
@@ -1089,7 +1142,25 @@ mod tests {
         // (unrelated branches are not re-diffed or re-created semantically) is
         // asserted structurally instead.
         assert_eq!(previous.get("retained"), state.value().get("retained"));
-        assert_eq!(snapshot_events(&deliveries), vec![(0, ReplicatedStateDelivery { kind: ReplicatedStateDeliveryKind::Hydrate, sequence: 0 }), (0, ReplicatedStateDelivery { kind: ReplicatedStateDeliveryKind::Update, sequence: 1 })]);
+        assert_eq!(
+            snapshot_events(&deliveries),
+            vec![
+                (
+                    0,
+                    ReplicatedStateDelivery {
+                        kind: ReplicatedStateDeliveryKind::Hydrate,
+                        sequence: 0
+                    }
+                ),
+                (
+                    0,
+                    ReplicatedStateDelivery {
+                        kind: ReplicatedStateDeliveryKind::Update,
+                        sequence: 1
+                    }
+                )
+            ]
+        );
     }
 
     // "rolls back callback failures and revokes escaped drafts" — the escaped
@@ -1120,7 +1191,9 @@ mod tests {
         let error = state
             .change(ctx(), |draft| {
                 draft.set(&[], "left", json!(1))?;
-                state.change(ctx(), |nested| nested.set(&[], "right", json!(2)).map_err(AnyError::from))
+                state.change(ctx(), |nested| {
+                    nested.set(&[], "right", json!(2)).map_err(AnyError::from)
+                })
             })
             .expect_err("nested change is rejected");
         assert!(error.to_string().contains("reentrantly"));
@@ -1151,7 +1224,9 @@ mod tests {
             .subscribe(Arc::new(move |_operations, sequence, _context| {
                 if nested_for_source.swap(1, std::sync::atomic::Ordering::SeqCst) == 0 {
                     state_for_source
-                        .change(ctx(), |draft| draft.set(&[], "value", json!(2)).map_err(AnyError::from))
+                        .change(ctx(), |draft| {
+                            draft.set(&[], "value", json!(2)).map_err(AnyError::from)
+                        })
                         .expect("listener-triggered change queues");
                     let late_sink = late_for_source.clone();
                     state_for_source.subscribe(Arc::new(move |_value, _context, delivery| {
@@ -1171,19 +1246,23 @@ mod tests {
             if delivery.kind == ReplicatedStateDeliveryKind::Update {
                 update_sink
                     .lock()
-                    
                     .push((value_of(value), delivery.sequence));
             }
             Box::pin(std::future::ready(()))
         }));
         state
-            .change(ctx(), |draft| draft.set(&[], "value", json!(1)).map_err(AnyError::from))
+            .change(ctx(), |draft| {
+                draft.set(&[], "value", json!(1)).map_err(AnyError::from)
+            })
             .expect("change succeeds");
         assert_eq!(snapshot_events(&source_sequences), vec![1, 2]);
         assert_eq!(snapshot_events(&deliveries), vec![(1, 1), (2, 2)]);
         assert_eq!(
             snapshot_events(&late_deliveries),
-            vec![ReplicatedStateDelivery { kind: ReplicatedStateDeliveryKind::Hydrate, sequence: 2 }]
+            vec![ReplicatedStateDelivery {
+                kind: ReplicatedStateDeliveryKind::Hydrate,
+                sequence: 2
+            }]
         );
     }
 
@@ -1195,14 +1274,18 @@ mod tests {
         let received_sink = received.clone();
         state
             .internals()
-            .subscribe(Arc::new(|_operations, _sequence, _context| panic!("listener failed")));
+            .subscribe(Arc::new(|_operations, _sequence, _context| {
+                panic!("listener failed")
+            }));
         state
             .internals()
             .subscribe(Arc::new(move |_operations, sequence, _context| {
                 received_sink.lock().push(sequence);
             }));
         let error = state
-            .change(ctx(), |draft| draft.set(&[], "value", json!(1)).map_err(AnyError::from))
+            .change(ctx(), |draft| {
+                draft.set(&[], "value", json!(1)).map_err(AnyError::from)
+            })
             .expect_err("source listener failure is collected");
         assert_eq!(error.to_string(), "listener failed");
         assert_eq!(state.value(), &json!({ "value": 1 }));
@@ -1213,7 +1296,9 @@ mod tests {
     #[test]
     fn copies_assigned_values_by_value() {
         let external = json!({ "value": 1 });
-        let state = MutableReplicatedState::new(json!({ "left": JsonValue::Null, "right": JsonValue::Null }));
+        let state = MutableReplicatedState::new(
+            json!({ "left": JsonValue::Null, "right": JsonValue::Null }),
+        );
         state
             .change(ctx(), |draft| {
                 draft.set(&[], "left", external.clone())?;
@@ -1223,23 +1308,35 @@ mod tests {
             })
             .expect("change succeeds");
         assert_eq!(external, json!({ "value": 1 }));
-        assert_eq!(state.value(), &json!({ "left": { "value": 2 }, "right": { "value": 1 } }));
+        assert_eq!(
+            state.value(),
+            &json!({ "left": { "value": 2 }, "right": { "value": 1 } })
+        );
     }
 
     // "takes immutable ownership of alias-free replacements"
     #[test]
     fn takes_immutable_ownership_of_alias_free_replacements() {
-        let state = MutableReplicatedState::new(json!({ "left": { "value": 1 }, "right": { "value": 2 } }));
+        let state =
+            MutableReplicatedState::new(json!({ "left": { "value": 1 }, "right": { "value": 2 } }));
         let left = state.value().get("left").cloned().expect("left present");
         let replacement = json!({ "left": left.clone(), "right": left });
         state.replace(ctx(), replacement).expect("replace succeeds");
-        assert_eq!(state.value(), &json!({ "left": { "value": 1 }, "right": { "value": 1 } }));
+        assert_eq!(
+            state.value(),
+            &json!({ "left": { "value": 1 }, "right": { "value": 1 } })
+        );
         state
             .change(ctx(), |draft| {
-                draft.set(&[Seg::key("left")], "value", json!(9)).map_err(AnyError::from)
+                draft
+                    .set(&[Seg::key("left")], "value", json!(9))
+                    .map_err(AnyError::from)
             })
             .expect("change succeeds");
-        assert_eq!(state.value(), &json!({ "left": { "value": 9 }, "right": { "value": 1 } }));
+        assert_eq!(
+            state.value(),
+            &json!({ "left": { "value": 9 }, "right": { "value": 1 } })
+        );
     }
 
     // "preserves compact string, splice, and permutation operations"
@@ -1256,7 +1353,6 @@ mod tests {
             .subscribe(Arc::new(move |operations, _sequence, _context| {
                 batches_sink
                     .lock()
-                    
                     .push(serde_json::to_value(operations).expect("ops serialize"));
             }));
         state
@@ -1298,16 +1394,14 @@ mod tests {
     fn validates_replica_revisions() {
         let replica = ReplicatedStateReplica::new(Arc::new(|_| {}));
         let initial = json!({ "rows": [{ "value": 1 }] });
-        replica.hydrate(0, &ops(json!([["r", initial]])), ctx()).expect("hydrate succeeds");
+        replica
+            .hydrate(0, &ops(json!([["r", initial]])), ctx())
+            .expect("hydrate succeeds");
         assert_eq!(replica.value(), Some(&initial));
 
         let inserted = json!({ "value": 2 });
         replica
-            .update(
-                1,
-                &ops(json!([["p", ["rows"], 1, 0, [inserted]]])),
-                ctx(),
-            )
+            .update(1, &ops(json!([["p", ["rows"], 1, 0, [inserted]]])), ctx())
             .expect("update succeeds");
         assert_eq!(
             replica.value(),
@@ -1327,7 +1421,9 @@ mod tests {
         let replica = ReplicatedStateReplica::new(Arc::new(move |error| {
             error_sink.lock().push(error);
         }));
-        replica.hydrate(0, &ops(json!([["r", { "value": 0 }]])), ctx()).expect("hydrate succeeds");
+        replica
+            .hydrate(0, &ops(json!([["r", { "value": 0 }]])), ctx())
+            .expect("hydrate succeeds");
         let failure = replica
             .update(1, &ops(json!([["a", ["value"], "tail"]])), ctx())
             .expect_err("append onto a number fails");
@@ -1345,7 +1441,9 @@ mod tests {
         malformed
             .hydrate(0, &ops(json!([["r", { "values": [1, 2] }]])), ctx())
             .expect("hydrate succeeds");
-        assert!(malformed.update(1, &ops(json!([["m", ["values"], [0]]])), ctx()).is_err());
+        assert!(malformed
+            .update(1, &ops(json!([["m", ["values"], [0]]])), ctx())
+            .is_err());
         assert_eq!(malformed.value(), None);
         assert!(snapshot_errors(&errors).is_empty());
     }
@@ -1353,17 +1451,28 @@ mod tests {
     // "replaces atomically and ignores deeply equal replacements"
     #[test]
     fn replaces_atomically_and_ignores_deeply_equal_replacements() {
-        let state = MutableReplicatedState::new(json!({ "value": { "nested": 1 }, "retained": { "nested": 2 } }));
+        let state = MutableReplicatedState::new(
+            json!({ "value": { "nested": 1 }, "retained": { "nested": 2 } }),
+        );
         let previous: &JsonValue = state.value();
         state
-            .replace(ctx(), json!({ "value": { "nested": 1 }, "retained": { "nested": 2 } }))
+            .replace(
+                ctx(),
+                json!({ "value": { "nested": 1 }, "retained": { "nested": 2 } }),
+            )
             .expect("deeply equal replace is a no-op");
         assert!(std::ptr::eq(previous, state.value()));
         let retained = previous.get("retained").cloned().expect("retained present");
         state
-            .replace(ctx(), json!({ "value": { "nested": 2 }, "retained": { "nested": 2 } }))
+            .replace(
+                ctx(),
+                json!({ "value": { "nested": 2 }, "retained": { "nested": 2 } }),
+            )
             .expect("replace succeeds");
-        assert_eq!(state.value(), &json!({ "value": { "nested": 2 }, "retained": { "nested": 2 } }));
+        assert_eq!(
+            state.value(),
+            &json!({ "value": { "nested": 2 }, "retained": { "nested": 2 } })
+        );
         // Upstream asserts the retained branch keeps its identity; serde values
         // cannot share subtrees, so the content guarantee is asserted instead.
         assert_eq!(state.value().get("retained"), Some(&retained));
@@ -1431,10 +1540,7 @@ mod tests {
                 disposed: std::sync::atomic::AtomicBool::new(false),
                 source: Arc::downgrade(&self),
             });
-            self.attachments
-                .lock()
-                
-                .push(inner.clone());
+            self.attachments.lock().push(inner.clone());
             if let Some(hook) = self.on_attach.lock().as_ref() {
                 hook(&self);
             }
@@ -1479,19 +1585,12 @@ mod tests {
             let listener = self.listener.lock().clone();
             match listener {
                 Some(listener) => listener(frame),
-                None => self
-                    .buffer
-                    .lock()
-                    
-                    .push(frame),
+                None => self.buffer.lock().push(frame),
             }
         }
 
         fn snapshot(&self) -> ReplicatedStateSourceSnapshot {
-            self.snapshot
-                .lock()
-                
-                .clone()
+            self.snapshot.lock().clone()
         }
 
         fn activate(&self, listener: SourceFrameListener) {
@@ -1516,7 +1615,6 @@ mod tests {
                 source
                     .attachments
                     .lock()
-                    
                     .retain(|attachment| attachment.id != self.id);
             }
         }
@@ -1542,7 +1640,13 @@ mod tests {
         assert_eq!(state.value(), &json!({ "value": 2 }));
         assert_eq!(
             snapshot_events(&deliveries),
-            vec![(2, ReplicatedStateDelivery { kind: ReplicatedStateDeliveryKind::Hydrate, sequence: 2 })]
+            vec![(
+                2,
+                ReplicatedStateDelivery {
+                    kind: ReplicatedStateDeliveryKind::Hydrate,
+                    sequence: 2
+                }
+            )]
         );
         let snapshot = state.internals().snapshot();
         assert_eq!(snapshot.value, json!({ "value": 2 }));
@@ -1564,7 +1668,13 @@ mod tests {
         assert_eq!(state.value(), &json!({ "value": 1 }));
         assert_eq!(
             snapshot_events(&deliveries),
-            vec![(1, ReplicatedStateDelivery { kind: ReplicatedStateDeliveryKind::Hydrate, sequence: 0 })]
+            vec![(
+                1,
+                ReplicatedStateDelivery {
+                    kind: ReplicatedStateDeliveryKind::Hydrate,
+                    sequence: 0
+                }
+            )]
         );
     }
 
@@ -1586,7 +1696,6 @@ mod tests {
             .subscribe(Arc::new(move |received, _sequence, _context| {
                 published_ops_sink
                     .lock()
-                    
                     .push(serde_json::to_value(received).expect("ops serialize"));
             }));
         let published_value = events::<JsonValue>();
@@ -1600,8 +1709,14 @@ mod tests {
 
         source.commit(json!({ "value": 1 }), json!([["s", ["value"], 1]]), 1);
         assert_eq!(state.value(), &json!({ "value": 1 }));
-        assert_eq!(snapshot_events(&published_value), vec![json!({ "value": 1 })]);
-        assert_eq!(snapshot_events(&published_ops), vec![json!([["s", ["value"], 1]])]);
+        assert_eq!(
+            snapshot_events(&published_value),
+            vec![json!({ "value": 1 })]
+        );
+        assert_eq!(
+            snapshot_events(&published_ops),
+            vec![json!([["s", ["value"], 1]])]
+        );
     }
 
     // "buffers reentrant frames and skips updates covered by a late hydration"
@@ -1624,16 +1739,15 @@ mod tests {
         state
             .internals()
             .subscribe(Arc::new(move |_ops, sequence, _context| {
-                if sequence != 1 || nested_for_source.swap(1, std::sync::atomic::Ordering::SeqCst) != 0 {
+                if sequence != 1
+                    || nested_for_source.swap(1, std::sync::atomic::Ordering::SeqCst) != 0
+                {
                     return;
                 }
                 source_for_source.commit(json!({ "value": 2 }), json!([["s", ["value"], 2]]), 2);
                 let late_sink = late_for_source.clone();
                 state_for_source.subscribe(Arc::new(move |value, _context, delivery| {
-                    late_sink
-                        .lock()
-                        
-                        .push((value_of(value), delivery.clone()));
+                    late_sink.lock().push((value_of(value), delivery.clone()));
                     Box::pin(std::future::ready(()))
                 }));
             }));
@@ -1649,7 +1763,13 @@ mod tests {
         assert_eq!(snapshot_events(&received), vec![1, 2]);
         assert_eq!(
             snapshot_events(&late),
-            vec![(2, ReplicatedStateDelivery { kind: ReplicatedStateDeliveryKind::Hydrate, sequence: 2 })]
+            vec![(
+                2,
+                ReplicatedStateDelivery {
+                    kind: ReplicatedStateDeliveryKind::Hydrate,
+                    sequence: 2
+                }
+            )]
         );
     }
 
@@ -1774,11 +1894,7 @@ mod tests {
             let listener = self.listener.lock().clone();
             match listener {
                 Some(listener) => listener(frame),
-                None => self
-                    .buffer
-                    .lock()
-                    
-                    .push(frame),
+                None => self.buffer.lock().push(frame),
             }
         }
     }
@@ -1787,7 +1903,10 @@ mod tests {
         fn attach(self: Arc<Self>) -> Box<dyn ReplicatedStateSourceAttachment> {
             Box::new(FixtureAttachment {
                 source: Arc::downgrade(&self),
-                snapshot: ReplicatedStateSourceSnapshot { value: json!({ "value": 0 }), cursor: 0 },
+                snapshot: ReplicatedStateSourceSnapshot {
+                    value: json!({ "value": 0 }),
+                    cursor: 0,
+                },
                 buffer: Mutex::new(Vec::new()),
                 listener: Mutex::new(None),
                 activated: std::sync::atomic::AtomicBool::new(false),
@@ -1871,7 +1990,9 @@ mod tests {
                 });
                 let state = attach_replicated_state_source(
                     source.clone(),
-                    ReplicatedStateSourceOptions { on_error: Some(on_error) },
+                    ReplicatedStateSourceOptions {
+                        on_error: Some(on_error),
+                    },
                 )
                 .expect("attach succeeds");
                 let internals = Some(state.internals());
@@ -1885,7 +2006,8 @@ mod tests {
                         source.receive(ReplicatedStateSourceFrame {
                             cursor: value,
                             value: json!({ "value": value }),
-                            ops: serde_json::from_value(json!([["s", ["value"], value]])).expect("ops"),
+                            ops: serde_json::from_value(json!([["s", ["value"], value]]))
+                                .expect("ops"),
                             context: context.clone(),
                         });
                     }),
@@ -1929,44 +2051,42 @@ mod tests {
             let events_for_listener = delivery_events.clone();
             let hydration_rx = Mutex::new(Some(hydration.receiver("hydration rejected")));
             let update_rx = Mutex::new(Some(update.receiver("update rejected")));
-            fixture.state.subscribe(Arc::new(move |value, _context, _delivery| {
-                let v = value_of(value);
-                let event_sink = events_for_listener.clone();
-                event_sink
-                    .lock()
-                    
-                    .push(format!("start:{v}"));
-                let gate = match v {
-                    0 => hydration_rx.lock().take(),
-                    1 => update_rx.lock().take(),
-                    _ => None,
-                };
-                match gate {
-                    Some(gate) => Box::pin(async move {
-                        gate.await;
-                        event_sink
-                            .lock()
-                            
-                            .push(format!("end:{v}"));
-                    }),
-                    None => {
-                        event_sink
-                            .lock()
-                            
-                            .push(format!("end:{v}"));
-                        Box::pin(std::future::ready(()))
+            fixture
+                .state
+                .subscribe(Arc::new(move |value, _context, _delivery| {
+                    let v = value_of(value);
+                    let event_sink = events_for_listener.clone();
+                    event_sink.lock().push(format!("start:{v}"));
+                    let gate = match v {
+                        0 => hydration_rx.lock().take(),
+                        1 => update_rx.lock().take(),
+                        _ => None,
+                    };
+                    match gate {
+                        Some(gate) => Box::pin(async move {
+                            gate.await;
+                            event_sink.lock().push(format!("end:{v}"));
+                        }),
+                        None => {
+                            event_sink.lock().push(format!("end:{v}"));
+                            Box::pin(std::future::ready(()))
+                        }
                     }
-                }
-            }));
+                }));
             let fast = events::<u64>();
             let fast_sink = fast.clone();
-            fixture.state.subscribe(Arc::new(move |value, _context, _delivery| {
-                fast_sink.lock().push(value_of(value));
-                Box::pin(std::future::ready(()))
-            }));
+            fixture
+                .state
+                .subscribe(Arc::new(move |value, _context, _delivery| {
+                    fast_sink.lock().push(value_of(value));
+                    Box::pin(std::future::ready(()))
+                }));
             (fixture.publish)(1, ctx());
             (fixture.publish)(2, ctx());
-            assert_eq!(snapshot_events(&delivery_events), vec!["start:0".to_string()]);
+            assert_eq!(
+                snapshot_events(&delivery_events),
+                vec!["start:0".to_string()]
+            );
             assert_eq!(snapshot_events(&fast), vec![0, 1, 2]);
             assert_eq!(fixture.state.value(), Some(&json!({ "value": 2 })));
             if kind != Kind::Replica {
@@ -1975,7 +2095,11 @@ mod tests {
             hydration.resolve();
             wait_for(|| {
                 snapshot_events(&delivery_events)
-                    == vec!["start:0".to_string(), "end:0".to_string(), "start:1".to_string()]
+                    == vec![
+                        "start:0".to_string(),
+                        "end:0".to_string(),
+                        "start:1".to_string(),
+                    ]
             })
             .await;
             update.resolve();
@@ -2011,26 +2135,31 @@ mod tests {
                 }
                 let received_sink = received.clone();
                 let hydration_rx = Mutex::new(Some(hydration.receiver("hydration rejected")));
-                fixture.state.subscribe(Arc::new(move |value, _context, _delivery| {
-                    let v = value_of(value);
-                    received_sink.lock().push(v);
-                    match v {
-                        0 => {
-                            let gate = hydration_rx.lock().take();
-                            match gate {
-                                Some(gate) => Box::pin(gate),
-                                None => Box::pin(std::future::ready(())),
+                fixture
+                    .state
+                    .subscribe(Arc::new(move |value, _context, _delivery| {
+                        let v = value_of(value);
+                        received_sink.lock().push(v);
+                        match v {
+                            0 => {
+                                let gate = hydration_rx.lock().take();
+                                match gate {
+                                    Some(gate) => Box::pin(gate),
+                                    None => Box::pin(std::future::ready(())),
+                                }
                             }
+                            _ => Box::pin(std::future::ready(())),
                         }
-                        _ => Box::pin(std::future::ready(())),
-                    }
-                }));
+                    }));
                 for value in 1..=count as u64 {
                     (fixture.publish)(value, ctx());
                 }
                 assert_eq!(snapshot_events(&received), vec![0]);
                 if kind != Kind::Replica {
-                    assert_eq!(snapshot_events(&exact), (1..=count as u64).collect::<Vec<_>>());
+                    assert_eq!(
+                        snapshot_events(&exact),
+                        (1..=count as u64).collect::<Vec<_>>()
+                    );
                 }
                 hydration.resolve();
                 let expected_first = ((count as u64 - 1) / 100) * 100 + 1;
@@ -2050,29 +2179,29 @@ mod tests {
             let fixture = fixture(kind, Arc::new(|_| {}));
             let cancel = with_cancel(ctx().clone());
             let marker_key: ContextKey<u64> = crate::context::create_context_key("test.marker");
-            let context = crate::context::with_context_value(&marker_key, 4242u64, cancel.context.clone());
+            let context =
+                crate::context::with_context_value(&marker_key, 4242u64, cancel.context.clone());
             let received = events::<(u64, Option<u64>, ReplicatedStateDelivery)>();
             let received_sink = received.clone();
             let gate_rx = Mutex::new(Some(gate.receiver("gate rejected")));
             let marker_key_for_listener = marker_key;
-            fixture.state.subscribe(Arc::new(move |value, context, delivery| {
-                let v = value_of(value);
-                let marker = context.value(&marker_key_for_listener);
-                received_sink
-                    .lock()
-                    
-                    .push((v, marker, delivery.clone()));
-                match v {
-                    1 => {
-                        let gate = gate_rx.lock().take();
-                        match gate {
-                            Some(gate) => Box::pin(gate),
-                            None => Box::pin(std::future::ready(())),
+            fixture
+                .state
+                .subscribe(Arc::new(move |value, context, delivery| {
+                    let v = value_of(value);
+                    let marker = context.value(&marker_key_for_listener);
+                    received_sink.lock().push((v, marker, delivery.clone()));
+                    match v {
+                        1 => {
+                            let gate = gate_rx.lock().take();
+                            match gate {
+                                Some(gate) => Box::pin(gate),
+                                None => Box::pin(std::future::ready(())),
+                            }
                         }
+                        _ => Box::pin(std::future::ready(())),
                     }
-                    _ => Box::pin(std::future::ready(())),
-                }
-            }));
+                }));
             for value in 1..102u64 {
                 (fixture.publish)(value, ctx());
             }
@@ -2080,12 +2209,19 @@ mod tests {
             let adopted = fixture.state.value().cloned();
             (fixture.publish)(103, ctx());
             assert_eq!(
-                snapshot_events(&received).iter().map(|(v, _, _)| *v).collect::<Vec<_>>(),
+                snapshot_events(&received)
+                    .iter()
+                    .map(|(v, _, _)| *v)
+                    .collect::<Vec<_>>(),
                 vec![0, 1]
             );
             gate.resolve();
             wait_for(|| {
-                snapshot_events(&received).iter().map(|(v, _, _)| *v).collect::<Vec<_>>() == vec![0, 1, 102, 103]
+                snapshot_events(&received)
+                    .iter()
+                    .map(|(v, _, _)| *v)
+                    .collect::<Vec<_>>()
+                    == vec![0, 1, 102, 103]
             })
             .await;
             let received = snapshot_events(&received);
@@ -2093,7 +2229,10 @@ mod tests {
             assert_eq!(received[2].1, Some(4242));
             assert_eq!(
                 received[2].2,
-                ReplicatedStateDelivery { kind: ReplicatedStateDeliveryKind::Update, sequence: 102 }
+                ReplicatedStateDelivery {
+                    kind: ReplicatedStateDeliveryKind::Update,
+                    sequence: 102
+                }
             );
             assert_eq!(adopted.as_ref(), Some(&json!({ "value": 102 })));
         }
@@ -2112,17 +2251,11 @@ mod tests {
             state.subscribe(Arc::new(move |value, context, _delivery| {
                 let v = value_of(value);
                 let events = events_for_listener.clone();
-                events
-                    .lock()
-                    
-                    .push(format!("start:{v}"));
+                events.lock().push(format!("start:{v}"));
                 if v < 2 {
                     publisher(v + 1, context);
                 }
-                events
-                    .lock()
-                    
-                    .push(format!("end:{v}"));
+                events.lock().push(format!("end:{v}"));
                 Box::pin(std::future::ready(()))
             }));
             drop(state);
@@ -2187,21 +2320,23 @@ mod tests {
             let received_sink = received.clone();
             let completed_flag = completed.clone();
             let gate_rx = Mutex::new(Some(gate.receiver("gate rejected")));
-            let stop = fixture.state.subscribe(Arc::new(move |value, _context, _delivery| {
-                let v = value_of(value);
-                received_sink.lock().push(v);
-                match v {
-                    1 => {
-                        let gate = gate_rx.lock().take();
-                        let completed_flag = completed_flag.clone();
-                        Box::pin(async move {
-                            gate.expect("gate present").await;
-                            completed_flag.store(true, std::sync::atomic::Ordering::SeqCst);
-                        })
+            let stop = fixture
+                .state
+                .subscribe(Arc::new(move |value, _context, _delivery| {
+                    let v = value_of(value);
+                    received_sink.lock().push(v);
+                    match v {
+                        1 => {
+                            let gate = gate_rx.lock().take();
+                            let completed_flag = completed_flag.clone();
+                            Box::pin(async move {
+                                gate.expect("gate present").await;
+                                completed_flag.store(true, std::sync::atomic::Ordering::SeqCst);
+                            })
+                        }
+                        _ => Box::pin(std::future::ready(())),
                     }
-                    _ => Box::pin(std::future::ready(())),
-                }
-            }));
+                }));
             (fixture.publish)(1, &cancel.context);
             (fixture.publish)(2, &cancel.context);
             stop();
@@ -2221,19 +2356,24 @@ mod tests {
         for kind in [Kind::Attached, Kind::Replica] {
             let errors = events::<AnyError>();
             let error_sink = errors.clone();
-            let fixture = fixture(kind, Arc::new(move |error| {
-                error_sink.lock().push(error);
-            }));
+            let fixture = fixture(
+                kind,
+                Arc::new(move |error| {
+                    error_sink.lock().push(error);
+                }),
+            );
             let received = events::<u64>();
             let received_sink = received.clone();
-            fixture.state.subscribe(Arc::new(move |value, _context, _delivery| {
-                let v = value_of(value);
-                received_sink.lock().push(v);
-                if v == 0 {
-                    panic!("sync hydration");
-                }
-                Box::pin(std::future::ready(()))
-            }));
+            fixture
+                .state
+                .subscribe(Arc::new(move |value, _context, _delivery| {
+                    let v = value_of(value);
+                    received_sink.lock().push(v);
+                    if v == 0 {
+                        panic!("sync hydration");
+                    }
+                    Box::pin(std::future::ready(()))
+                }));
             (fixture.publish)(1, ctx());
             assert_eq!(snapshot_errors(&errors), vec!["sync hydration".to_string()]);
             assert_eq!(snapshot_events(&received), vec![0, 1]);
@@ -2248,41 +2388,48 @@ mod tests {
             let mut gate = Deferred::new();
             let errors = events::<AnyError>();
             let error_sink = errors.clone();
-            let fixture = fixture(kind, Arc::new(move |error| {
-                error_sink.lock().push(error);
-            }));
+            let fixture = fixture(
+                kind,
+                Arc::new(move |error| {
+                    error_sink.lock().push(error);
+                }),
+            );
             let received = events::<u64>();
             let fast = events::<u64>();
             let received_sink = received.clone();
             let gate_rx = Mutex::new(Some(gate.receiver("async hydration")));
             let update_rx = Mutex::new(Some(Deferred::new().receiver("async update")));
-            fixture.state.subscribe(Arc::new(move |value, _context, _delivery| {
-                let v = value_of(value);
-                received_sink.lock().push(v);
-                match v {
-                    0 => {
-                        let gate = gate_rx.lock().take();
-                        match gate {
-                            Some(gate) => Box::pin(gate),
-                            None => Box::pin(std::future::ready(())),
+            fixture
+                .state
+                .subscribe(Arc::new(move |value, _context, _delivery| {
+                    let v = value_of(value);
+                    received_sink.lock().push(v);
+                    match v {
+                        0 => {
+                            let gate = gate_rx.lock().take();
+                            match gate {
+                                Some(gate) => Box::pin(gate),
+                                None => Box::pin(std::future::ready(())),
+                            }
                         }
-                    }
-                    1 => panic!("sync update"),
-                    2 => {
-                        let update = update_rx.lock().take();
-                        match update {
-                            Some(update) => Box::pin(update),
-                            None => Box::pin(std::future::ready(())),
+                        1 => panic!("sync update"),
+                        2 => {
+                            let update = update_rx.lock().take();
+                            match update {
+                                Some(update) => Box::pin(update),
+                                None => Box::pin(std::future::ready(())),
+                            }
                         }
+                        _ => Box::pin(std::future::ready(())),
                     }
-                    _ => Box::pin(std::future::ready(())),
-                }
-            }));
+                }));
             let fast_sink = fast.clone();
-            fixture.state.subscribe(Arc::new(move |value, _context, _delivery| {
-                fast_sink.lock().push(value_of(value));
-                Box::pin(std::future::ready(()))
-            }));
+            fixture
+                .state
+                .subscribe(Arc::new(move |value, _context, _delivery| {
+                    fast_sink.lock().push(value_of(value));
+                    Box::pin(std::future::ready(()))
+                }));
             for value in 1..=3u64 {
                 (fixture.publish)(value, ctx());
             }
@@ -2309,21 +2456,26 @@ mod tests {
             let mut gate = Deferred::new();
             let errors = events::<AnyError>();
             let error_sink = errors.clone();
-            let fixture = fixture(kind, Arc::new(move |error| {
-                error_sink.lock().push(error);
-            }));
+            let fixture = fixture(
+                kind,
+                Arc::new(move |error| {
+                    error_sink.lock().push(error);
+                }),
+            );
             let received = events::<u64>();
             let received_sink = received.clone();
             let gate_rx = Mutex::new(Some(gate.receiver("stopped callback")));
-            let stop = fixture.state.subscribe(Arc::new(move |value, _context, _delivery| {
-                let v = value_of(value);
-                received_sink.lock().push(v);
-                let gate = gate_rx.lock().take();
-                match gate {
-                    Some(gate) => Box::pin(gate),
-                    None => Box::pin(std::future::ready(())),
-                }
-            }));
+            let stop = fixture
+                .state
+                .subscribe(Arc::new(move |value, _context, _delivery| {
+                    let v = value_of(value);
+                    received_sink.lock().push(v);
+                    let gate = gate_rx.lock().take();
+                    match gate {
+                        Some(gate) => Box::pin(gate),
+                        None => Box::pin(std::future::ready(())),
+                    }
+                }));
             (fixture.publish)(1, ctx());
             stop();
             gate.reject();
@@ -2351,7 +2503,9 @@ mod tests {
                 Box::pin(std::future::ready(()))
             }
         }));
-        state.replace(ctx(), json!({ "value": 1 })).expect("replace succeeds");
+        state
+            .replace(ctx(), json!({ "value": 1 }))
+            .expect("replace succeeds");
         wait_for(|| snapshot_events(&received) == vec![0, 1]).await;
     }
 
@@ -2365,10 +2519,7 @@ mod tests {
         let received_sink = received.clone();
         let gate_rx = Mutex::new(Some(gate.receiver("gate rejected")));
         replica.subscribe(Arc::new(move |_value, _context, delivery| {
-            received_sink
-                .lock()
-                
-                .push(delivery.clone());
+            received_sink.lock().push(delivery.clone());
             match delivery.sequence {
                 0 => {
                     let gate = gate_rx.lock().take();
@@ -2380,24 +2531,42 @@ mod tests {
                 _ => Box::pin(std::future::ready(())),
             }
         }));
-        replica.hydrate(0, &ops(json!([["r", { "value": 0 }]])), ctx()).expect("hydrate succeeds");
-        replica.update(1, &ops(json!([["s", ["value"], 1]])), ctx()).expect("update succeeds");
+        replica
+            .hydrate(0, &ops(json!([["r", { "value": 0 }]])), ctx())
+            .expect("hydrate succeeds");
+        replica
+            .update(1, &ops(json!([["s", ["value"], 1]])), ctx())
+            .expect("update succeeds");
         replica.clear();
         replica
             .hydrate(50, &ops(json!([["r", { "value": 50 }]])), ctx())
             .expect("hydrate succeeds");
-        replica.update(51, &ops(json!([["s", ["value"], 51]])), ctx()).expect("update succeeds");
+        replica
+            .update(51, &ops(json!([["s", ["value"], 51]])), ctx())
+            .expect("update succeeds");
         assert_eq!(
             snapshot_events(&received),
-            vec![ReplicatedStateDelivery { kind: ReplicatedStateDeliveryKind::Hydrate, sequence: 0 }]
+            vec![ReplicatedStateDelivery {
+                kind: ReplicatedStateDeliveryKind::Hydrate,
+                sequence: 0
+            }]
         );
         gate.resolve();
         wait_for(|| {
             snapshot_events(&received)
                 == vec![
-                    ReplicatedStateDelivery { kind: ReplicatedStateDeliveryKind::Hydrate, sequence: 0 },
-                    ReplicatedStateDelivery { kind: ReplicatedStateDeliveryKind::Hydrate, sequence: 50 },
-                    ReplicatedStateDelivery { kind: ReplicatedStateDeliveryKind::Update, sequence: 51 },
+                    ReplicatedStateDelivery {
+                        kind: ReplicatedStateDeliveryKind::Hydrate,
+                        sequence: 0,
+                    },
+                    ReplicatedStateDelivery {
+                        kind: ReplicatedStateDeliveryKind::Hydrate,
+                        sequence: 50,
+                    },
+                    ReplicatedStateDelivery {
+                        kind: ReplicatedStateDeliveryKind::Update,
+                        sequence: 51,
+                    },
                 ]
         })
         .await;
@@ -2419,10 +2588,7 @@ mod tests {
             Box::pin(std::future::ready(()))
         }));
         replica.subscribe(Arc::new(move |_value, _context, delivery| {
-            second_sink
-                .lock()
-                
-                .push(delivery.clone());
+            second_sink.lock().push(delivery.clone());
             Box::pin(std::future::ready(()))
         }));
         replica
@@ -2431,8 +2597,14 @@ mod tests {
         assert_eq!(
             snapshot_events(&second),
             vec![
-                ReplicatedStateDelivery { kind: ReplicatedStateDeliveryKind::Hydrate, sequence: 0 },
-                ReplicatedStateDelivery { kind: ReplicatedStateDeliveryKind::Update, sequence: 1 },
+                ReplicatedStateDelivery {
+                    kind: ReplicatedStateDeliveryKind::Hydrate,
+                    sequence: 0
+                },
+                ReplicatedStateDelivery {
+                    kind: ReplicatedStateDeliveryKind::Update,
+                    sequence: 1
+                },
             ]
         );
     }
@@ -2459,26 +2631,27 @@ mod tests {
         expect_diff(
             json!({ "keep": 1, "change": 1, "remove": true }),
             json!({ "keep": 1, "change": 2, "add": 3 }),
-            json!([
-                ["s", ["change"], 2],
-                ["s", ["add"], 3],
-                ["d", ["remove"]],
-            ]),
+            json!([["s", ["change"], 2], ["s", ["add"], 3], ["d", ["remove"]],]),
         );
     }
 
     // "emits string append and front truncation"
     #[test]
     fn diff_emits_string_append_and_front_truncation() {
-        expect_diff(json!({ "text": "hello" }), json!({ "text": "hello world" }), json!([["a", ["text"], " world"]]));
-        expect_diff(json!({ "text": "hello world" }), json!({ "text": "world" }), json!([["t", ["text"], 6]]));
+        expect_diff(
+            json!({ "text": "hello" }),
+            json!({ "text": "hello world" }),
+            json!([["a", ["text"], " world"]]),
+        );
+        expect_diff(
+            json!({ "text": "hello world" }),
+            json!({ "text": "world" }),
+            json!([["t", ["text"], 6]]),
+        );
         expect_diff(
             json!({ "text": "abcdefgh" }),
             json!({ "text": "defghxyz" }),
-            json!([
-                ["t", ["text"], 3],
-                ["a", ["text"], "xyz"],
-            ]),
+            json!([["t", ["text"], 3], ["a", ["text"], "xyz"],]),
         );
     }
 
@@ -2510,10 +2683,7 @@ mod tests {
         expect_diff(
             json!({ "values": [a, b, c] }),
             json!({ "values": [b, c, d] }),
-            json!([
-                ["p", ["values"], 0, 1, []],
-                ["p", ["values"], 2, 0, [d]],
-            ]),
+            json!([["p", ["values"], 0, 1, []], ["p", ["values"], 2, 0, [d]],]),
         );
     }
 
@@ -2538,7 +2708,10 @@ mod tests {
         // Upstream additionally asserts the two are distinct objects; serde
         // values are distinct allocations here by construction.
         assert_eq!(
-            diff_revisions(&json!({ "values": [first, second] }), &json!({ "values": [second, first] })),
+            diff_revisions(
+                &json!({ "values": [first, second] }),
+                &json!({ "values": [second, first] })
+            ),
             Vec::<Op>::new()
         );
     }
@@ -2557,16 +2730,16 @@ mod tests {
         let wire = wire_encoder.encode(&operations);
         assert_eq!(
             serde_json::to_value(&wire).expect("wire serializes"),
-            json!([
-                ["m", ["values"], [2, 0, 1]],
-                ["m", [1, 2, 0]],
-            ])
+            json!([["m", ["values"], [2, 0, 1]], ["m", [1, 2, 0]],])
         );
         for operation in &wire {
             crate::delta::assert_valid_wire_op(operation).expect("wire permutation is valid");
         }
         let mut wire_decoder = crate::delta::decoder();
-        assert_eq!(wire_decoder.decode(&wire).expect("wire decodes"), operations);
+        assert_eq!(
+            wire_decoder.decode(&wire).expect("wire decodes"),
+            operations
+        );
         let invalid = ops(json!([["m", ["values"], [0, 0]]]));
         let error = crate::delta::assert_valid_op(&invalid[0]).expect_err("non-bijection rejected");
         assert!(error.to_string().contains("bijection"));
@@ -2576,7 +2749,10 @@ mod tests {
     #[test]
     fn diff_emits_nothing_for_deeply_equal_reconstructed_values() {
         assert_eq!(
-            diff_revisions(&json!({ "value": { "nested": [1, 2] } }), &json!({ "value": { "nested": [1, 2] } })),
+            diff_revisions(
+                &json!({ "value": { "nested": [1, 2] } }),
+                &json!({ "value": { "nested": [1, 2] } })
+            ),
             Vec::<Op>::new()
         );
         assert_eq!(
@@ -2587,7 +2763,10 @@ mod tests {
             Vec::<Op>::new()
         );
         assert_eq!(
-            diff_revisions(&json!({ "values": [true, true, true] }), &json!({ "values": [true, true, true] })),
+            diff_revisions(
+                &json!({ "values": [true, true, true] }),
+                &json!({ "values": [true, true, true] })
+            ),
             Vec::<Op>::new()
         );
     }
@@ -2619,10 +2798,7 @@ mod tests {
         expect_diff(
             json!({ "values": values }),
             json!({ "values": after }),
-            json!([
-                ["p", ["values"], 1, 1, []],
-                ["p", ["values"], 2, 1, []],
-            ]),
+            json!([["p", ["values"], 1, 1, []], ["p", ["values"], 2, 1, []],]),
         );
     }
 
@@ -2645,11 +2821,19 @@ mod tests {
                 json!([1, 3, 4]),
                 json!([["p", ["values"], 1, 1, []]]),
             ),
-            (json!([1, 2, 3, 4]), json!([]), json!([["p", ["values"], 0, 4, []]])),
+            (
+                json!([1, 2, 3, 4]),
+                json!([]),
+                json!([["p", ["values"], 0, 4, []]]),
+            ),
             (json!([1, 2, 3, 4]), json!([1, 2, 3, 4]), json!([])),
         ];
         for (before, after, expected) in cases {
-            expect_diff(json!({ "values": before }), json!({ "values": after }), expected);
+            expect_diff(
+                json!({ "values": before }),
+                json!({ "values": after }),
+                expected,
+            );
         }
     }
 
@@ -2693,7 +2877,11 @@ mod tests {
             { "id": 1, "key": "a", "value": "edited-first" },
             right,
         ] });
-        expect_diff(before, after, json!([["p", ["values"], 1, 2, replacements]]));
+        expect_diff(
+            before,
+            after,
+            json!([["p", ["values"], 1, 2, replacements]]),
+        );
     }
 
     // "combines removals, append, and a shared-subtree survivor edit"
@@ -2737,13 +2925,18 @@ mod tests {
             let operations = diff_revisions(&before, &after);
             assert_eq!(
                 serde_json::to_value(&operations).expect("ops serialize"),
-                json!([
-                    ["p", ["values"], 1, 1, []],
-                    ["p", ["values"], 2, 1, []],
-                ])
+                json!([["p", ["values"], 1, 1, []], ["p", ["values"], 2, 1, []],])
             );
-            assert!(serde_json::to_string(&operations).expect("ops serialize").len() < 100);
-            assert_eq!(apply_immutable(&before, &operations).expect("ops apply"), after);
+            assert!(
+                serde_json::to_string(&operations)
+                    .expect("ops serialize")
+                    .len()
+                    < 100
+            );
+            assert_eq!(
+                apply_immutable(&before, &operations).expect("ops apply"),
+                after
+            );
             assert_eq!(before, json!({ "values": retained }));
         }
     }
@@ -2799,14 +2992,28 @@ mod tests {
             changed.push(index);
             index += 400;
         }
-        let operations = diff_revisions(&json!({ "values": values.clone() }), &json!({ "values": after.clone() }));
+        let operations = diff_revisions(
+            &json!({ "values": values.clone() }),
+            &json!({ "values": after.clone() }),
+        );
         let expected = changed
             .iter()
             .map(|index| json!(["s", ["values", index, "value"], -(*index as i64)]))
             .collect::<Vec<_>>();
-        assert_eq!(serde_json::to_value(&operations).expect("ops serialize"), json!(expected));
-        assert!(serde_json::to_string(&operations).expect("ops serialize").len() < 7_500);
-        assert_eq!(apply_immutable(&json!({ "values": values }), &operations).expect("ops apply"), json!({ "values": after }));
+        assert_eq!(
+            serde_json::to_value(&operations).expect("ops serialize"),
+            json!(expected)
+        );
+        assert!(
+            serde_json::to_string(&operations)
+                .expect("ops serialize")
+                .len()
+                < 7_500
+        );
+        assert_eq!(
+            apply_immutable(&json!({ "values": values }), &operations).expect("ops apply"),
+            json!({ "values": after })
+        );
     }
 
     // "keeps a reconstructed large-array leaf edit narrow"
@@ -2817,13 +3024,24 @@ mod tests {
             .collect::<Vec<_>>();
         let mut after = before.clone();
         after[700] = json!({ "value": 700, "label": "changed" });
-        let operations = diff_revisions(&json!({ "values": before.clone() }), &json!({ "values": after.clone() }));
+        let operations = diff_revisions(
+            &json!({ "values": before.clone() }),
+            &json!({ "values": after.clone() }),
+        );
         assert_eq!(
             serde_json::to_value(&operations).expect("ops serialize"),
             json!([["s", ["values", 700, "label"], "changed"]])
         );
-        assert!(serde_json::to_string(&operations).expect("ops serialize").len() < 100);
-        assert_eq!(apply_immutable(&json!({ "values": before }), &operations).expect("ops apply"), json!({ "values": after }));
+        assert!(
+            serde_json::to_string(&operations)
+                .expect("ops serialize")
+                .len()
+                < 100
+        );
+        assert_eq!(
+            apply_immutable(&json!({ "values": before }), &operations).expect("ops apply"),
+            json!({ "values": after })
+        );
     }
 
     // "splices an ambiguous equal-count moved-and-edited gap"
@@ -2864,13 +3082,24 @@ mod tests {
             .collect::<Vec<_>>();
         let mut after = inserted.clone();
         after.extend(retained.iter().cloned());
-        let operations = diff_revisions(&json!({ "values": retained.clone() }), &json!({ "values": after.clone() }));
+        let operations = diff_revisions(
+            &json!({ "values": retained.clone() }),
+            &json!({ "values": after.clone() }),
+        );
         assert_eq!(
             serde_json::to_value(&operations).expect("ops serialize"),
             json!([["p", ["values"], 0, 0, inserted]])
         );
-        assert!(serde_json::to_string(&operations).expect("ops serialize").len() < 20_000);
-        assert_eq!(apply_immutable(&json!({ "values": retained }), &operations).expect("ops apply"), json!({ "values": after }));
+        assert!(
+            serde_json::to_string(&operations)
+                .expect("ops serialize")
+                .len()
+                < 20_000
+        );
+        assert_eq!(
+            apply_immutable(&json!({ "values": retained }), &operations).expect("ops apply"),
+            json!({ "values": after })
+        );
     }
 
     // "bounds wide-object operation emission with a root replacement"
@@ -2882,7 +3111,10 @@ mod tests {
             before.insert(format!("field{index}"), json!(0));
             after.insert(format!("field{index}"), json!(1));
         }
-        let operations = diff_revisions(&JsonValue::Object(before.clone()), &JsonValue::Object(after.clone()));
+        let operations = diff_revisions(
+            &JsonValue::Object(before.clone()),
+            &JsonValue::Object(after.clone()),
+        );
         assert_eq!(
             serde_json::to_value(&operations).expect("ops serialize"),
             json!([["r", JsonValue::Object(after)]])
@@ -2896,7 +3128,10 @@ mod tests {
         let before = json!({ "values": (0..40_000).map(|_| json!(0)).collect::<Vec<_>>() });
         let after = json!({ "values": (0..40_000).map(|_| json!(1)).collect::<Vec<_>>() });
         let operations = diff_revisions(&before, &after);
-        assert_eq!(serde_json::to_value(&operations).expect("ops serialize"), json!([["r", after]]));
+        assert_eq!(
+            serde_json::to_value(&operations).expect("ops serialize"),
+            json!([["r", after]])
+        );
     }
 
     // ── state-value.test.ts ──────────────────────────────────────────────────
@@ -2919,7 +3154,10 @@ mod tests {
         let base = tracker.value().clone();
         let prepared = {
             let mut change = tracker.begin_change();
-            change.state().set(&[Seg::key("changed")], "value", json!(3)).expect("set succeeds");
+            change
+                .state()
+                .set(&[Seg::key("changed")], "value", json!(3))
+                .expect("set succeeds");
             change.prepare().expect("prepare succeeds")
         };
         // Unchanged branches carry the same content (upstream: same reference).
@@ -2962,12 +3200,21 @@ mod tests {
         }));
         let base = tracker.value().clone();
         let mut change = tracker.begin_change();
-        change.state().set(&[Seg::key("changed")], "count", json!(3)).expect("set succeeds");
+        change
+            .state()
+            .set(&[Seg::key("changed")], "count", json!(3))
+            .expect("set succeeds");
         let prepared = change.prepare().expect("prepare succeeds");
         assert_ne!(prepared.value, base);
-        assert_eq!(prepared.value.get("changed"), Some(&json!({ "count": 3, "sibling": { "value": "kept" } })));
+        assert_eq!(
+            prepared.value.get("changed"),
+            Some(&json!({ "count": 3, "sibling": { "value": "kept" } }))
+        );
         assert_eq!(prepared.value.get("untouched"), base.get("untouched"));
-        assert_eq!(prepared.value.get("changed").and_then(|c| c.get("sibling")), base.get("changed").and_then(|c| c.get("sibling")));
+        assert_eq!(
+            prepared.value.get("changed").and_then(|c| c.get("sibling")),
+            base.get("changed").and_then(|c| c.get("sibling"))
+        );
     }
 
     // "supports frozen bases, deletion, and native array mutators" — frozen
@@ -2978,7 +3225,9 @@ mod tests {
         let mut change = tracker.begin_change();
         let mut draft = change.state();
         draft.delete(&[], "optional").expect("delete succeeds");
-        draft.push(&[Seg::key("values")], vec![json!(4)]).expect("push succeeds");
+        draft
+            .push(&[Seg::key("values")], vec![json!(4)])
+            .expect("push succeeds");
         let popped = draft
             .splice(&[Seg::key("values")], 3, Some(1), vec![])
             .expect("pop succeeds");
@@ -3001,7 +3250,9 @@ mod tests {
         draft.sort_by(&[Seg::key("values")], |left, right| {
             (right.as_i64().unwrap_or(0)).cmp(&left.as_i64().unwrap_or(0))
         });
-        draft.fill(&[Seg::key("values")], json!(9), Some(1), Some(3)).expect("fill succeeds");
+        draft
+            .fill(&[Seg::key("values")], json!(9), Some(1), Some(3))
+            .expect("fill succeeds");
         draft
             .copy_within(&[Seg::key("values")], 1, 0, Some(2))
             .expect("copyWithin succeeds");
@@ -3047,7 +3298,10 @@ mod tests {
         let mut change = tracker.begin_change();
         fn bump_comparisons(value: &mut JsonValue) {
             if let Some(object) = value.as_object_mut() {
-                let comparisons = object.get("comparisons").and_then(JsonValue::as_i64).unwrap_or(0);
+                let comparisons = object
+                    .get("comparisons")
+                    .and_then(JsonValue::as_i64)
+                    .unwrap_or(0);
                 object.insert("comparisons".into(), json!(comparisons + 1));
             }
         }
@@ -3062,13 +3316,23 @@ mod tests {
             })
             .expect("sort succeeds");
         let prepared = change.prepare().expect("prepare succeeds");
-        let ranks = prepared.value.get("rows").and_then(JsonValue::as_array).expect("rows");
+        let ranks = prepared
+            .value
+            .get("rows")
+            .and_then(JsonValue::as_array)
+            .expect("rows");
         assert_eq!(
-            ranks.iter().map(|row| row.get("rank").cloned().unwrap()).collect::<Vec<_>>(),
+            ranks
+                .iter()
+                .map(|row| row.get("rank").cloned().unwrap())
+                .collect::<Vec<_>>(),
             vec![json!(1), json!(2)]
         );
         assert_eq!(
-            ranks.iter().map(|row| row.get("comparisons").cloned().unwrap()).collect::<Vec<_>>(),
+            ranks
+                .iter()
+                .map(|row| row.get("comparisons").cloned().unwrap())
+                .collect::<Vec<_>>(),
             vec![json!(1), json!(1)]
         );
     }
@@ -3083,7 +3347,9 @@ mod tests {
         for method in ["unshift", "splice"] {
             let mut tracker = track(json!({ "values": [-1] }));
             let mut change = tracker.begin_change();
-            let items = (0..100_000i64).map(|value| json!(value)).collect::<Vec<_>>();
+            let items = (0..100_000i64)
+                .map(|value| json!(value))
+                .collect::<Vec<_>>();
             let mut draft = change.state();
             if method == "unshift" {
                 draft
@@ -3095,7 +3361,11 @@ mod tests {
                     .expect("splice succeeds");
             }
             let prepared = change.prepare().expect("prepare succeeds");
-            let values = prepared.value.get("values").and_then(JsonValue::as_array).expect("values");
+            let values = prepared
+                .value
+                .get("values")
+                .and_then(JsonValue::as_array)
+                .expect("values");
             assert_eq!(values.len(), 100_001);
             let probe = if method == "unshift" { 0 } else { 1 };
             assert_eq!(values[probe], json!(0));
@@ -3137,49 +3407,91 @@ mod tests {
         let meta = Seg::key("meta");
         match choice {
             0 => {
-                let text = draft.get(&[]).expect("read").and_then(|d| d.get("text").cloned()).unwrap_or_default();
+                let text = draft
+                    .get(&[])
+                    .expect("read")
+                    .and_then(|d| d.get("text").cloned())
+                    .unwrap_or_default();
                 let text = text.as_str().unwrap_or_default().to_string();
-                draft.set(&[], "text", json!(format!("{text}-{value}"))).expect("set");
+                draft
+                    .set(&[], "text", json!(format!("{text}-{value}")))
+                    .expect("set");
             }
             1 => {
-                let text = draft.get(&[]).expect("read").and_then(|d| d.get("text").cloned()).unwrap_or_default();
+                let text = draft
+                    .get(&[])
+                    .expect("read")
+                    .and_then(|d| d.get("text").cloned())
+                    .unwrap_or_default();
                 let text = text.as_str().unwrap_or_default().to_string();
                 let start = std::cmp::min(2, text.len());
                 let sliced: String = text.chars().skip(start).collect();
-                draft.set(&[], "text", json!(format!("{sliced}{value}"))).expect("set");
+                draft
+                    .set(&[], "text", json!(format!("{sliced}{value}")))
+                    .expect("set");
             }
             2 => {
-                draft.push(&[items.clone()], vec![fuzz_item(value)]).expect("push");
+                draft
+                    .push(&[items.clone()], vec![fuzz_item(value)])
+                    .expect("push");
             }
             3 => {
-                draft.splice(&[items.clone()], 0, Some(0), vec![fuzz_item(value)]).expect("unshift");
+                draft
+                    .splice(&[items.clone()], 0, Some(0), vec![fuzz_item(value)])
+                    .expect("unshift");
             }
             4 => {
                 let length = draft.length(&[items.clone()]).expect("length");
                 if length > 0 {
-                    draft.splice(&[items.clone()], 0, Some(1), vec![]).expect("shift");
+                    draft
+                        .splice(&[items.clone()], 0, Some(1), vec![])
+                        .expect("shift");
                 }
             }
             5 => {
                 let length = draft.length(&[items.clone()]).expect("length");
                 if length > 0 {
-                    draft.splice(&[items.clone()], length - 1, Some(1), vec![]).expect("pop");
+                    draft
+                        .splice(&[items.clone()], length - 1, Some(1), vec![])
+                        .expect("pop");
                 }
             }
             6 => {
                 let length = draft.length(&[items.clone()]).expect("length");
-                let index = if length == 0 { 0 } else { (value as usize) % (length + 1) };
-                let remove = if length == 0 { None } else { Some((value as usize) % 2) };
-                draft.splice(&[items.clone()], index, remove, vec![fuzz_item(value)]).expect("splice");
+                let index = if length == 0 {
+                    0
+                } else {
+                    (value as usize) % (length + 1)
+                };
+                let remove = if length == 0 {
+                    None
+                } else {
+                    Some((value as usize) % 2)
+                };
+                draft
+                    .splice(&[items.clone()], index, remove, vec![fuzz_item(value)])
+                    .expect("splice");
             }
             7 => {
                 let length = draft.length(&[items.clone()]).expect("length");
                 for index in 0..length / 2 {
-                    let left = draft.get_index(&[items.clone()], index).expect("read").cloned().expect("item");
+                    let left = draft
+                        .get_index(&[items.clone()], index)
+                        .expect("read")
+                        .cloned()
+                        .expect("item");
                     let right_index = length - 1 - index;
-                    let right = draft.get_index(&[items.clone()], right_index).expect("read").cloned().expect("item");
-                    draft.set_index(&[items.clone()], index, right).expect("set");
-                    draft.set_index(&[items.clone()], right_index, left).expect("set");
+                    let right = draft
+                        .get_index(&[items.clone()], right_index)
+                        .expect("read")
+                        .cloned()
+                        .expect("item");
+                    draft
+                        .set_index(&[items.clone()], index, right)
+                        .expect("set");
+                    draft
+                        .set_index(&[items.clone()], right_index, left)
+                        .expect("set");
                 }
             }
             8 => {
@@ -3210,8 +3522,12 @@ mod tests {
                     .and_then(|m| m.get("revision").cloned())
                     .and_then(|r| r.as_i64())
                     .unwrap_or(0);
-                draft.set(&[meta.clone()], "revision", json!(revision + 1)).expect("set");
-                draft.set(&[meta.clone()], "label", json!(format!("revision-{value}"))).expect("set");
+                draft
+                    .set(&[meta.clone()], "revision", json!(revision + 1))
+                    .expect("set");
+                draft
+                    .set(&[meta.clone()], "label", json!(format!("revision-{value}")))
+                    .expect("set");
             }
             11 => {
                 draft.delete(&[meta.clone()], "label").expect("delete");
@@ -3219,14 +3535,20 @@ mod tests {
             12 => {
                 let length = draft.length(&[items.clone()]).expect("length");
                 if length > 1 {
-                    let first = draft.get_index(&[items.clone()], 0).expect("read").cloned().expect("item");
+                    let first = draft
+                        .get_index(&[items.clone()], 0)
+                        .expect("read")
+                        .cloned()
+                        .expect("item");
                     draft.set_index(&[items.clone()], 1, first).expect("set");
                 }
             }
             _ => {
                 let length = draft.length(&[items.clone()]).expect("length");
                 for index in 0..std::cmp::min(2, length) {
-                    draft.set_index(&[items.clone()], index, fuzz_item(value)).expect("set");
+                    draft
+                        .set_index(&[items.clone()], index, fuzz_item(value))
+                        .expect("set");
                 }
             }
         }
@@ -3244,10 +3566,9 @@ mod tests {
                 "meta": { "revision": 0 },
             });
             let mut tracker = track(initial.clone());
-            let mut expected = serde_json::from_str::<JsonValue>(
-                &serde_json::to_string(&initial).expect("clone"),
-            )
-            .expect("clone");
+            let mut expected =
+                serde_json::from_str::<JsonValue>(&serde_json::to_string(&initial).expect("clone"))
+                    .expect("clone");
             let mut replica = serde_json::from_str::<JsonValue>(
                 &serde_json::to_string(tracker.value()).expect("clone"),
             )
@@ -3268,15 +3589,23 @@ mod tests {
                     &serde_json::to_string(&prepared.ops).expect("clone"),
                 )
                 .expect("clone");
-                assert_eq!(*tracker.value(), base, "prepare base seed {seed} step {step} choice {choice}");
+                assert_eq!(
+                    *tracker.value(),
+                    base,
+                    "prepare base seed {seed} step {step} choice {choice}"
+                );
                 replica = apply_immutable(&replica, &operations).expect("ops apply");
-                assert_eq!(replica, prepared.value, "replay seed {seed} step {step} choice {choice}");
+                assert_eq!(
+                    replica, prepared.value,
+                    "replay seed {seed} step {step} choice {choice}"
+                );
                 tracker.adopt(prepared).expect("adopt succeeds");
                 // Upstream also asserts the pre-change root is still intact after
                 // adoption; the Rust `base` is a snapshot clone, so that aliasing
                 // guarantee is vacuous here.
                 assert_eq!(
-                    *tracker.value(), expected,
+                    *tracker.value(),
+                    expected,
                     "state seed {seed} step {step} choice {choice}"
                 );
                 assert_eq!(
@@ -3299,7 +3628,3 @@ mod tests {
         *document = scratch.value().clone();
     }
 }
-
-
-
-

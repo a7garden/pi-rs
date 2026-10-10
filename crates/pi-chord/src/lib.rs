@@ -20,51 +20,55 @@ pub mod types;
 
 // Mirrors upstream `src/index.ts` re-exports.
 pub use api::{
-    combine_facet_loaders, create_facet_host, create_remote_service_binding, create_static_facet_loader,
-    attach_replicated_state, define_facet, define_service, replicated_state,
+    attach_replicated_state, combine_facet_loaders, create_facet_host,
+    create_remote_service_binding, create_static_facet_loader, define_facet, define_service,
+    replicated_state,
 };
 pub use context::{
     await_with_context, create_context_key, with_abort_signal, with_cancel, with_context_value,
-    without_abort_signal, AbortController, AbortReason, AbortSignal, Context, ContextKey, BACKGROUND_CONTEXT,
-    TODO_CONTEXT,
+    without_abort_signal, AbortController, AbortReason, AbortSignal, Context, ContextKey,
+    BACKGROUND_CONTEXT, TODO_CONTEXT,
 };
 pub use delta::{
-    apply, apply_immutable, apply_immutable_batches, apply_immutable_trusted, assert_safe_path, assert_valid_op,
-    assert_valid_raw_op, assert_valid_wire_op, decoder, diff_revisions, encoder, is_base, is_base_decoded,
-    is_replace, overlap, path_to_json, track, Decoder, DeltaError, Draft, Encoder, JsonRevisionValidator,
-    NonEmptyPath, Op, Path, Prepared, Seg, Tracker, WireOp,
+    apply, apply_immutable, apply_immutable_batches, apply_immutable_trusted, assert_safe_path,
+    assert_valid_op, assert_valid_raw_op, assert_valid_wire_op, decoder, diff_revisions, encoder,
+    is_base, is_base_decoded, is_replace, overlap, path_to_json, track, Decoder, DeltaError, Draft,
+    Encoder, JsonRevisionValidator, NonEmptyPath, Op, Path, Prepared, Seg, Tracker, WireOp,
 };
 pub use json::{copy_json, JsonValue};
+pub use services::consumer::RemoteServiceBinding;
 pub use services::errors::{
-    is_remote_service_error_code, remote_service_error, AggregateError, AnyError, ChordError, RemoteServiceError,
-    RemoteServiceErrorCode, TypeError, REMOTE_SERVICE_ERROR_CODES,
+    is_remote_service_error_code, remote_service_error, AggregateError, AnyError, ChordError,
+    RemoteServiceError, RemoteServiceErrorCode, TypeError, REMOTE_SERVICE_ERROR_CODES,
 };
 pub use services::provider::{
-    create_remote_service_endpoint, validate_remote_service_implementation, ProviderDefinition, RemoteServiceEndpoint,
-    RemoteServiceProvider, RemoteServiceObject, ServiceUpdatePublisher,
+    create_remote_service_endpoint, validate_remote_service_implementation, ProviderDefinition,
+    RemoteServiceEndpoint, RemoteServiceObject, RemoteServiceProvider, ServiceUpdatePublisher,
 };
 pub use services::state::{
-    attach_replicated_state_source, service_delivery_context, AttachedReplicatedState, MutableReplicatedState,
-    ReplicatedStateReplica,
+    attach_replicated_state_source, service_delivery_context, AttachedReplicatedState,
+    MutableReplicatedState, ReplicatedStateReplica,
 };
 pub use services::state_codec::{
-    create_service_state_decoder, create_service_state_encoder, ServiceStateDecoder, ServiceStateEncoder,
+    create_service_state_decoder, create_service_state_encoder, ServiceStateDecoder,
+    ServiceStateEncoder,
 };
 pub use services::wire::{
     create_service_catalogue_call, create_service_subscribe_call, create_service_unsubscribe_call,
-    decode_service_control_call, parse_service_call, parse_service_catalogue, parse_service_provider_update,
-    parse_service_subscription_snapshot, parse_wire_service_provider_update, parse_wire_service_subscription_snapshot,
-    ServiceControlCall, WireServiceInstanceSnapshot, WireServiceMemberSnapshot, WireServiceProviderUpdate,
-    WireServiceSubscriptionSnapshot,
+    decode_service_control_call, parse_service_call, parse_service_catalogue,
+    parse_service_provider_update, parse_service_subscription_snapshot,
+    parse_wire_service_provider_update, parse_wire_service_subscription_snapshot,
+    ServiceControlCall, WireServiceInstanceSnapshot, WireServiceMemberSnapshot,
+    WireServiceProviderUpdate, WireServiceSubscriptionSnapshot,
 };
-pub use services::consumer::RemoteServiceBinding;
 pub use types::{
-    Facet, FacetHost, FacetLoader, FacetOptions, LoadedFacets, ReplicatedState, ReplicatedStateDelivery,
-    ReplicatedStateDeliveryKind, ReplicatedStateSource, ReplicatedStateSourceAttachment,
-    ReplicatedStateSourceFrame, ReplicatedStateSourceOptions, RemoteServiceBindingOptions, RemoteServiceImpl,
-    RemoteServiceSource, RemoteServiceTransport, RemoteServices, Service, ServiceCall, ServiceCatalogueEntry,
-    ServiceClientHandle, ServiceInstanceAddress, ServiceInstanceSnapshot, ServiceMember, ServiceMemberSnapshot,
-    ServiceMode, ServiceProviderUpdate, ServiceSubscription, ServiceSubscriptionSnapshot, StateListener,
+    Facet, FacetHost, FacetLoader, FacetOptions, LoadedFacets, RemoteServiceBindingOptions,
+    RemoteServiceImpl, RemoteServiceSource, RemoteServiceTransport, RemoteServices,
+    ReplicatedState, ReplicatedStateDelivery, ReplicatedStateDeliveryKind, ReplicatedStateSource,
+    ReplicatedStateSourceAttachment, ReplicatedStateSourceFrame, ReplicatedStateSourceOptions,
+    Service, ServiceCall, ServiceCatalogueEntry, ServiceClientHandle, ServiceInstanceAddress,
+    ServiceInstanceSnapshot, ServiceMember, ServiceMemberSnapshot, ServiceMode,
+    ServiceProviderUpdate, ServiceSubscription, ServiceSubscriptionSnapshot, StateListener,
     Unsubscribe, UpdateListener,
 };
 
@@ -82,7 +86,8 @@ mod boundary_tests {
     #[test]
     fn does_not_depend_on_pi_packages_or_files_outside_chord() {
         let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
-        let manifest = std::fs::read_to_string(manifest_dir.join("Cargo.toml")).expect("read Cargo.toml");
+        let manifest =
+            std::fs::read_to_string(manifest_dir.join("Cargo.toml")).expect("read Cargo.toml");
         let mut violations: Vec<String> = Vec::new();
         let mut section = String::new();
         for line in manifest.lines() {

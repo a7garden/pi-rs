@@ -157,77 +157,90 @@ pub mod utils;
 
 // Mirrors upstream `src/index.ts` re-exports (in-scope modules; per-API option
 // types carry the D2 `*ApiOptions` names, deferred modules land with later waves).
-pub use api::lazy::{lazy_api, lazy_stream, LazyApiCapabilities};
 pub use api::azure_openai_config::AzureEndpointOptions;
 pub use api::azure_openai_responses::AzureOpenAIResponsesOptions;
 pub use api::bedrock_converse_stream::{BedrockOptions, BedrockThinkingDisplay};
 pub use api::google_generative_ai::GoogleOptions;
 pub use api::google_shared::{GoogleApiThinkingLevel, ResolvedGoogleThinkingLevel};
 pub use api::google_vertex::GoogleVertexOptions;
+pub use api::lazy::{lazy_api, lazy_stream, LazyApiCapabilities};
 pub use api::mistral_conversations::MistralOptions;
 // Upstream also re-exports `OpenAICodexResponsesOptions`/`OpenAICodexWebSocketDebugStats`
 // here; the codex API has no options struct yet (D27 in api/openai_codex_responses.rs).
 pub use api::pi_messages::PiMessagesApiOptions;
-pub use models::{
-	calculate_cost, clamp_thinking_level, create_models, create_provider, get_supported_thinking_levels, has_api,
-	models_are_equal, CreateModelsOptions, CreateProviderOptions, Models, ModelsPublication, ModelsRefreshOptions,
-	ModelsRefreshResult, ModelsRequestTransforms, MutableModels, Provider, ProviderClassifier, ProviderImages,
-	ProviderStreams, RefreshModelsContext,
-};
-pub use utils::model_operations::{get_model_type, is_chat_model};
-pub use models_store::{in_memory_models_store, InMemoryModelsStore, ModelsStore, ModelsStoreEntry};
-pub use providers::faux::{
-	faux_assistant_message, faux_provider, faux_text, faux_thinking, faux_tool_call, FauxContent, FauxContentBlock,
-	FauxCore, FauxDeferredOptions, FauxMessageOptions, FauxModelDefinition, FauxProviderHandle, FauxProviderState,
-	FauxResponseFactory, FauxResponseStep, FauxTokenSize, RegisterFauxProviderOptions,
-};
-pub use types::{
-	AssistantImages, AssistantMessage, AssistantMessageDiagnostic, AssistantMessageEvent, ClassifierAnswer,
-	ClassifierContext, ClassifierModel, ClassifierOptions, ClassifierQuestion, ClassifierResult, ClassifierStopReason,
-	Context, DeferredHandle, DeferredRequest, ImageContent, ImagesContext, ImagesOptions, ImagesStopReason, Message,
-	Model, ModelCompat, ModelCost, ModelType, StopReason, TextContent, ThinkingContent, Tool, ToolCall, ToolChoice,
-	ToolResultMessage, TranscriptContext, Usage, UserMessage, AnthropicApiOptions, AnthropicEffort,
-	AnthropicThinkingDisplay, OpenAICompletionsApiOptions, OpenAIResponsesApiOptions,
-};
 pub use auth::context::default_provider_auth_context;
 pub use auth::credential_store::InMemoryCredentialStore;
 pub use auth::helpers::{env_api_key_auth, lazy_oauth, LazyOAuthInput};
 pub use auth::oauth::{
-	anthropic_oauth, create_radius_oauth, github_copilot_oauth, kimi_coding_oauth, load_anthropic_oauth,
-	load_github_copilot_oauth, load_kimi_coding_oauth, load_meta_oauth, load_openai_chatgpt_oauth,
-	load_openai_codex_oauth, load_openrouter_oauth, load_radius_oauth, load_xai_oauth, meta_oauth,
-	openai_chatgpt_oauth, openai_codex_oauth, openrouter_oauth, xai_oauth, abortable_sleep, generate_pkce, oauth_fetch,
-	poll_oauth_device_code_flow, set_oauth_fetch, start_oauth_callback_server, wait_for_callback_or_manual_input,
-	CallbackOrManual, CallbackServerError, OAuthCallbackServer, OAuthDeviceCodePollOptions, OAuthDeviceCodePollResult,
-	RadiusOAuthOptions,
+    abortable_sleep, anthropic_oauth, create_radius_oauth, generate_pkce, github_copilot_oauth,
+    kimi_coding_oauth, load_anthropic_oauth, load_github_copilot_oauth, load_kimi_coding_oauth,
+    load_meta_oauth, load_openai_chatgpt_oauth, load_openai_codex_oauth, load_openrouter_oauth,
+    load_radius_oauth, load_xai_oauth, meta_oauth, oauth_fetch, openai_chatgpt_oauth,
+    openai_codex_oauth, openrouter_oauth, poll_oauth_device_code_flow, set_oauth_fetch,
+    start_oauth_callback_server, wait_for_callback_or_manual_input, xai_oauth, CallbackOrManual,
+    CallbackServerError, OAuthCallbackServer, OAuthDeviceCodePollOptions,
+    OAuthDeviceCodePollResult, RadiusOAuthOptions,
 };
 pub use auth::types::{
-	ApiKeyAuth, ApiKeyCredential, AuthCheck, AuthContext,
-	AuthEvent, AuthInfoLink, AuthInteraction, AuthOperationOptions, AuthPrompt, AuthResult, AuthType, Credential,
-	CredentialInfo, CredentialStore, LoginOptions, ModelAuth, OAuthAuth, OAuthCredential, OAuthCredentials,
-	ProviderAuth, ProviderAuthInteraction,
+    ApiKeyAuth, ApiKeyCredential, AuthCheck, AuthContext, AuthEvent, AuthInfoLink, AuthInteraction,
+    AuthOperationOptions, AuthPrompt, AuthResult, AuthType, Credential, CredentialInfo,
+    CredentialStore, LoginOptions, ModelAuth, OAuthAuth, OAuthCredential, OAuthCredentials,
+    ProviderAuth, ProviderAuthInteraction,
+};
+pub use models::{
+    calculate_cost, clamp_thinking_level, create_models, create_provider,
+    get_supported_thinking_levels, has_api, models_are_equal, CreateModelsOptions,
+    CreateProviderOptions, Models, ModelsPublication, ModelsRefreshOptions, ModelsRefreshResult,
+    ModelsRequestTransforms, MutableModels, Provider, ProviderClassifier, ProviderImages,
+    ProviderStreams, RefreshModelsContext,
+};
+pub use models_store::{
+    in_memory_models_store, InMemoryModelsStore, ModelsStore, ModelsStoreEntry,
+};
+pub use providers::faux::{
+    faux_assistant_message, faux_provider, faux_text, faux_thinking, faux_tool_call, FauxContent,
+    FauxContentBlock, FauxCore, FauxDeferredOptions, FauxMessageOptions, FauxModelDefinition,
+    FauxProviderHandle, FauxProviderState, FauxResponseFactory, FauxResponseStep, FauxTokenSize,
+    RegisterFauxProviderOptions,
+};
+pub use types::{
+    AnthropicApiOptions, AnthropicEffort, AnthropicThinkingDisplay, AssistantImages,
+    AssistantMessage, AssistantMessageDiagnostic, AssistantMessageEvent, ClassifierAnswer,
+    ClassifierContext, ClassifierModel, ClassifierOptions, ClassifierQuestion, ClassifierResult,
+    ClassifierStopReason, Context, DeferredHandle, DeferredRequest, ImageContent, ImagesContext,
+    ImagesOptions, ImagesStopReason, Message, Model, ModelCompat, ModelCost, ModelType,
+    OpenAICompletionsApiOptions, OpenAIResponsesApiOptions, StopReason, TextContent,
+    ThinkingContent, Tool, ToolCall, ToolChoice, ToolResultMessage, TranscriptContext, Usage,
+    UserMessage,
 };
 pub use utils::assistant_message_frame::{
-	reduce_assistant_message_frames, AssistantMessageFrame, AssistantMessageFrameEncoder, FrameError,
+    reduce_assistant_message_frames, AssistantMessageFrame, AssistantMessageFrameEncoder,
+    FrameError,
 };
 pub use utils::diagnostics::{
-	append_assistant_message_diagnostic, create_assistant_message_diagnostic, extract_diagnostic_error,
-	format_thrown_value,
+    append_assistant_message_diagnostic, create_assistant_message_diagnostic,
+    extract_diagnostic_error, format_thrown_value,
 };
-pub use utils::event_stream::{create_assistant_message_event_stream, AssistantMessageEventStream, EventStream};
+pub use utils::event_stream::{
+    create_assistant_message_event_stream, AssistantMessageEventStream, EventStream,
+};
 pub use utils::json_parse::{parse_json_with_repair, parse_streaming_json, repair_json};
+pub use utils::model_operations::{get_model_type, is_chat_model};
 pub use utils::models_error::{ModelsError, ModelsErrorCode};
 pub use utils::overflow::{get_overflow_patterns, is_context_overflow, is_recoverable_length};
 pub use utils::retry::{
-	is_retryable_assistant_error, retry_assistant_call, retry_delay_ms, RetryCallbacks, RetryPolicy,
-	DEFAULT_MAX_AGENT_RETRY_DELAY_MS,
+    is_retryable_assistant_error, retry_assistant_call, retry_delay_ms, RetryCallbacks,
+    RetryPolicy, DEFAULT_MAX_AGENT_RETRY_DELAY_MS,
 };
-pub use utils::text::{get_system_message_text, render_system_message_update, system_content_text, user_content_text};
+pub use utils::text::{
+    get_system_message_text, render_system_message_update, system_content_text, user_content_text,
+};
 pub use utils::transcript::{
-	collapse_system_messages, create_initial_system_message, declarations_equal, get_current_system_message,
-	get_current_system_prompt, get_current_tools, get_declared_tools, get_initial_system_message, get_tool_state_changes,
-	has_non_additive_tool_changes, has_tool_redefinitions, resolve_transcript, resolve_transcript_tools,
-	to_tool_declaration, without_initial_system_message, ToolStateChanges, TranscriptTools,
+    collapse_system_messages, create_initial_system_message, declarations_equal,
+    get_current_system_message, get_current_system_prompt, get_current_tools, get_declared_tools,
+    get_initial_system_message, get_tool_state_changes, has_non_additive_tool_changes,
+    has_tool_redefinitions, resolve_transcript, resolve_transcript_tools, to_tool_declaration,
+    without_initial_system_message, ToolStateChanges, TranscriptTools,
 };
 pub use utils::typebox_helpers::{object_schema, string_enum, StringEnumOptions};
 pub use utils::uuid::uuidv7;

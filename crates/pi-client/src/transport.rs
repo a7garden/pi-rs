@@ -20,24 +20,25 @@ pub type OnError = Arc<dyn Fn(AnyError) + Send + Sync>;
 /// Upstream `ByteTransportHandlers`.
 #[derive(Clone)]
 pub struct ByteTransportHandlers {
-	/// Delivers an arbitrary inbound byte chunk.
-	pub on_data: OnData,
-	/// Reports an orderly terminal close.
-	pub on_close: OnClose,
-	/// Reports a terminal transport failure.
-	pub on_error: OnError,
+    /// Delivers an arbitrary inbound byte chunk.
+    pub on_data: OnData,
+    /// Reports an orderly terminal close.
+    pub on_close: OnClose,
+    /// Reports a terminal transport failure.
+    pub on_error: OnError,
 }
 
 /// Upstream `ByteTransport`.
 #[async_trait::async_trait]
 pub trait ByteTransport: Send + Sync {
-	/// Sends one byte chunk. Calls must be delivered in invocation order.
-	async fn send(&self, chunk: Vec<u8>) -> Result<(), AnyError>;
-	/// Closes the transport. Implementations must make repeated calls harmless.
-	fn close(&self);
+    /// Sends one byte chunk. Calls must be delivered in invocation order.
+    async fn send(&self, chunk: Vec<u8>) -> Result<(), AnyError>;
+    /// Closes the transport. Implementations must make repeated calls harmless.
+    fn close(&self);
 }
 
-pub type TransportFuture = Pin<Box<dyn Future<Output = Result<Box<dyn ByteTransport>, AnyError>> + Send>>;
+pub type TransportFuture =
+    Pin<Box<dyn Future<Output = Result<Box<dyn ByteTransport>, AnyError>> + Send>>;
 
 /// Upstream `ByteTransportFactory`: creates a fresh connected, authenticated
 /// transport. Exactly one terminal handler is expected.

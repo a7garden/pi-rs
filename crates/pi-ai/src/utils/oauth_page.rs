@@ -5,22 +5,22 @@ const LOGO_SVG: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 
 
 /// Upstream `escapeHtml`.
 fn escape_html(value: &str) -> String {
-	value
-		.replace('&', "&amp;")
-		.replace('<', "&lt;")
-		.replace('>', "&gt;")
-		.replace('"', "&quot;")
-		.replace('\'', "&#39;")
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#39;")
 }
 
 /// Upstream `renderPage`.
 fn render_page(title: &str, heading: &str, message: &str, details: Option<&str>) -> String {
-	let title = escape_html(title);
-	let heading = escape_html(heading);
-	let message = escape_html(message);
-	let details = details.map(escape_html);
-	format!(
-		r#"<!doctype html>
+    let title = escape_html(title);
+    let heading = escape_html(heading);
+    let message = escape_html(message);
+    let details = details.map(escape_html);
+    format!(
+        r#"<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8" />
@@ -93,51 +93,61 @@ fn render_page(title: &str, heading: &str, message: &str, details: Option<&str>)
     {}</main>
 </body>
 </html>"#,
-		match details {
-			Some(details) => format!("<div class=\"details\">{details}</div>\n    "),
-			None => String::new(),
-		}
-	)
+        match details {
+            Some(details) => format!("<div class=\"details\">{details}</div>\n    "),
+            None => String::new(),
+        }
+    )
 }
 
 /// Upstream `oauthSuccessHtml`.
 pub fn oauth_success_html(message: &str) -> String {
-	render_page("Authentication successful", "Authentication successful", message, None)
+    render_page(
+        "Authentication successful",
+        "Authentication successful",
+        message,
+        None,
+    )
 }
 
 /// Upstream `oauthErrorHtml`.
 pub fn oauth_error_html(message: &str, details: Option<&str>) -> String {
-	render_page("Authentication failed", "Authentication failed", message, details)
+    render_page(
+        "Authentication failed",
+        "Authentication failed",
+        message,
+        details,
+    )
 }
 
 #[cfg(test)]
 mod tests {
-	use super::*;
+    use super::*;
 
-	// Port of the page-shape assertions from test/oauth-callback-server.test.ts.
-	#[test]
-	fn renders_success_page_with_logo_and_message() {
-		let page = oauth_success_html("Signed in to Example. You may now close this page.");
-		assert!(page.contains("Authentication successful"));
-		assert!(page.contains("Signed in to Example."));
-		assert!(page.contains(r##"fill="#F09082""##));
-		assert!(page.contains(r##"fill="#4D9ABF""##));
-		assert!(page.contains(r##"fill="#F1BE58""##));
-		assert!(page.starts_with("<!doctype html>"));
-	}
+    // Port of the page-shape assertions from test/oauth-callback-server.test.ts.
+    #[test]
+    fn renders_success_page_with_logo_and_message() {
+        let page = oauth_success_html("Signed in to Example. You may now close this page.");
+        assert!(page.contains("Authentication successful"));
+        assert!(page.contains("Signed in to Example."));
+        assert!(page.contains(r##"fill="#F09082""##));
+        assert!(page.contains(r##"fill="#4D9ABF""##));
+        assert!(page.contains(r##"fill="#F1BE58""##));
+        assert!(page.starts_with("<!doctype html>"));
+    }
 
-	#[test]
-	fn renders_error_page_with_escaped_details() {
-		let page = oauth_error_html("Example sign-in failed.", Some("token <exchange> failed"));
-		assert!(page.contains("Authentication failed"));
-		assert!(page.contains("token &lt;exchange&gt; failed"));
-		assert!(!page.contains("<exchange>"));
-	}
+    #[test]
+    fn renders_error_page_with_escaped_details() {
+        let page = oauth_error_html("Example sign-in failed.", Some("token <exchange> failed"));
+        assert!(page.contains("Authentication failed"));
+        assert!(page.contains("token &lt;exchange&gt; failed"));
+        assert!(!page.contains("<exchange>"));
+    }
 
-	#[test]
-	fn escapes_html_in_messages() {
-		let page = oauth_error_html("<script>alert(1)</script>", None);
-		assert!(!page.contains("<script>"));
-		assert!(page.contains("&lt;script&gt;"));
-	}
+    #[test]
+    fn escapes_html_in_messages() {
+        let page = oauth_error_html("<script>alert(1)</script>", None);
+        assert!(!page.contains("<script>"));
+        assert!(page.contains("&lt;script&gt;"));
+    }
 }

@@ -21,30 +21,30 @@ static STDOUT_LOCK: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
 /// writes reach stdout. Rust has no replaceable stdout hook (D91); this
 /// records the takeover flag for [`is_stdout_taken_over`]/[`restore_stdout`].
 pub fn take_over_stdout() {
-	STDOUT_TAKEN_OVER.store(true, Ordering::SeqCst);
+    STDOUT_TAKEN_OVER.store(true, Ordering::SeqCst);
 }
 
 /// `restoreStdout`.
 pub fn restore_stdout() {
-	STDOUT_TAKEN_OVER.store(false, Ordering::SeqCst);
+    STDOUT_TAKEN_OVER.store(false, Ordering::SeqCst);
 }
 
 /// `isStdoutTakenOver`.
 pub fn is_stdout_taken_over() -> bool {
-	STDOUT_TAKEN_OVER.load(Ordering::SeqCst)
+    STDOUT_TAKEN_OVER.load(Ordering::SeqCst)
 }
 
 /// `writeRawStdout`: queue `text` on the serialized raw-stdout writer.
 pub fn write_raw_stdout(text: &str) {
-	if text.is_empty() {
-		return;
-	}
-	let _guard = STDOUT_LOCK.lock();
-	let mut stdout = std::io::stdout().lock();
-	// Upstream retries ENOBUFS/EAGAIN; a blocking pipe write either succeeds
-	// or fails fatally (D91).
-	let _ = stdout.write_all(text.as_bytes());
-	let _ = stdout.flush();
+    if text.is_empty() {
+        return;
+    }
+    let _guard = STDOUT_LOCK.lock();
+    let mut stdout = std::io::stdout().lock();
+    // Upstream retries ENOBUFS/EAGAIN; a blocking pipe write either succeeds
+    // or fails fatally (D91).
+    let _ = stdout.write_all(text.as_bytes());
+    let _ = stdout.flush();
 }
 
 /// `waitForRawStdoutBackpressure`: resolve once the queued writes drained.
@@ -53,6 +53,6 @@ pub async fn wait_for_raw_stdout_backpressure() {}
 
 /// `flushRawStdout`: drain queued writes and flush the underlying handle.
 pub async fn flush_raw_stdout() {
-	let _guard = STDOUT_LOCK.lock();
-	let _ = std::io::stdout().lock().flush();
+    let _guard = STDOUT_LOCK.lock();
+    let _ = std::io::stdout().lock().flush();
 }

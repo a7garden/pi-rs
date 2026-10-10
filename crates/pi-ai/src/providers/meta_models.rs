@@ -15,39 +15,39 @@ use crate::types::{AnyModel, ClassifierModel, JsonValue, Model};
 pub const META_DATA_JSON: &str = include_str!("data/meta.json");
 
 fn groups() -> JsonValue {
-	serde_json::from_str(META_DATA_JSON).expect("embedded meta.json parses")
+    serde_json::from_str(META_DATA_JSON).expect("embedded meta.json parses")
 }
 
 /// `META_MODELS` (`Object.values` order).
 pub fn meta_models() -> Vec<Model> {
-	crate::model_catalog::flatten_chat_model_catalog("meta", &groups())
-		.into_models()
-		.into_iter()
-		.filter_map(|model| match model {
-			AnyModel::Chat(model) => Some(model),
-			_ => None,
-		})
-		.collect()
+    crate::model_catalog::flatten_chat_model_catalog("meta", &groups())
+        .into_models()
+        .into_iter()
+        .filter_map(|model| match model {
+            AnyModel::Chat(model) => Some(model),
+            _ => None,
+        })
+        .collect()
 }
 
 /// `META_IMAGE_MODELS` (`Object.values` order).
 pub fn meta_image_models() -> Vec<AnyModel> {
-	crate::model_catalog::flatten_image_model_catalog("meta", &groups()).into_models()
+    crate::model_catalog::flatten_image_model_catalog("meta", &groups()).into_models()
 }
 
 /// `META_CLASSIFIER_MODELS` (`Object.values` order).
 pub fn meta_classifier_models() -> Vec<ClassifierModel> {
-	crate::model_catalog::flatten_classifier_model_catalog("meta", &groups())
-		.into_models()
-		.into_iter()
-		.filter_map(|model| match model {
-			AnyModel::Classifier(model) => Some(model),
-			_ => None,
-		})
-		.collect()
+    crate::model_catalog::flatten_classifier_model_catalog("meta", &groups())
+        .into_models()
+        .into_iter()
+        .filter_map(|model| match model {
+            AnyModel::Classifier(model) => Some(model),
+            _ => None,
+        })
+        .collect()
 }
 
 /// All chat entries as `AnyModel` (what `create_provider` consumes).
 pub fn meta_any_models() -> Vec<AnyModel> {
-	meta_models().into_iter().map(AnyModel::Chat).collect()
+    meta_models().into_iter().map(AnyModel::Chat).collect()
 }

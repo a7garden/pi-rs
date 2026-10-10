@@ -1,5 +1,7 @@
-use super::{encode_frame, Json, RemoteError};
-use serde_json::{json, Value};
+//! Frame and error mapping unit tests (upstream `connection.ts` helpers).
+
+use super::{Json, RemoteError, encode_frame};
+use serde_json::{Value, json};
 
 #[test]
 fn protocol_frame_uses_big_endian_header_and_keeps_payload_bytes() {
@@ -11,7 +13,10 @@ fn protocol_frame_uses_big_endian_header_and_keeps_payload_bytes() {
     assert_eq!(frame[4], 1);
     assert_eq!(&frame[5..9], &[1, 2, 3, 4]);
     let json_length = u32::from_be_bytes(frame[9..13].try_into().unwrap()) as usize;
-    assert_eq!(serde_json::from_slice::<Value>(&frame[13..13 + json_length]).unwrap()["op"], "write");
+    assert_eq!(
+        serde_json::from_slice::<Value>(&frame[13..13 + json_length]).unwrap()["op"],
+        "write"
+    );
     assert_eq!(&frame[13 + json_length..], &[0, 255, 1]);
 }
 
@@ -24,8 +29,28 @@ fn protocol_frame_rejects_payloads_over_the_limit() {
 
 #[test]
 fn remote_error_preserves_node_code_path_and_fields() {
-    let error = RemoteError::from_json(json!({"code":"ENOENT","message":"missing","path":"/tmp/x"}).as_object().unwrap().clone());
+    let error = RemoteError::from_fields(
+        json!({"code":"ENOENT","message":"missing","path":"/tmp/x"})
+            .as_object()
+            .unwrap()
+            .clone(),
+    );
     assert_eq!(error.code, "ENOENT");
     assert_eq!(error.message, "missing");
     assert_eq!(error.path.as_deref(), Some("/tmp/x"));
+    assert!(!error.lost());
+}
+
+#[test]
+fn transport_failures_are_marked_lost() {
+    let mut fields = Json::new();
+    fields.insert("code".into(), json!("unknown"));
+    fields.insert("message".into(), json!("pi-env connection lost"));
+    fields.insert("lost".into(), json!(true));
+    assert!(RemoteError::from_fields(fields).lost());
+    // A daemon refusal is never "lost", whatever its fields say about the operation.
+    let mut fields = Json::new();
+    fields.insert("code".into(), json!("ENOENT"));
+    fields.insert("lost".into(), json!(false));
+    assert!(!RemoteError::from_fields(fields).lost());
 }

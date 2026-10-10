@@ -19,11 +19,11 @@ use std::path::Path;
 use std::rc::Rc;
 
 use deno_ast::{MediaType, ParseParams, SourceMapOption};
-use deno_error::JsErrorBox;
 use deno_core::{
-    ModuleLoadResponse, ModuleLoader, ModuleSource, ModuleSourceCode, ModuleSpecifier,
-    ModuleType, ResolutionKind, resolve_import,
+    resolve_import, ModuleLoadResponse, ModuleLoader, ModuleSource, ModuleSourceCode,
+    ModuleSpecifier, ModuleType, ResolutionKind,
 };
+use deno_error::JsErrorBox;
 use parking_lot::Mutex;
 
 /// Source of a virtual module.
@@ -86,7 +86,9 @@ impl PiModuleLoader {
             // `./helper.js` when the source file is `helper.ts`.
             if let Some(stripped) = as_str.strip_suffix(&format!(
                 ".{}",
-                path.extension().and_then(|e| e.to_str()).unwrap_or_default()
+                path.extension()
+                    .and_then(|e| e.to_str())
+                    .unwrap_or_default()
             )) {
                 let base = stripped.to_string();
                 aliases.push(base.clone());
@@ -140,7 +142,9 @@ impl PiModuleLoader {
             .map_err(|e| JsErrorBox::generic(format!("{e}")))?
             .into_source();
         if let Some(map) = transpiled.source_map {
-            self.source_maps.lock().insert(specifier.to_string(), map.into_bytes());
+            self.source_maps
+                .lock()
+                .insert(specifier.to_string(), map.into_bytes());
         }
         Ok(transpiled.text)
     }
@@ -166,9 +170,8 @@ impl ModuleLoader for PiModuleLoader {
             if let Ok(url) = ModuleSpecifier::parse(specifier) {
                 return Ok(url);
             }
-            return ModuleSpecifier::parse(&format!("pi-virtual:{specifier}")).map_err(|e| {
-                JsErrorBox::generic(format!("invalid specifier {specifier}: {e}"))
-            });
+            return ModuleSpecifier::parse(&format!("pi-virtual:{specifier}"))
+                .map_err(|e| JsErrorBox::generic(format!("invalid specifier {specifier}: {e}")));
         }
         let resolved = resolve_import(specifier, referrer).map_err(JsErrorBox::from_err)?;
         // Fail missing file modules at resolve time: deno_core 0.412 swallows
@@ -177,7 +180,10 @@ impl ModuleLoader for PiModuleLoader {
         if resolved.scheme() == "file"
             && !self.virtuals.lock().contains_key(resolved.as_str())
             && !self.aliases.lock().contains_key(resolved.as_str())
-            && resolved.to_file_path().map(|path| !path.exists()).unwrap_or(false)
+            && resolved
+                .to_file_path()
+                .map(|path| !path.exists())
+                .unwrap_or(false)
         {
             return Err(JsErrorBox::generic(format!(
                 "Module not found: {specifier} (resolved to {resolved}, imported from {referrer})"

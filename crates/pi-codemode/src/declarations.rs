@@ -35,16 +35,30 @@ pub fn render_declarations(options: RenderDeclarationsOptions<'_>) -> String {
     if !tools.is_empty() {
         let members: Vec<String> = tools
             .iter()
-            .map(|tool| format!("{}{}{}", doc_comment(tool.description.as_deref(), INDENT), INDENT, render_tool_signature_opts(tool, None)))
+            .map(|tool| {
+                format!(
+                    "{}{}{}",
+                    doc_comment(tool.description.as_deref(), INDENT),
+                    INDENT,
+                    render_tool_signature_opts(tool, None)
+                )
+            })
             .collect();
-        sections.push(format!("declare const tools: {{\n{}\n}};", members.join("\n")));
+        sections.push(format!(
+            "declare const tools: {{\n{}\n}};",
+            members.join("\n")
+        ));
     }
     let mut namespaces: HashMap<&str, Vec<String>> = HashMap::new();
     let mut namespace_order: Vec<&str> = Vec::new();
     for global in options.globals {
         match global.name.find('.') {
             None => {
-                sections.push(render_global(&format!("declare function {}", global.name), global, ""));
+                sections.push(render_global(
+                    &format!("declare function {}", global.name),
+                    global,
+                    "",
+                ));
             }
             Some(dot) => {
                 let namespace = &global.name[..dot];
@@ -58,7 +72,10 @@ pub fn render_declarations(options: RenderDeclarationsOptions<'_>) -> String {
     }
     for namespace in namespace_order {
         let members = &namespaces[namespace];
-        sections.push(format!("declare const {namespace}: {{\n{}\n}};", members.join("\n")));
+        sections.push(format!(
+            "declare const {namespace}: {{\n{}\n}};",
+            members.join("\n")
+        ));
     }
     sections.join("\n\n")
 }
@@ -71,13 +88,13 @@ pub fn render_tool_signature(tool: &SignatureTool<'_>) -> String {
     render_tool_signature_opts(&tool.as_tool(), tool.input_max_chars)
 }
 
-fn render_tool_signature_opts(
-    tool: &impl SchemaAccess,
-    input_max_chars: Option<usize>,
-) -> String {
+fn render_tool_signature_opts(tool: &impl SchemaAccess, input_max_chars: Option<usize>) -> String {
     let input = match tool.input_schema() {
         None => "unknown".to_string(),
-        Some(schema) => schema_to_type_with(schema, Some(input_max_chars.unwrap_or(DEFAULT_INPUT_SCHEMA_MAX_CHARS))),
+        Some(schema) => schema_to_type_with(
+            schema,
+            Some(input_max_chars.unwrap_or(DEFAULT_INPUT_SCHEMA_MAX_CHARS)),
+        ),
     };
     format!(
         "{}(args: {}): Promise<{}>;",
@@ -89,11 +106,12 @@ fn render_tool_signature_opts(
 
 /// A tool's sample: the description followed by the tool's declaration. Used for tool
 /// listings and `ALL_TOOLS` entries.
-pub fn render_tool_sample(
-    tool: &SampleTool<'_>,
-) -> String {
+pub fn render_tool_sample(tool: &SampleTool<'_>) -> String {
     let tool_ref = tool.as_tool();
-    let declaration = format!("declare const tools: {{ {} }};", render_tool_signature_opts(&tool_ref, tool.input_max_chars));
+    let declaration = format!(
+        "declare const tools: {{ {} }};",
+        render_tool_signature_opts(&tool_ref, tool.input_max_chars)
+    );
     format!(
         "{}\n\ncodemode tool declaration:\n```ts\n{}\n```",
         tool.description.as_deref().unwrap_or("").trim(),
@@ -188,7 +206,9 @@ impl SchemaAccess for crate::types::CodemodeTool {
 /// The `structuredContent` schema of an MCP `CallToolResult` output schema (detected by a
 /// `content` array of objects, boolean `isError`, and object `_meta`), `Some(Value::Bool(true))`
 /// when it declares none, or `None` when the schema is not a `CallToolResult`.
-pub fn mcp_structured_content_schema(schema: Option<&CodemodeJsonSchema>) -> Option<CodemodeJsonSchema> {
+pub fn mcp_structured_content_schema(
+    schema: Option<&CodemodeJsonSchema>,
+) -> Option<CodemodeJsonSchema> {
     let schema = schema?;
     let properties = schema.get("properties")?.as_object()?;
     let content = properties.get("content")?;
@@ -219,7 +239,11 @@ pub fn mcp_structured_content_schema(schema: Option<&CodemodeJsonSchema>) -> Opt
 pub fn render_tool_output_type(schema: Option<&CodemodeJsonSchema>) -> String {
     if let Some(structured) = mcp_structured_content_schema(schema) {
         let ty = schema_to_type_with(&structured, None);
-        return if ty == "unknown" { "CallToolResult".to_string() } else { format!("CallToolResult<{ty}>") };
+        return if ty == "unknown" {
+            "CallToolResult".to_string()
+        } else {
+            format!("CallToolResult<{ty}>")
+        };
     }
     match schema {
         None => "unknown".to_string(),
@@ -229,7 +253,12 @@ pub fn render_tool_output_type(schema: Option<&CodemodeJsonSchema>) -> String {
 
 fn render_global(head: &str, global: &crate::types::CodemodeTool, indent: &str) -> String {
     if let Some(signature) = &global.signature {
-        return format!("{}{}{}{signature};", doc_comment(global.description.as_deref(), indent), indent, head);
+        return format!(
+            "{}{}{}{signature};",
+            doc_comment(global.description.as_deref(), indent),
+            indent,
+            head
+        );
     }
     let input = match &global.input_schema {
         None => "unknown".to_string(),
@@ -239,7 +268,12 @@ fn render_global(head: &str, global: &crate::types::CodemodeTool, indent: &str) 
         None => "unknown".to_string(),
         Some(schema) => schema_to_type_with(schema, None),
     };
-    format!("{}{}{}(args: {input}): Promise<{output}>;", doc_comment(global.description.as_deref(), indent), indent, head)
+    format!(
+        "{}{}{}(args: {input}): Promise<{output}>;",
+        doc_comment(global.description.as_deref(), indent),
+        indent,
+        head
+    )
 }
 
 fn doc_comment(description: Option<&str>, indent: &str) -> String {
@@ -324,7 +358,11 @@ pub fn schema_to_type(schema: &CodemodeJsonSchema) -> String {
 
 /// Like [`schema_to_type`] with an explicit character budget (`None` disables the cap).
 pub fn schema_to_type_with(schema: &CodemodeJsonSchema, max_chars: Option<usize>) -> String {
-    let mut context = SchemaContext { root: schema, resolving: HashSet::new(), expansions: 0 };
+    let mut context = SchemaContext {
+        root: schema,
+        resolving: HashSet::new(),
+        expansions: 0,
+    };
     let ty = to_type(schema, &mut context);
     match max_chars {
         Some(max) if ty.chars().count() > max => "unknown".to_string(),
@@ -345,7 +383,9 @@ fn resolve_ref(reference: &str, root: &CodemodeJsonSchema) -> Option<CodemodeJso
     }
     let mut current = root.clone();
     for segment in reference[2..].split('/').filter(|s| !s.is_empty()) {
-        let key = percent_decode(segment).replace("~1", "/").replace("~0", "~");
+        let key = percent_decode(segment)
+            .replace("~1", "/")
+            .replace("~0", "~");
         let next = current.get(&key)?;
         current = next.clone();
     }
@@ -423,7 +463,13 @@ fn to_type(schema: &CodemodeJsonSchema, context: &mut SchemaContext<'_>) -> Stri
         }
         return parts
             .into_iter()
-            .map(|part| if part.contains(" | ") { format!("({part})") } else { part })
+            .map(|part| {
+                if part.contains(" | ") {
+                    format!("({part})")
+                } else {
+                    part
+                }
+            })
             .collect::<Vec<_>>()
             .join(" & ");
     }
@@ -452,7 +498,10 @@ fn to_type(schema: &CodemodeJsonSchema, context: &mut SchemaContext<'_>) -> Stri
         Some(_) => "unknown".to_string(),
         None => {
             let obj = schema.as_object().unwrap();
-            if obj.contains_key("properties") || obj.contains_key("additionalProperties") || obj.contains_key("required") {
+            if obj.contains_key("properties")
+                || obj.contains_key("additionalProperties")
+                || obj.contains_key("required")
+            {
                 return object_type(obj, context);
             }
             if obj.contains_key("items") || obj.contains_key("prefixItems") {
@@ -478,7 +527,14 @@ fn array_type(schema: &Map<String, Value>, context: &mut SchemaContext<'_>) -> S
         Vec::new()
     };
     if !tuple.is_empty() {
-        return format!("[{}]", tuple.iter().map(|item| to_type(item, context)).collect::<Vec<_>>().join(", "));
+        return format!(
+            "[{}]",
+            tuple
+                .iter()
+                .map(|item| to_type(item, context))
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
     }
     "unknown[]".to_string()
 }
@@ -505,7 +561,11 @@ fn object_type(schema: &Map<String, Value>, context: &mut SchemaContext<'_>) -> 
     let mut members: Vec<String> = names
         .iter()
         .map(|name| {
-            let optional = if required.contains(name.as_str()) { "" } else { "?" };
+            let optional = if required.contains(name.as_str()) {
+                ""
+            } else {
+                "?"
+            };
             format!(
                 "{}{}: {};",
                 property_key(name),
@@ -530,7 +590,9 @@ fn object_type(schema: &Map<String, Value>, context: &mut SchemaContext<'_>) -> 
     if members.is_empty() {
         return "{}".to_string();
     }
-    let has_descriptions = names.iter().any(|name| !description_of(&properties[name.as_str()]).is_empty());
+    let has_descriptions = names
+        .iter()
+        .any(|name| !description_of(&properties[name.as_str()]).is_empty());
     if !has_descriptions {
         return format!("{{ {} }}", members.join(" "));
     }
@@ -543,7 +605,10 @@ fn object_type(schema: &Map<String, Value>, context: &mut SchemaContext<'_>) -> 
                 lines.push(format!("{INDENT}// {line}"));
             }
         }
-        lines.push(format!("{INDENT}{}", members[index].replace('\n', &format!("\n{INDENT}"))));
+        lines.push(format!(
+            "{INDENT}{}",
+            members[index].replace('\n', &format!("\n{INDENT}"))
+        ));
     }
     for member in members.iter().skip(names.len()) {
         lines.push(format!("{INDENT}{member}"));
@@ -564,7 +629,10 @@ mod tests {
 
     fn mcp_result_schema(structured_content: Option<Value>) -> Value {
         let mut properties = serde_json::Map::new();
-        properties.insert("content".into(), json!({ "type": "array", "items": { "type": "object" } }));
+        properties.insert(
+            "content".into(),
+            json!({ "type": "array", "items": { "type": "object" } }),
+        );
         if let Some(sc) = structured_content {
             properties.insert("structuredContent".into(), sc);
         }
@@ -577,16 +645,27 @@ mod tests {
     fn renders_primitives_literals_and_unions() {
         assert_eq!(schema_to_type(&json!({ "type": "string" })), "string");
         assert_eq!(schema_to_type(&json!({ "type": "integer" })), "number");
-        assert_eq!(schema_to_type(&json!({ "type": ["string", "null"] })), "string | null");
+        assert_eq!(
+            schema_to_type(&json!({ "type": ["string", "null"] })),
+            "string | null"
+        );
         assert_eq!(schema_to_type(&json!({ "const": "a" })), "\"a\"");
-        assert_eq!(schema_to_type(&json!({ "enum": ["a", 1, null] })), "\"a\" | 1 | null");
+        assert_eq!(
+            schema_to_type(&json!({ "enum": ["a", 1, null] })),
+            "\"a\" | 1 | null"
+        );
         assert_eq!(
             schema_to_type(&json!({ "anyOf": [{ "type": "string" }, { "type": "number" }] })),
             "string | number"
         );
-        assert_eq!(schema_to_type(&json!({ "anyOf": [{ "type": "string" }, {}] })), "unknown");
         assert_eq!(
-            schema_to_type(&json!({ "allOf": [{ "anyOf": [{ "type": "string" }, { "type": "number" }] }, { "const": 1 }] })),
+            schema_to_type(&json!({ "anyOf": [{ "type": "string" }, {}] })),
+            "unknown"
+        );
+        assert_eq!(
+            schema_to_type(
+                &json!({ "allOf": [{ "anyOf": [{ "type": "string" }, { "type": "number" }] }, { "const": 1 }] })
+            ),
             "(string | number) & 1"
         );
         assert_eq!(schema_to_type(&json!({ "$ref": "#/defs/x" })), "unknown");
@@ -606,12 +685,19 @@ mod tests {
             "{ city: string; \"max-lines\"?: number; }"
         );
         assert_eq!(
-            schema_to_type(&json!({ "type": "object", "additionalProperties": { "type": "number" } })),
+            schema_to_type(
+                &json!({ "type": "object", "additionalProperties": { "type": "number" } })
+            ),
             "{ [key: string]: number; }"
         );
-        assert_eq!(schema_to_type(&json!({ "type": "object" })), "{ [key: string]: unknown; }");
         assert_eq!(
-            schema_to_type(&json!({ "type": "object", "properties": {}, "additionalProperties": false })),
+            schema_to_type(&json!({ "type": "object" })),
+            "{ [key: string]: unknown; }"
+        );
+        assert_eq!(
+            schema_to_type(
+                &json!({ "type": "object", "properties": {}, "additionalProperties": false })
+            ),
             "{}"
         );
     }
@@ -674,9 +760,14 @@ mod tests {
 
     #[test]
     fn renders_arrays_and_tuples() {
-        assert_eq!(schema_to_type(&json!({ "type": "array", "items": { "type": "string" } })), "Array<string>");
         assert_eq!(
-            schema_to_type(&json!({ "type": "array", "prefixItems": [{ "type": "string" }, { "type": "number" }] })),
+            schema_to_type(&json!({ "type": "array", "items": { "type": "string" } })),
+            "Array<string>"
+        );
+        assert_eq!(
+            schema_to_type(
+                &json!({ "type": "array", "prefixItems": [{ "type": "string" }, { "type": "number" }] })
+            ),
             "[string, number]"
         );
         assert_eq!(schema_to_type(&json!({ "type": "array" })), "unknown[]");
@@ -714,14 +805,20 @@ mod tests {
             "hidden_dynamic_tool(args: { city: string; }): Promise<{ ok: boolean; }>;"
         );
         assert_eq!(
-            render_tool_signature(&SignatureTool { name: "free", input_schema: None, output_schema: None, input_max_chars: None }),
+            render_tool_signature(&SignatureTool {
+                name: "free",
+                input_schema: None,
+                output_schema: None,
+                input_max_chars: None
+            }),
             "free(args: unknown): Promise<unknown>;"
         );
     }
 
     #[test]
     fn renders_mcp_call_tool_result_output_schemas() {
-        let input_schema = json!({ "type": "object", "properties": {}, "additionalProperties": false });
+        let input_schema =
+            json!({ "type": "object", "properties": {}, "additionalProperties": false });
         assert_eq!(
             render_tool_signature(&SignatureTool {
                 name: "mcp__sample__search",
@@ -754,7 +851,9 @@ mod tests {
             "plain(args: {}): Promise<CallToolResult>;"
         );
         assert_eq!(
-            mcp_structured_content_schema(Some(&json!({ "type": "object", "properties": { "content": { "type": "array" } } }))),
+            mcp_structured_content_schema(Some(
+                &json!({ "type": "object", "properties": { "content": { "type": "array" } } })
+            )),
             None
         );
     }
@@ -783,7 +882,10 @@ mod tests {
         let attach = crate::types::CodemodeTool::new("attach", |_, _| async { Ok(None) })
             .with_description("Attach it.")
             .with_input_schema(json!({ "type": "string" }));
-        let text = render_declarations(RenderDeclarationsOptions { tools: &[read, remote], globals: &[attach] });
+        let text = render_declarations(RenderDeclarationsOptions {
+            tools: &[read, remote],
+            globals: &[attach],
+        });
         assert_eq!(
             text,
             [
@@ -810,8 +912,12 @@ mod tests {
             .with_signature("(type: string): Promise<string[]>");
         let get = crate::types::CodemodeTool::new("models.get", |_, _| async { Ok(None) })
             .with_input_schema(json!({ "type": "string" }));
-        let plain = crate::types::CodemodeTool::new("plain", |_, _| async { Ok(None) }).with_signature("(): void");
-        let text = render_declarations(RenderDeclarationsOptions { tools: &[], globals: &[list, get, plain] });
+        let plain = crate::types::CodemodeTool::new("plain", |_, _| async { Ok(None) })
+            .with_signature("(): void");
+        let text = render_declarations(RenderDeclarationsOptions {
+            tools: &[],
+            globals: &[list, get, plain],
+        });
         assert_eq!(
             text,
             [
@@ -829,8 +935,12 @@ mod tests {
 
     #[test]
     fn escapes_comment_terminators_in_descriptions() {
-        let tool = crate::types::CodemodeTool::new("x", |_, _| async { Ok(None) }).with_description("a */ b");
-        let text = render_declarations(RenderDeclarationsOptions { tools: &[tool], globals: &[] });
+        let tool = crate::types::CodemodeTool::new("x", |_, _| async { Ok(None) })
+            .with_description("a */ b");
+        let text = render_declarations(RenderDeclarationsOptions {
+            tools: &[tool],
+            globals: &[],
+        });
         assert!(text.contains("/** a *\\/ b */"));
     }
 }

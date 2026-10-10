@@ -16,17 +16,17 @@ use crate::experimental::commands::{run_experimental_command, ExperimentalDispat
 
 /// Upstream `setupCli(); … if (await runExperimentalCommand(args)) …`.
 pub async fn run(args: Vec<String>) -> i32 {
-	setup_cli();
-	match run_experimental_command(&args).await {
-		ExperimentalDispatch::Handled { exit_code } => {
-			if args.first().map(String::as_str) == Some("client") {
-				std::process::exit(exit_code);
-			}
-			exit_code
-		}
-		ExperimentalDispatch::NotHandled => {
-			main_dispatch::main(args, None::<MainOptions>).await;
-			0
-		}
-	}
+    setup_cli();
+    match run_experimental_command(&args).await {
+        ExperimentalDispatch::Handled { exit_code } => {
+            if args.first().map(String::as_str) == Some("client") {
+                std::process::exit(exit_code);
+            }
+            exit_code
+        }
+        ExperimentalDispatch::NotHandled => {
+            main_dispatch::main(args, None::<MainOptions>).await;
+            0
+        }
+    }
 }

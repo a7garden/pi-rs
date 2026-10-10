@@ -120,7 +120,10 @@ impl NodeOrigin {
             self,
             NodeOrigin::WriteSlot { .. }
                 | NodeOrigin::InsertEntry { .. }
-                | NodeOrigin::BaseEntry { captured: Some(_), .. }
+                | NodeOrigin::BaseEntry {
+                    captured: Some(_),
+                    ..
+                }
         )
     }
 }
@@ -306,13 +309,17 @@ impl OverlayContext {
     }
 
     fn object_deleted(&self, nid: NodeId, key: &str) -> bool {
-        self.object(nid).deletes.iter().any(|existing| existing == key)
+        self.object(nid)
+            .deletes
+            .iter()
+            .any(|existing| existing == key)
     }
 
     /// Upstream `objectHas`: overlay presence. serde objects have own
     /// properties only, so no prototype chain is reachable.
     fn object_has(&self, nid: NodeId, key: &str) -> bool {
-        !self.object_deleted(nid, key) && (self.write_slot(nid, key).is_some() || self.object_base_has(nid, key))
+        !self.object_deleted(nid, key)
+            && (self.write_slot(nid, key).is_some() || self.object_base_has(nid, key))
     }
 
     fn object_base_has(&self, nid: NodeId, key: &str) -> bool {
@@ -332,7 +339,9 @@ impl OverlayContext {
         let overlay = self.object(nid);
         let mut keys: Vec<String> = base_keys
             .into_iter()
-            .filter(|key| !self.object_deleted(nid, key) && !overlay.readded.iter().any(|k| k == key))
+            .filter(|key| {
+                !self.object_deleted(nid, key) && !overlay.readded.iter().any(|k| k == key)
+            })
             .collect();
         for (key, _) in &overlay.writes {
             if !keys.contains(key) {
@@ -396,16 +405,18 @@ impl OverlayContext {
                         .copied(),
                 ),
             },
-            Entry::Insert { source, index } => match self.insert_override_slot(nid, *source, *index) {
-                Some(slot) => (&slot.value, slot.node),
-                None => (
-                    &self.array(nid).sources[*source][*index],
-                    self.array(nid)
-                        .child_nodes
-                        .get(&ChildRoute::Insert(*source, *index))
-                        .copied(),
-                ),
-            },
+            Entry::Insert { source, index } => {
+                match self.insert_override_slot(nid, *source, *index) {
+                    Some(slot) => (&slot.value, slot.node),
+                    None => (
+                        &self.array(nid).sources[*source][*index],
+                        self.array(nid)
+                            .child_nodes
+                            .get(&ChildRoute::Insert(*source, *index))
+                            .copied(),
+                    ),
+                }
+            }
         }
     }
 
@@ -462,7 +473,11 @@ impl OverlayContext {
         let overlay = self.nodes[nid].object.as_mut().expect("object node");
         // Replacing the payload detaches any node bound to the old value.
         overlay.child_nodes.remove(&key);
-        if let Some(position) = overlay.writes.iter().position(|(existing, _)| *existing == key) {
+        if let Some(position) = overlay
+            .writes
+            .iter()
+            .position(|(existing, _)| *existing == key)
+        {
             overlay.writes[position].1 = Slot { value, node: None };
         } else {
             overlay.writes.push((key, Slot { value, node: None }));
@@ -471,7 +486,11 @@ impl OverlayContext {
 
     fn remove_write_slot(&mut self, nid: NodeId, key: &str) {
         let overlay = self.nodes[nid].object.as_mut().expect("object node");
-        if let Some(position) = overlay.writes.iter().position(|(existing, _)| existing == key) {
+        if let Some(position) = overlay
+            .writes
+            .iter()
+            .position(|(existing, _)| existing == key)
+        {
             overlay.writes.remove(position);
         }
         overlay.child_nodes.remove(key);
@@ -494,7 +513,9 @@ impl OverlayContext {
         {
             overlay.base_overrides[position].1 = Slot { value, node: None };
         } else {
-            overlay.base_overrides.push((base_index, Slot { value, node: None }));
+            overlay
+                .base_overrides
+                .push((base_index, Slot { value, node: None }));
         }
     }
 
@@ -509,9 +530,17 @@ impl OverlayContext {
         }
     }
 
-    fn upsert_insert_override(&mut self, nid: NodeId, source: usize, index: usize, value: JsonValue) {
+    fn upsert_insert_override(
+        &mut self,
+        nid: NodeId,
+        source: usize,
+        index: usize,
+        value: JsonValue,
+    ) {
         let overlay = self.nodes[nid].array.as_mut().expect("array node");
-        overlay.child_nodes.remove(&ChildRoute::Insert(source, index));
+        overlay
+            .child_nodes
+            .remove(&ChildRoute::Insert(source, index));
         if !overlay.insert_overrides.iter().any(|(s, _)| *s == source) {
             overlay.insert_overrides.push((source, Vec::new()));
         }
@@ -521,7 +550,10 @@ impl OverlayContext {
             .find(|(s, _)| *s == source)
             .expect("just ensured")
             .1;
-        if let Some(position) = overrides.iter().position(|(existing, _)| *existing == index) {
+        if let Some(position) = overrides
+            .iter()
+            .position(|(existing, _)| *existing == index)
+        {
             overrides[position].1 = Slot { value, node: None };
         } else {
             overrides.push((index, Slot { value, node: None }));
@@ -530,11 +562,18 @@ impl OverlayContext {
 
     fn remove_insert_override(&mut self, nid: NodeId, source: usize, index: usize) {
         let overlay = self.nodes[nid].array.as_mut().expect("array node");
-        let Some(position) = overlay.insert_overrides.iter().position(|(s, _)| *s == source) else {
+        let Some(position) = overlay
+            .insert_overrides
+            .iter()
+            .position(|(s, _)| *s == source)
+        else {
             return;
         };
         let overrides = &mut overlay.insert_overrides[position].1;
-        if let Some(at) = overrides.iter().position(|(existing, _)| *existing == index) {
+        if let Some(at) = overrides
+            .iter()
+            .position(|(existing, _)| *existing == index)
+        {
             overrides.remove(at);
         }
         if overrides.is_empty() {
@@ -550,12 +589,18 @@ impl OverlayContext {
     }
 
     fn mark_structural(&mut self, nid: NodeId) {
-        self.nodes[nid].array.as_mut().expect("array node").structural = true;
+        self.nodes[nid]
+            .array
+            .as_mut()
+            .expect("array node")
+            .structural = true;
     }
 
     fn push_insert_entries(&mut self, nid: NodeId, at: usize, source: usize, count: usize) {
         let overlay = self.nodes[nid].array.as_mut().expect("array node");
-        let entries: Vec<Entry> = (0..count).map(|index| Entry::Insert { source, index }).collect();
+        let entries: Vec<Entry> = (0..count)
+            .map(|index| Entry::Insert { source, index })
+            .collect();
         overlay.entries.splice(at..at, entries);
     }
 
@@ -566,13 +611,15 @@ impl OverlayContext {
     pub(super) fn node_for(&mut self, start: NodeId, path: &[Seg]) -> Result<NodeId, DeltaError> {
         let mut current = start;
         for (depth, segment) in path.iter().enumerate() {
-            current = self.step_to_node(current, segment).map_err(|error| match error {
-                StepError::Missing => DeltaError::Unresolvable {
-                    path: serde_json::to_string(&super::path_to_json(&path[..=depth]))
-                        .unwrap_or_else(|_| "[]".to_string()),
-                },
-                StepError::Other(error) => error,
-            })?;
+            current = self
+                .step_to_node(current, segment)
+                .map_err(|error| match error {
+                    StepError::Missing => DeltaError::Unresolvable {
+                        path: serde_json::to_string(&super::path_to_json(&path[..=depth]))
+                            .unwrap_or_else(|_| "[]".to_string()),
+                    },
+                    StepError::Other(error) => error,
+                })?;
         }
         Ok(current)
     }
@@ -588,7 +635,11 @@ impl OverlayContext {
         Err(StepError::Missing)
     }
 
-    fn step_to_object_child(&mut self, current: NodeId, segment: &Seg) -> Result<NodeId, StepError> {
+    fn step_to_object_child(
+        &mut self,
+        current: NodeId,
+        segment: &Seg,
+    ) -> Result<NodeId, StepError> {
         let key = object_key_form(segment);
         // Route through a write slot when one exists.
         let written = self
@@ -640,7 +691,10 @@ impl OverlayContext {
         if let Some(existing) = self.object(current).child_nodes.get(&key).copied() {
             return Ok(existing);
         }
-        let child_raw = self.node_raw(current).get(&key).expect("container checked above");
+        let child_raw = self
+            .node_raw(current)
+            .get(&key)
+            .expect("container checked above");
         let child_object = child_raw.is_object().then(ObjectOverlay::default);
         let child_array = ArrayOverlay::seeded(child_raw);
         let nid = self.push_node(OverlayNode {
@@ -704,8 +758,7 @@ impl OverlayContext {
         // Bind the node to whichever slot it wraps.
         match entry {
             Entry::Base(base_index) => {
-                if let Some(slot) = self
-                    .nodes[current]
+                if let Some(slot) = self.nodes[current]
                     .array
                     .as_mut()
                     .expect("array node")
@@ -718,8 +771,7 @@ impl OverlayContext {
                 }
             }
             Entry::Insert { source, index } => {
-                if let Some(slot) = self
-                    .nodes[current]
+                if let Some(slot) = self.nodes[current]
                     .array
                     .as_mut()
                     .expect("array node")
@@ -826,18 +878,27 @@ impl OverlayContext {
             }
         }
         match (raw, segment) {
-            (JsonValue::Object(object), Seg::Key(key)) => object.get(key).map(|value| (value, None)),
-            (JsonValue::Array(array), Seg::Index(index)) => array.get(*index).map(|value| (value, None)),
-            (JsonValue::Array(array), Seg::Key(key)) => array
-                .get(array_index(key)?)
-                .map(|value| (value, None)),
+            (JsonValue::Object(object), Seg::Key(key)) => {
+                object.get(key).map(|value| (value, None))
+            }
+            (JsonValue::Array(array), Seg::Index(index)) => {
+                array.get(*index).map(|value| (value, None))
+            }
+            (JsonValue::Array(array), Seg::Key(key)) => {
+                array.get(array_index(key)?).map(|value| (value, None))
+            }
             _ => None,
         }
     }
 
     // ─── Object writes ──────────────────────────────────────────────────────
 
-    pub(super) fn object_set(&mut self, nid: NodeId, key: &str, value: JsonValue) -> Result<(), DeltaError> {
+    pub(super) fn object_set(
+        &mut self,
+        nid: NodeId,
+        key: &str,
+        value: JsonValue,
+    ) -> Result<(), DeltaError> {
         let key = key.to_string();
         let was_deleted = self.object_deleted(nid, &key);
         if was_deleted && self.object_base_has(nid, &key) {
@@ -888,12 +949,18 @@ impl OverlayContext {
 
     fn require_array(&self, nid: NodeId) -> Result<(), DeltaError> {
         if self.nodes[nid].array.is_none() {
-            return Err(DeltaError::invalid("Array mutator called on incompatible receiver"));
+            return Err(DeltaError::invalid(
+                "Array mutator called on incompatible receiver",
+            ));
         }
         Ok(())
     }
 
-    pub(super) fn array_push(&mut self, nid: NodeId, items: Vec<JsonValue>) -> Result<usize, DeltaError> {
+    pub(super) fn array_push(
+        &mut self,
+        nid: NodeId,
+        items: Vec<JsonValue>,
+    ) -> Result<usize, DeltaError> {
         self.require_array(nid)?;
         let count = items.len();
         let source = self.new_source(nid, items);
@@ -942,7 +1009,11 @@ impl OverlayContext {
         Ok(Some(value))
     }
 
-    pub(super) fn array_unshift(&mut self, nid: NodeId, items: Vec<JsonValue>) -> Result<usize, DeltaError> {
+    pub(super) fn array_unshift(
+        &mut self,
+        nid: NodeId,
+        items: Vec<JsonValue>,
+    ) -> Result<usize, DeltaError> {
         self.require_array(nid)?;
         let count = items.len();
         let source = self.new_source(nid, items);
@@ -984,7 +1055,12 @@ impl OverlayContext {
         Ok(removed)
     }
 
-    pub(super) fn array_set_index(&mut self, nid: NodeId, index: usize, value: JsonValue) -> Result<(), DeltaError> {
+    pub(super) fn array_set_index(
+        &mut self,
+        nid: NodeId,
+        index: usize,
+        value: JsonValue,
+    ) -> Result<(), DeltaError> {
         self.require_array(nid)?;
         let length = self.array_len(nid);
         if index > length {
@@ -1022,7 +1098,9 @@ impl OverlayContext {
                 source,
                 index: item_index,
             } => {
-                if !is_value_container(&value) && self.array(nid).sources[source][item_index] == value {
+                if !is_value_container(&value)
+                    && self.array(nid).sources[source][item_index] == value
+                {
                     self.remove_insert_override(nid, source, item_index);
                     self.mark_dirty(nid);
                     return Ok(());
@@ -1105,7 +1183,10 @@ impl OverlayContext {
                 }
             }
         }
-        let order_changed = order.iter().enumerate().any(|(position, &token)| token != position);
+        let order_changed = order
+            .iter()
+            .enumerate()
+            .any(|(position, &token)| token != position);
         if order_changed {
             let overlay = self.nodes[nid].array.as_mut().expect("array node");
             overlay.entries = order.iter().map(|&token| entries[token]).collect();
@@ -1197,11 +1278,14 @@ impl OverlayContext {
                 let overlay = self.array(nid);
                 if !overlay.structural && !overlay.base_overrides.is_empty() {
                     let base_length = self.node_raw(nid).as_array().map_or(0, Vec::len);
-                    let candidates = dense_candidates.entry(nid).or_insert_with(|| DenseCandidates {
-                        indices: Vec::new(),
-                        bits: None,
-                        length: base_length,
-                    });
+                    let candidates =
+                        dense_candidates
+                            .entry(nid)
+                            .or_insert_with(|| DenseCandidates {
+                                indices: Vec::new(),
+                                bits: None,
+                                length: base_length,
+                            });
                     for (index, _) in &overlay.base_overrides {
                         add_dense_candidate(candidates, *index);
                     }
@@ -1260,10 +1344,17 @@ impl OverlayContext {
             }
         }
 
-        let max_depth = emission_paths.iter().map(|(_, path)| path.len()).max().unwrap_or(0);
+        let max_depth = emission_paths
+            .iter()
+            .map(|(_, path)| path.len())
+            .max()
+            .unwrap_or(0);
         let mut folded: Vec<NodeId> = Vec::new();
         for depth in 0..=max_depth {
-            for (nid, path) in emission_paths.iter().filter(|(_, path)| path.len() == depth) {
+            for (nid, path) in emission_paths
+                .iter()
+                .filter(|(_, path)| path.len() == depth)
+            {
                 let nid = *nid;
                 if self.has_placement_ancestor(nid) || self.has_folded_ancestor(nid, &folded) {
                     continue;
@@ -1342,7 +1433,8 @@ impl OverlayContext {
             match &self.nodes[current].origin {
                 NodeOrigin::Root => break,
                 NodeOrigin::BaseKey { parent, key } => {
-                    if self.object_deleted(*parent, key) || self.write_slot(*parent, key).is_some() {
+                    if self.object_deleted(*parent, key) || self.write_slot(*parent, key).is_some()
+                    {
                         return None;
                     }
                     segments.push(Seg::Key(key.clone()));
@@ -1396,7 +1488,10 @@ impl OverlayContext {
         let Some(object) = &self.nodes[nid].object else {
             return false;
         };
-        object.writes.iter().any(|(key, _)| is_reserved_segment(key))
+        object
+            .writes
+            .iter()
+            .any(|(key, _)| is_reserved_segment(key))
             || object.deletes.iter().any(|key| is_reserved_segment(key))
     }
 
@@ -1443,12 +1538,13 @@ impl OverlayContext {
         for (key, slot) in &writes {
             let mut child = path.to_vec();
             child.push(Seg::key(key.clone()));
-            let before =
-                if readded.iter().any(|existing| existing == key) || !self.object_base_has(nid, key) {
-                    None
-                } else {
-                    Some(self.node_raw(nid).get(key).expect("base key").clone())
-                };
+            let before = if readded.iter().any(|existing| existing == key)
+                || !self.object_base_has(nid, key)
+            {
+                None
+            } else {
+                Some(self.node_raw(nid).get(key).expect("base key").clone())
+            };
             let after = self.fold_slot(slot);
             emit_changed_value(operations, child, before.as_ref(), after);
         }
@@ -1595,7 +1691,8 @@ impl OverlayContext {
                 continue;
             }
             let run_start = at;
-            while at < overlay.entries.len() && matches!(overlay.entries[at], Entry::Insert { .. }) {
+            while at < overlay.entries.len() && matches!(overlay.entries[at], Entry::Insert { .. })
+            {
                 logical_index += 1;
                 at += 1;
             }
@@ -1609,7 +1706,11 @@ impl OverlayContext {
     }
 
     /// Upstream `recordDenseArrayPosition` + `locateDenseArrayPosition`.
-    fn record_dense_array_position(&self, nid: NodeId, groups: &mut HashMap<NodeId, DenseCandidates>) {
+    fn record_dense_array_position(
+        &self,
+        nid: NodeId,
+        groups: &mut HashMap<NodeId, DenseCandidates>,
+    ) {
         let mut child = nid;
         loop {
             let Some(parent) = self.nodes[child].origin.parent() else {
@@ -1624,7 +1725,9 @@ impl OverlayContext {
                 else {
                     return;
                 };
-                if self.array(parent).structural || self.base_override_slot(parent, *base_index).is_some() {
+                if self.array(parent).structural
+                    || self.base_override_slot(parent, *base_index).is_some()
+                {
                     return;
                 }
                 let base_length = self.node_raw(parent).as_array().map_or(0, Vec::len);
@@ -1651,7 +1754,9 @@ impl OverlayContext {
         while let Some(ancestor) = parent {
             if let Some(regions) = dense_regions.get(&ancestor) {
                 if let Some(parent_path) = self.resolve_emission_path(ancestor) {
-                    if path.len() > parent_path.len() && path[..parent_path.len()] == parent_path[..] {
+                    if path.len() > parent_path.len()
+                        && path[..parent_path.len()] == parent_path[..]
+                    {
                         if let Some(Seg::Index(index)) = path.get(parent_path.len()) {
                             if regions.iter().any(|region| region_contains(region, *index)) {
                                 return true;
@@ -1732,7 +1837,9 @@ impl OverlayContext {
             Some(nid) if self.is_array_node(nid) => Ok(self.array_has(nid, key)),
             Some(nid) => Ok(self.object_has(nid, key)),
             None => Ok(match raw {
-                JsonValue::Array(array) => key == "length" || array_index(key).is_some_and(|index| index < array.len()),
+                JsonValue::Array(array) => {
+                    key == "length" || array_index(key).is_some_and(|index| index < array.len())
+                }
                 JsonValue::Object(object) => object.get(key).is_some(),
                 _ => false,
             }),
@@ -1829,7 +1936,6 @@ fn child_route(entry: &Entry) -> ChildRoute {
     }
 }
 
-
 /// Resolve a segment against an array overlay's symbolic entries. String keys
 /// use JavaScript's canonical-index rules; `"length"` is handled by callers.
 fn resolve_entry(overlay: &ArrayOverlay, segment: &Seg) -> Option<Entry> {
@@ -1876,7 +1982,11 @@ fn clamp_index(value: isize, length: usize) -> usize {
 }
 
 /// Two distinct mutable elements of one slice.
-fn two_mut(values: &mut [JsonValue], left: usize, right: usize) -> (&mut JsonValue, &mut JsonValue) {
+fn two_mut(
+    values: &mut [JsonValue],
+    left: usize,
+    right: usize,
+) -> (&mut JsonValue, &mut JsonValue) {
     debug_assert_ne!(left, right, "sort compares distinct elements");
     if left < right {
         let (head, tail) = values.split_at_mut(right);
@@ -1928,7 +2038,12 @@ fn js_number(number: &serde_json::Number) -> String {
 
 /// Upstream `emitChangedValue` (bool return dropped: only the materialization
 /// strategy consumed it).
-fn emit_changed_value(operations: &mut Vec<Op>, path: Vec<Seg>, before: Option<&JsonValue>, after: JsonValue) {
+fn emit_changed_value(
+    operations: &mut Vec<Op>,
+    path: Vec<Seg>,
+    before: Option<&JsonValue>,
+    after: JsonValue,
+) {
     if let Some(before) = before {
         let before_container = is_value_container(before);
         let after_container = is_value_container(&after);
@@ -2102,7 +2217,9 @@ impl<'c> Draft<'c> {
                 let length = json_array_length(&value)?;
                 return self.context.array_set_length(node, length);
             }
-            return Err(DeltaError::invalid("Only array indices and length can be written"));
+            return Err(DeltaError::invalid(
+                "Only array indices and length can be written",
+            ));
         }
         self.context.object_set(node, key, value)
     }
@@ -2155,7 +2272,12 @@ impl<'c> Draft<'c> {
         self.context.array_splice(node, start, remove, items)
     }
 
-    pub fn set_index(&mut self, path: &[Seg], index: usize, value: JsonValue) -> Result<(), DeltaError> {
+    pub fn set_index(
+        &mut self,
+        path: &[Seg],
+        index: usize,
+        value: JsonValue,
+    ) -> Result<(), DeltaError> {
         let root = self.context.root;
         let node = self.context.node_for(root, path)?;
         self.context.array_set_index(node, index, value)
@@ -2268,7 +2390,9 @@ impl<'c> NodeView<'c> {
                 let length = json_array_length(&value)?;
                 return self.context.array_set_length(node, length);
             }
-            return Err(DeltaError::invalid("Only array indices and length can be written"));
+            return Err(DeltaError::invalid(
+                "Only array indices and length can be written",
+            ));
         }
         self.context.object_set(node, key, value)
     }
@@ -2312,7 +2436,12 @@ impl<'c> NodeView<'c> {
         self.context.array_splice(node, start, remove, items)
     }
 
-    pub fn set_index(&mut self, path: &[Seg], index: usize, value: JsonValue) -> Result<(), DeltaError> {
+    pub fn set_index(
+        &mut self,
+        path: &[Seg],
+        index: usize,
+        value: JsonValue,
+    ) -> Result<(), DeltaError> {
         let node = self.context.node_for(self.node, path)?;
         self.context.array_set_index(node, index, value)
     }

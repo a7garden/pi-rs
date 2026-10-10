@@ -47,12 +47,15 @@ use pi_chord::context::Context;
 use serde_json::Value;
 
 use crate::harness::api::{
-	ToolDiagnostic, ToolDiagnosticSeverity, ToolExecute, ToolExecutionApi, ToolExecutionResult,
+    ToolDiagnostic, ToolDiagnosticSeverity, ToolExecute, ToolExecutionApi, ToolExecutionResult,
 };
 use crate::harness::types::Extension;
 
 // Mirrors upstream `tools/index.ts` re-exports (erased forms; see D2/D6).
-pub use bash::{create_bash_tool, BashExecution, BashPrepare, BashToolInput, BashToolOptions};
+pub use bash::{
+    create_bash_tool, create_power_shell_tool, BashExecution, BashPrepare, BashToolInput,
+    BashToolOptions, PowerShellToolInput, PowerShellToolOptions,
+};
 pub use edit::{create_edit_tool, EditToolDetails, EditToolInput};
 pub use read::{create_read_tool, ReadToolDetails, ReadToolInput};
 pub use write::{create_write_tool, WriteToolInput};
@@ -61,38 +64,39 @@ pub use write::{create_write_tool, WriteToolInput};
 /// upstream's harness builds from a thrown error (module D1).
 pub(crate) fn wrap_execute<F, Fut>(body: F) -> ToolExecute
 where
-	F: Fn(Value, Arc<dyn ToolExecutionApi>, Context) -> Fut + Send + Sync + 'static,
-	Fut: Future<Output = Result<ToolExecutionResult, String>> + Send + 'static,
+    F: Fn(Value, Arc<dyn ToolExecutionApi>, Context) -> Fut + Send + Sync + 'static,
+    Fut: Future<Output = Result<ToolExecutionResult, String>> + Send + 'static,
 {
-	Arc::new(move |args, api, context| {
-		let body = body(args, Arc::clone(&api), context);
-		Box::pin(async move {
-			match body.await {
-				Ok(result) => result,
-				Err(message) => ToolExecutionResult {
-					is_error: Some(true),
-					diagnostics: Some(vec![ToolDiagnostic {
-						severity: ToolDiagnosticSeverity::Error,
-						code: Some("tool_error".to_string()),
-						message,
-					}]),
-					..Default::default()
-				},
-			}
-		})
-	})
+    Arc::new(move |args, api, context| {
+        let body = body(args, Arc::clone(&api), context);
+        Box::pin(async move {
+            match body.await {
+                Ok(result) => result,
+                Err(message) => ToolExecutionResult {
+                    is_error: Some(true),
+                    diagnostics: Some(vec![ToolDiagnostic {
+                        severity: ToolDiagnosticSeverity::Error,
+                        code: Some("tool_error".to_string()),
+                        message,
+                    }]),
+                    ..Default::default()
+                },
+            }
+        })
+    })
 }
 
 /// Upstream `CodingTools`: `read`, `write`, `edit`, and `bash`; nothing installs it automatically.
+/// `create_power_shell_tool()` adds `powershell`.
 pub fn coding_tools() -> Extension {
-	Extension {
-		name: "coding-tools".to_string(),
-		tools: vec![
-			Arc::new(create_read_tool()),
-			Arc::new(create_write_tool()),
-			Arc::new(create_edit_tool()),
-			Arc::new(create_bash_tool(None)),
-		],
-		..Default::default()
-	}
+    Extension {
+        name: "coding-tools".to_string(),
+        tools: vec![
+            Arc::new(create_read_tool()),
+            Arc::new(create_write_tool()),
+            Arc::new(create_edit_tool()),
+            Arc::new(create_bash_tool(None)),
+        ],
+        ..Default::default()
+    }
 }

@@ -11,9 +11,9 @@ use crate::types::AnyError;
 /// authentication (upstream `ServerListener`).
 #[async_trait]
 pub trait ServerListener: Send + Sync {
-	/// Starts listening and passes authorized connections to accept.
-	async fn start(&self, accept: ByteConnectionAcceptor) -> Result<(), AnyError>;
-	async fn close(&self) -> Result<(), AnyError>;
+    /// Starts listening and passes authorized connections to accept.
+    async fn start(&self, accept: ByteConnectionAcceptor) -> Result<(), AnyError>;
+    async fn close(&self) -> Result<(), AnyError>;
 }
 
 /// Convenience alias for boxed listener collections.

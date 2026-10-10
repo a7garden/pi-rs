@@ -17,13 +17,13 @@
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
-use std::sync::Arc;
 use std::sync::mpsc;
+use std::sync::Arc;
 use std::time::Duration;
 
 use deno_core::{ModuleSpecifier, PollEventLoopOptions};
-use pi_chord::node::bundle_loader::{FacetBundleModuleLoader, facets_from_module};
-use pi_chord::services::errors::{AnyError, error};
+use pi_chord::node::bundle_loader::{facets_from_module, FacetBundleModuleLoader};
+use pi_chord::services::errors::{error, AnyError};
 use pi_chord::types::{BoxFuture, Facet};
 use serde_json::Value;
 
@@ -128,7 +128,9 @@ impl FacetRuntimeModuleLoader {
         // request channel closes.
 
         Self {
-            handle: FacetRuntimeHandle { requests: requests_tx },
+            handle: FacetRuntimeHandle {
+                requests: requests_tx,
+            },
             _worker_detached: worker,
         }
     }
@@ -142,12 +144,11 @@ impl FacetBundleModuleLoader for FacetRuntimeModuleLoader {
         external_imports: &[String],
     ) -> Result<Vec<Facet>, AnyError> {
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-        self.handle
-            .dispatch(Request::Evaluate {
-                module_path: module_path.to_path_buf(),
-                external_imports: external_imports.to_vec(),
-                reply: reply_tx,
-            })?;
+        self.handle.dispatch(Request::Evaluate {
+            module_path: module_path.to_path_buf(),
+            external_imports: external_imports.to_vec(),
+            reply: reply_tx,
+        })?;
         let described = reply_rx
             .await
             .map_err(|_| error("Facet runtime stopped before answering"))?
@@ -157,7 +158,10 @@ impl FacetBundleModuleLoader for FacetRuntimeModuleLoader {
             let handle = self.handle.clone();
             facets.push(Facet::new(id, move |env| {
                 let (reply_tx, reply_rx) = mpsc::sync_channel(1);
-                handle.dispatch(Request::Setup { slot, reply: reply_tx })?;
+                handle.dispatch(Request::Setup {
+                    slot,
+                    reply: reply_tx,
+                })?;
                 let ops = reply_rx
                     .recv_timeout(SETUP_TIMEOUT)
                     .map_err(|_| error("Facet setup timed out"))?
@@ -189,8 +193,10 @@ fn js_callback_disposal(handle: FacetRuntimeHandle, slot: u32) -> pi_chord::face
         let handle = handle.clone();
         Box::pin(async move {
             let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-            handle
-                .dispatch(Request::Callback { slot, reply: reply_tx })?;
+            handle.dispatch(Request::Callback {
+                slot,
+                reply: reply_tx,
+            })?;
             reply_rx
                 .await
                 .map_err(|_| error("Facet runtime stopped before the callback finished"))?
@@ -254,8 +260,12 @@ async fn evaluate_entry(
     external_imports: &[String],
     generation: u64,
 ) -> Result<Vec<(String, u32)>, String> {
-    let source = std::fs::read_to_string(module_path)
-        .map_err(|e| format!("Could not read facet bundle entry {}: {e}", module_path.display()))?;
+    let source = std::fs::read_to_string(module_path).map_err(|e| {
+        format!(
+            "Could not read facet bundle entry {}: {e}",
+            module_path.display()
+        )
+    })?;
 
     // Evaluate the artifact's CJS shell with the upstream CommonJS shape.
     // The artifact declares no imports; `require` mirrors the upstream
@@ -286,7 +296,11 @@ async fn evaluate_entry(
     // Plain CommonJS facets (the upstream `executeCommonJsModule` shape) are
     // described directly; pi-runtime's own bundle artifacts go through the
     // ESM module map below.
-    let artifact = match execute_json(runtime, "__piExtractArtifact()", "the facet bundle artifact")? {
+    let artifact = match execute_json(
+        runtime,
+        "__piExtractArtifact()",
+        "the facet bundle artifact",
+    )? {
         artifact_json if artifact_json != "null" => {
             let artifact_value: serde_json::Value = serde_json::from_str(&artifact_json)
                 .map_err(|e| format!("the facet bundle artifact is not valid JSON: {e}"))?;
@@ -311,7 +325,11 @@ async fn evaluate_entry(
     // External imports resolve to facade modules: registered values verbatim,
     // otherwise a namespace with the names the bundle imports (undefined).
     for specifier in external_imports {
-        let names = artifact.external_names.get(specifier).cloned().unwrap_or_default();
+        let names = artifact
+            .external_names
+            .get(specifier)
+            .cloned()
+            .unwrap_or_default();
         let source = match options.externals.get(specifier) {
             Some(exports) => crate::host::esm_facade_from_json(exports, &names),
             None => crate::host::esm_facade_from_json(&Value::Null, &names),
@@ -321,9 +339,9 @@ async fn evaluate_entry(
 
     // Load and evaluate the entry module.
     let entry_key = &artifact.entry;
-    let entry_canonical = canonical_for
-        .get(entry_key)
-        .ok_or_else(|| format!("Facet bundle artifact entry {entry_key} is missing from its modules"))?;
+    let entry_canonical = canonical_for.get(entry_key).ok_or_else(|| {
+        format!("Facet bundle artifact entry {entry_key} is missing from its modules")
+    })?;
     let entry_specifier = ModuleSpecifier::parse(entry_canonical)
         .map_err(|e| format!("invalid facet module URL {entry_canonical}: {e}"))?;
     let module_id = runtime
@@ -365,10 +383,7 @@ fn describe_exports(
     let described_json = execute_json(runtime, "__piDescribeFacets()", "facet exports")?;
     let described: Value = serde_json::from_str(&described_json)
         .map_err(|e| format!("Facet exports description is not JSON: {e}"))?;
-    let exports_value = described
-        .get("exports")
-        .cloned()
-        .unwrap_or(Value::Null);
+    let exports_value = described.get("exports").cloned().unwrap_or(Value::Null);
     facets_from_module(&exports_value, &options.plugin_id, &options.entry_name)
         .map_err(|e| e.to_string())?;
     let mut facets = Vec::new();
@@ -378,7 +393,11 @@ fn describe_exports(
         .cloned()
         .unwrap_or_default()
     {
-        let id = candidate.get("id").and_then(Value::as_str).unwrap_or_default().to_string();
+        let id = candidate
+            .get("id")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
         let slot = candidate
             .pointer("/setup/__piSlot")
             .and_then(Value::as_u64)
@@ -428,7 +447,10 @@ fn parse_artifact(artifact: &Value) -> Result<Artifact, String> {
     {
         modules.insert(
             key.clone(),
-            source.as_str().ok_or("Facet bundle artifact module is not a string")?.to_string(),
+            source
+                .as_str()
+                .ok_or("Facet bundle artifact module is not a string")?
+                .to_string(),
         );
     }
     let mut external_names = BTreeMap::new();
@@ -448,7 +470,11 @@ fn parse_artifact(artifact: &Value) -> Result<Artifact, String> {
             );
         }
     }
-    Ok(Artifact { entry, modules, external_names })
+    Ok(Artifact {
+        entry,
+        modules,
+        external_names,
+    })
 }
 
 struct Artifact {
@@ -472,7 +498,8 @@ fn run_setup(runtime: &mut deno_core::JsRuntime, slot: u32) -> Result<Vec<EnvOp>
         return Err("Facet bundle entry setup must be synchronous".to_string());
     }
     let ops_json = execute_json(runtime, "__piTakeEnvOps()", "setup environment operations")?;
-    serde_json::from_str(&ops_json).map_err(|e| format!("Facet setup recorded invalid operations: {e}"))
+    serde_json::from_str(&ops_json)
+        .map_err(|e| format!("Facet setup recorded invalid operations: {e}"))
 }
 
 async fn run_callback(runtime: &mut deno_core::JsRuntime, slot: u32) -> Result<(), String> {
@@ -485,7 +512,11 @@ async fn run_callback(runtime: &mut deno_core::JsRuntime, slot: u32) -> Result<(
         )
         .map_err(|e| e.to_string())?;
     loop {
-        let state = execute_json(runtime, "String(globalThis.__piCallbackDone)", "the callback state")?;
+        let state = execute_json(
+            runtime,
+            "String(globalThis.__piCallbackDone)",
+            "the callback state",
+        )?;
         match state.as_str() {
             "undefined" => {}
             "ok" => return Ok(()),

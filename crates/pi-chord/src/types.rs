@@ -131,7 +131,8 @@ pub enum ReplicatedStateDeliveryKind {
 /// Listener for replicated state deliveries. Returned futures serialize the
 /// subscriber's deliveries; values are immutable and may share unchanged
 /// revision data.
-pub type StateListener = Arc<dyn Fn(&JsonValue, &Context, &ReplicatedStateDelivery) -> BoxFuture<()> + Send + Sync>;
+pub type StateListener =
+    Arc<dyn Fn(&JsonValue, &Context, &ReplicatedStateDelivery) -> BoxFuture<()> + Send + Sync>;
 
 /// Read side of one replicated state value. `value` is `None` until hydration on
 /// cold replicas; authoritative states always carry a value.
@@ -268,7 +269,9 @@ pub enum ServiceProviderUpdate {
         ops: Vec<Op>,
     },
     #[serde(rename = "reset")]
-    Reset { snapshot: ServiceSubscriptionSnapshot },
+    Reset {
+        snapshot: ServiceSubscriptionSnapshot,
+    },
     #[serde(rename = "unavailable")]
     Unavailable,
     #[serde(rename = "replaced")]
@@ -340,7 +343,11 @@ pub trait ServiceSubscription: Send + Sync {
 /// serialization and any isolation copies they require.
 #[async_trait]
 pub trait RemoteServiceTransport: Send + Sync {
-    async fn invoke(&self, call: &ServiceCall, context: &Context) -> Result<Option<JsonValue>, AnyError>;
+    async fn invoke(
+        &self,
+        call: &ServiceCall,
+        context: &Context,
+    ) -> Result<Option<JsonValue>, AnyError>;
     async fn subscribe(
         &self,
         service_id: &str,
@@ -401,13 +408,18 @@ pub type KeyedObservationHandler =
 #[derive(Clone)]
 pub struct Facet {
     id: Arc<str>,
-    setup: Arc<dyn Fn(&mut crate::facets::host::FacetEnvironment) -> Result<(), AnyError> + Send + Sync>,
+    setup: Arc<
+        dyn Fn(&mut crate::facets::host::FacetEnvironment) -> Result<(), AnyError> + Send + Sync,
+    >,
 }
 
 impl Facet {
     pub fn new(
         id: impl Into<String>,
-        setup: impl Fn(&mut crate::facets::host::FacetEnvironment) -> Result<(), AnyError> + Send + Sync + 'static,
+        setup: impl Fn(&mut crate::facets::host::FacetEnvironment) -> Result<(), AnyError>
+            + Send
+            + Sync
+            + 'static,
     ) -> Facet {
         Facet {
             id: Arc::from(id.into().as_str()),
@@ -443,7 +455,10 @@ pub trait RemoteServiceSource: Send + Sync {
     async fn catalogue(&self, context: &Context) -> Result<Vec<ServiceCatalogueEntry>, AnyError>;
 
     /// Open a binding for the given service ids.
-    async fn open(&self, options: RemoteServiceSourceOpenOptions) -> Result<Box<dyn RemoteServices>, AnyError>;
+    async fn open(
+        &self,
+        options: RemoteServiceSourceOpenOptions,
+    ) -> Result<Box<dyn RemoteServices>, AnyError>;
 }
 
 pub struct RemoteServiceSourceOpenOptions {

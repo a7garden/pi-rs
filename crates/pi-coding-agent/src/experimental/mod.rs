@@ -37,14 +37,12 @@ pub mod process;
 pub mod radius_auth;
 pub mod radius_relay;
 
-pub mod services;
 pub mod server;
+pub mod services;
 pub mod session_catalog;
 pub mod session_worker;
 pub mod session_worker_manager;
 pub mod vacation;
-
-
 
 /// Serializes tests that touch process environment variables (upstream tests
 /// run in one process per file; Rust lib tests share one process). Also read

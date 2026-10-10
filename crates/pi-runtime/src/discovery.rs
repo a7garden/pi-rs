@@ -103,7 +103,9 @@ pub fn discover_extensions_in_dir(dir: &Path) -> Vec<PathBuf> {
             Err(_) => continue,
         };
         // 1. Direct files: *.ts or *.js (symlinks included).
-        if (file_type.is_file() || file_type.is_symlink()) && is_extension_file(&entry.file_name().to_string_lossy()) {
+        if (file_type.is_file() || file_type.is_symlink())
+            && is_extension_file(&entry.file_name().to_string_lossy())
+        {
             discovered.push(entry_path);
             continue;
         }

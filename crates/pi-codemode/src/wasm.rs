@@ -21,9 +21,8 @@ pub type CodemodeWasmModule = Arc<dyn Any + Send + Sync>;
 ///
 /// The async surface mirrors upstream `loadQuickJSWasm(path?): Promise<CodemodeWasmModule>`.
 pub trait WasmLoader: Send + Sync {
-    fn load(
-        &self,
-    ) -> Pin<Box<dyn Future<Output = Result<CodemodeWasmModule, String>> + Send + '_>>;
+    fn load(&self)
+        -> Pin<Box<dyn Future<Output = Result<CodemodeWasmModule, String>> + Send + '_>>;
 }
 
 /// The crate-default loader: the QuickJS wasm lives in pi-runtime, not in this pure-Rust core.
@@ -32,7 +31,9 @@ pub trait WasmLoader: Send + Sync {
 pub struct UnavailableWasmLoader;
 
 impl WasmLoader for UnavailableWasmLoader {
-    fn load(&self) -> Pin<Box<dyn Future<Output = Result<CodemodeWasmModule, String>> + Send + '_>> {
+    fn load(
+        &self,
+    ) -> Pin<Box<dyn Future<Output = Result<CodemodeWasmModule, String>> + Send + '_>> {
         Box::pin(async {
             Err("the QuickJS wasm is provided by a runtime implementation; configure `CodemodeSandboxOptions::wasm_loader`".to_string())
         })
@@ -50,7 +51,11 @@ mod tests {
         assert!(error.contains("runtime implementation"));
     }
 
-    fn futures_block(fut: Pin<Box<dyn Future<Output = Result<CodemodeWasmModule, String>> + Send + '_>>) -> String {
-        tokio::runtime::Runtime::new().unwrap().block_on(async { fut.await.unwrap_err() })
+    fn futures_block(
+        fut: Pin<Box<dyn Future<Output = Result<CodemodeWasmModule, String>> + Send + '_>>,
+    ) -> String {
+        tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(async { fut.await.unwrap_err() })
     }
 }

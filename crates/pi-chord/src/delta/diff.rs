@@ -276,7 +276,9 @@ fn identity_subsequence(
     if after_count < before_count {
         let mut before_index = before_start;
         for after_index in after_start..after_end {
-            while before_index < before_end && !same_value(&before[before_index], &after[after_index]) {
+            while before_index < before_end
+                && !same_value(&before[before_index], &after[after_index])
+            {
                 before_index += 1;
             }
             if before_index == before_end {
@@ -290,7 +292,8 @@ fn identity_subsequence(
     if before_count < after_count {
         let mut after_index = after_start;
         for before_index in before_start..before_end {
-            while after_index < after_end && !same_value(&before[before_index], &after[after_index]) {
+            while after_index < after_end && !same_value(&before[before_index], &after[after_index])
+            {
                 after_index += 1;
             }
             if after_index == after_end {
@@ -404,7 +407,15 @@ fn process_array_matches(
             return;
         }
         diff_array_region(
-            before, after, path, emitter, before_at, before_match, after_at, after_match, output_at,
+            before,
+            after,
+            path,
+            emitter,
+            before_at,
+            before_match,
+            after_at,
+            after_match,
+            output_at,
         );
         output_at += after_match - after_at;
         if !same_value(&before[before_match], &after[after_match]) {
@@ -417,7 +428,9 @@ fn process_array_matches(
         after_at = after_match + 1;
     }
     if !emitter.overflowed() {
-        diff_array_region(before, after, path, emitter, before_at, before_end, after_at, after_end, output_at);
+        diff_array_region(
+            before, after, path, emitter, before_at, before_end, after_at, after_end, output_at,
+        );
     }
 }
 
@@ -472,7 +485,9 @@ fn diff_array_region(
 
     if before_count == after_count {
         let positional: Vec<ArrayMatch> = (0..before_count)
-            .filter(|&offset| same_value(&before[before_start + offset], &after[after_start + offset]))
+            .filter(|&offset| {
+                same_value(&before[before_start + offset], &after[after_start + offset])
+            })
             .map(|offset| (before_start + offset, after_start + offset))
             .collect();
         if !positional.is_empty() {
@@ -492,7 +507,14 @@ fn diff_array_region(
         }
     }
 
-    if let Some(subsequence) = identity_subsequence(before, before_start, before_end, after, after_start, after_end) {
+    if let Some(subsequence) = identity_subsequence(
+        before,
+        before_start,
+        before_end,
+        after,
+        after_start,
+        after_end,
+    ) {
         if !subsequence.is_empty() {
             process_array_matches(
                 before,
@@ -510,7 +532,14 @@ fn diff_array_region(
         }
     }
 
-    let identity = identity_anchors(before, before_start, before_end, after, after_start, after_end);
+    let identity = identity_anchors(
+        before,
+        before_start,
+        before_end,
+        after,
+        after_start,
+        after_end,
+    );
     if !identity.is_empty() {
         process_array_matches(
             before,
@@ -537,7 +566,9 @@ fn diff_array_region(
         if !semantic.is_empty() {
             let absolute: Vec<ArrayMatch> = semantic
                 .into_iter()
-                .map(|(before_index, after_index)| (before_start + before_index, after_start + after_index))
+                .map(|(before_index, after_index)| {
+                    (before_start + before_index, after_start + after_index)
+                })
                 .collect();
             process_array_matches(
                 before,
@@ -570,7 +601,10 @@ fn diff_array_region(
 }
 
 fn diff_array(before: &[JsonValue], after: &[JsonValue], path: &[Seg], emitter: &mut Emitter) {
-    if equal_json(&JsonValue::Array(before.to_vec()), &JsonValue::Array(after.to_vec())) {
+    if equal_json(
+        &JsonValue::Array(before.to_vec()),
+        &JsonValue::Array(after.to_vec()),
+    ) {
         return;
     }
     if before.len() == after.len()
@@ -586,7 +620,17 @@ fn diff_array(before: &[JsonValue], after: &[JsonValue], path: &[Seg], emitter: 
             return;
         }
     }
-    diff_array_region(before, after, path, emitter, 0, before.len(), 0, after.len(), 0);
+    diff_array_region(
+        before,
+        after,
+        path,
+        emitter,
+        0,
+        before.len(),
+        0,
+        after.len(),
+        0,
+    );
 }
 
 fn diff_object(
@@ -602,7 +646,10 @@ fn diff_object(
         .chain(after_keys.iter())
         .any(|key| super::is_reserved_segment(key))
     {
-        if !equal_json(&JsonValue::Object(before.clone()), &JsonValue::Object(after.clone())) {
+        if !equal_json(
+            &JsonValue::Object(before.clone()),
+            &JsonValue::Object(after.clone()),
+        ) {
             emit_set(path, &JsonValue::Object(after.clone()), emitter);
         }
         return;
@@ -715,7 +762,12 @@ fn operation_cost(operation: &Op) -> usize {
             start,
             remove,
             items,
-        } => 10 + path_cost(path) + number_cost(*start) + number_cost(*remove) + json_cost(&JsonValue::Array(items.clone())),
+        } => {
+            10 + path_cost(path)
+                + number_cost(*start)
+                + number_cost(*remove)
+                + json_cost(&JsonValue::Array(items.clone()))
+        }
         Op::Permute { path, permutation } => {
             7 + path_cost(path) + permutation_json_cost(permutation)
         }
@@ -751,7 +803,9 @@ pub fn diff_revisions(before: &JsonValue, after: &JsonValue) -> Vec<Op> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::delta::{apply_immutable, assert_valid_op, assert_valid_wire_op, op_from_json, Decoder, Encoder};
+    use crate::delta::{
+        apply_immutable, assert_valid_op, assert_valid_wire_op, op_from_json, Decoder, Encoder,
+    };
     use serde_json::json;
 
     fn expect_diff(before: &JsonValue, after: &JsonValue, expected: JsonValue) {
@@ -770,18 +824,22 @@ mod tests {
         expect_diff(
             &json!({"keep": 1, "change": 1, "remove": true}),
             &json!({"keep": 1, "change": 2, "add": 3}),
-            json!([
-                ["s", ["change"], 2],
-                ["s", ["add"], 3],
-                ["d", ["remove"]]
-            ]),
+            json!([["s", ["change"], 2], ["s", ["add"], 3], ["d", ["remove"]]]),
         );
     }
 
     #[test]
     fn emits_string_append_and_front_truncation() {
-        expect_diff(&json!({"text": "hello"}), &json!({"text": "hello world"}), json!([["a", ["text"], " world"]]));
-        expect_diff(&json!({"text": "hello world"}), &json!({"text": "world"}), json!([["t", ["text"], 6]]));
+        expect_diff(
+            &json!({"text": "hello"}),
+            &json!({"text": "hello world"}),
+            json!([["a", ["text"], " world"]]),
+        );
+        expect_diff(
+            &json!({"text": "hello world"}),
+            &json!({"text": "world"}),
+            json!([["t", ["text"], 6]]),
+        );
         expect_diff(
             &json!({"text": "abcdefgh"}),
             &json!({"text": "defghxyz"}),
@@ -837,7 +895,10 @@ mod tests {
         let second = json!({"nested": {"value": 1}});
         assert_ne!(&first as *const JsonValue, &second as *const JsonValue);
         assert_eq!(
-            diff_revisions(&json!({"values": [first, second]}), &json!({"values": [second, first]})),
+            diff_revisions(
+                &json!({"values": [first, second]}),
+                &json!({"values": [second, first]})
+            ),
             Vec::<Op>::new()
         );
     }
@@ -860,10 +921,7 @@ mod tests {
         let wire = Encoder::new().encode(&operations);
         assert_eq!(
             serde_json::to_value(&wire).unwrap(),
-            json!([
-                ["m", ["values"], [2, 0, 1]],
-                ["m", [1, 2, 0]]
-            ])
+            json!([["m", ["values"], [2, 0, 1]], ["m", [1, 2, 0]]])
         );
         for operation in &wire {
             assert_valid_wire_op(operation).unwrap();
@@ -881,7 +939,10 @@ mod tests {
     #[test]
     fn emits_nothing_for_deeply_equal_reconstructed_values() {
         assert_eq!(
-            diff_revisions(&json!({"value": {"nested": [1, 2]}}), &json!({"value": {"nested": [1, 2]}})),
+            diff_revisions(
+                &json!({"value": {"nested": [1, 2]}}),
+                &json!({"value": {"nested": [1, 2]}})
+            ),
             Vec::<Op>::new()
         );
         assert_eq!(
@@ -892,7 +953,10 @@ mod tests {
             Vec::<Op>::new()
         );
         assert_eq!(
-            diff_revisions(&json!({"values": [true, true, true]}), &json!({"values": [true, true, true]})),
+            diff_revisions(
+                &json!({"values": [true, true, true]}),
+                &json!({"values": [true, true, true]})
+            ),
             Vec::<Op>::new()
         );
     }
@@ -928,22 +992,52 @@ mod tests {
     #[test]
     fn encodes_removal_positions_canonically() {
         let cases: Vec<(&str, JsonValue, JsonValue, JsonValue)> = vec![
-            ("front", json!([1, 2, 3, 4]), json!([2, 3, 4]), json!([["p", ["values"], 0, 1, []]])),
-            ("tail", json!([1, 2, 3, 4]), json!([1, 2, 3]), json!([["p", ["values"], 3, 1, []]])),
-            ("middle", json!([1, 2, 3, 4]), json!([1, 3, 4]), json!([["p", ["values"], 1, 1, []]])),
-            ("all", json!([1, 2, 3, 4]), json!([]), json!([["p", ["values"], 0, 4, []]])),
+            (
+                "front",
+                json!([1, 2, 3, 4]),
+                json!([2, 3, 4]),
+                json!([["p", ["values"], 0, 1, []]]),
+            ),
+            (
+                "tail",
+                json!([1, 2, 3, 4]),
+                json!([1, 2, 3]),
+                json!([["p", ["values"], 3, 1, []]]),
+            ),
+            (
+                "middle",
+                json!([1, 2, 3, 4]),
+                json!([1, 3, 4]),
+                json!([["p", ["values"], 1, 1, []]]),
+            ),
+            (
+                "all",
+                json!([1, 2, 3, 4]),
+                json!([]),
+                json!([["p", ["values"], 0, 4, []]]),
+            ),
             ("none", json!([1, 2, 3, 4]), json!([1, 2, 3, 4]), json!([])),
         ];
         for (name, before, after, expected) in cases {
-            expect_diff(&json!({"values": before}), &json!({"values": after}), expected, );
+            expect_diff(
+                &json!({"values": before}),
+                &json!({"values": after}),
+                expected,
+            );
             let _ = name;
         }
     }
 
     #[test]
     fn does_not_field_diff_unrelated_shifted_objects_with_common_fields() {
-        let before: Vec<JsonValue> = [1, 2, 3].iter().map(|value| json!({"type": "row", "value": value})).collect();
-        let after: Vec<JsonValue> = [2, 3, 4].iter().map(|value| json!({"type": "row", "value": value})).collect();
+        let before: Vec<JsonValue> = [1, 2, 3]
+            .iter()
+            .map(|value| json!({"type": "row", "value": value}))
+            .collect();
+        let after: Vec<JsonValue> = [2, 3, 4]
+            .iter()
+            .map(|value| json!({"type": "row", "value": value}))
+            .collect();
         expect_diff(
             &json!({"values": before}),
             &json!({"values": after}),
@@ -969,7 +1063,11 @@ mod tests {
             {"id": 1, "key": "a", "value": "edited-first"}
         ]);
         let after = json!({"values": [json!({"value": "left"}), replacements[0].clone(), replacements[1].clone(), json!({"value": "right"})]});
-        expect_diff(&before, &after, json!([["p", ["values"], 1, 2, replacements]]));
+        expect_diff(
+            &before,
+            &after,
+            json!([["p", ["values"], 1, 2, replacements]]),
+        );
     }
 
     #[test]
@@ -1007,7 +1105,8 @@ mod tests {
                 .map(|id| json!({"id": id, "payload": payload}))
                 .collect();
             let before = json!({"values": retained});
-            let after = json!({"values": [retained[0].clone(), retained[2].clone(), retained[4].clone()]});
+            let after =
+                json!({"values": [retained[0].clone(), retained[2].clone(), retained[4].clone()]});
             let operations = diff_revisions(&before, &after);
             assert_eq!(
                 serde_json::to_value(&operations).unwrap(),
@@ -1065,9 +1164,12 @@ mod tests {
         let operations = diff_revisions(&json!({"values": values}), &json!({"values": after}));
         let expected: Vec<JsonValue> = changed
             .iter()
-            .map(|index| json!(["s", ["values", index, "value"], -( *index as i64)]))
+            .map(|index| json!(["s", ["values", index, "value"], -(*index as i64)]))
             .collect();
-        assert_eq!(serde_json::to_value(&operations).unwrap(), JsonValue::Array(expected));
+        assert_eq!(
+            serde_json::to_value(&operations).unwrap(),
+            JsonValue::Array(expected)
+        );
         assert!(serde_json::to_string(&operations).unwrap().len() < 7_500);
         let replay = apply_immutable(&json!({"values": values}), &operations).unwrap();
         assert_eq!(replay, json!({"values": after}));
@@ -1108,7 +1210,11 @@ mod tests {
             replacements[1],
             {"value": "right"}
         ]});
-        expect_diff(&before, &after, json!([["p", ["values"], 1, 2, replacements]]));
+        expect_diff(
+            &before,
+            &after,
+            json!([["p", ["values"], 1, 2, replacements]]),
+        );
     }
 
     #[test]
@@ -1132,7 +1238,9 @@ mod tests {
         let retained: Vec<JsonValue> = (0..10_000)
             .map(|value| json!({"value": value, "payload": "x".repeat(100)}))
             .collect();
-        let inserted: Vec<JsonValue> = (0..500).map(|value| json!({"value": -(value as i64) - 1})).collect();
+        let inserted: Vec<JsonValue> = (0..500)
+            .map(|value| json!({"value": -(value as i64) - 1}))
+            .collect();
         let after: Vec<JsonValue> = inserted.iter().chain(retained.iter()).cloned().collect();
         let operations = diff_revisions(&json!({"values": retained}), &json!({"values": after}));
         assert_eq!(
@@ -1151,7 +1259,10 @@ mod tests {
             after.insert(format!("field{index}"), json!(1));
         }
         assert_eq!(
-            diff_revisions(&JsonValue::Object(before), &JsonValue::Object(after.clone())),
+            diff_revisions(
+                &JsonValue::Object(before),
+                &JsonValue::Object(after.clone())
+            ),
             vec![Op::Replace(JsonValue::Object(after))]
         );
     }
@@ -1186,4 +1297,3 @@ mod tests {
         crate::delta::assert_valid_raw_op(tuple)
     }
 }
-

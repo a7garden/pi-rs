@@ -50,7 +50,11 @@ pub struct FacetBundleArtifactLoaderOptions {
 /// values. Implementations live in the future `pi-runtime` JS host.
 #[async_trait]
 pub trait FacetBundleModuleLoader: Send + Sync {
-    async fn load_entry(&self, module_path: &Path, external_imports: &[String]) -> Result<Vec<Facet>, AnyError>;
+    async fn load_entry(
+        &self,
+        module_path: &Path,
+        external_imports: &[String],
+    ) -> Result<Vec<Facet>, AnyError>;
 }
 
 /// Boundary implementation used until a JavaScript runtime host exists.
@@ -58,24 +62,40 @@ pub struct UnsupportedModuleLoader;
 
 #[async_trait]
 impl FacetBundleModuleLoader for UnsupportedModuleLoader {
-    async fn load_entry(&self, _module_path: &Path, _external_imports: &[String]) -> Result<Vec<Facet>, AnyError> {
-        Err(error("facet bundle module evaluation requires a JavaScript runtime host"))
+    async fn load_entry(
+        &self,
+        _module_path: &Path,
+        _external_imports: &[String],
+    ) -> Result<Vec<Facet>, AnyError> {
+        Err(error(
+            "facet bundle module evaluation requires a JavaScript runtime host",
+        ))
     }
 }
 
 /// Read and validate a versioned facet bundle manifest; port of upstream
 /// `readFacetBundleManifest` (upstream keeps the cause out of the message).
 pub fn read_facet_bundle_manifest(path: &Path) -> Result<FacetBundleManifest, AnyError> {
-    let raw = fs::read_to_string(path)
-        .map_err(|_| error(format!("Could not read facet bundle manifest {}", path.display())))?;
-    let parsed: JsonValue = serde_json::from_str(&raw)
-        .map_err(|_| error(format!("Could not read facet bundle manifest {}", path.display())))?;
+    let raw = fs::read_to_string(path).map_err(|_| {
+        error(format!(
+            "Could not read facet bundle manifest {}",
+            path.display()
+        ))
+    })?;
+    let parsed: JsonValue = serde_json::from_str(&raw).map_err(|_| {
+        error(format!(
+            "Could not read facet bundle manifest {}",
+            path.display()
+        ))
+    })?;
     validate_manifest(&parsed, &path.to_string_lossy())
 }
 
 /// Read and verify one transportable entry from a facet bundle on disk; port
 /// of upstream `readFacetBundleArtifact`.
-pub fn read_facet_bundle_artifact(options: &FacetBundleArtifactReadOptions) -> Result<FacetBundleArtifact, AnyError> {
+pub fn read_facet_bundle_artifact(
+    options: &FacetBundleArtifactReadOptions,
+) -> Result<FacetBundleArtifact, AnyError> {
     if options.entry.is_empty() {
         return Err(type_error("Facet bundle entry name must not be empty"));
     }
@@ -92,12 +112,20 @@ pub fn read_facet_bundle_artifact(options: &FacetBundleArtifactReadOptions) -> R
             ))
         })?;
     let module_path = resolve_bundle_file(&manifest_path, &entry.file, "entry")?;
-    let source = fs::read_to_string(&module_path)
-        .map_err(|e| error(format!("Could not read facet bundle entry {}: {e}", module_path.display())))?;
+    let source = fs::read_to_string(&module_path).map_err(|e| {
+        error(format!(
+            "Could not read facet bundle entry {}: {e}",
+            module_path.display()
+        ))
+    })?;
     verify_source(&source, &entry)?;
     let source_map_contents = match &entry.source_map {
         None => None,
-        Some(map) => Some(read_string(resolve_bundle_file(&manifest_path, map, "source map")?)?),
+        Some(map) => Some(read_string(resolve_bundle_file(
+            &manifest_path,
+            map,
+            "source map",
+        )?)?),
     };
     Ok(FacetBundleArtifact {
         plugin: manifest.plugin,
@@ -152,8 +180,11 @@ impl FacetLoader for FacetBundleArtifactLoader {
         let temporary_parent = self.temporary_parent.clone();
         let module_loader = Arc::clone(&self.module_loader);
         Box::pin(async move {
-            fs::create_dir_all(&temporary_parent)
-                .map_err(|e| error(format!("Could not create facet artifact parent directory: {e}")))?;
+            fs::create_dir_all(&temporary_parent).map_err(|e| {
+                error(format!(
+                    "Could not create facet artifact parent directory: {e}"
+                ))
+            })?;
             let directory = temporary_parent.join(format!("chord-facet-{}", unique_suffix()));
             fs::create_dir(&directory)
                 .map_err(|e| error(format!("Could not create facet artifact directory: {e}")))?;
@@ -250,12 +281,18 @@ impl FacetLoader for FacetBundleLoader {
             })?;
             let result: Result<Vec<Facet>, AnyError> = (|| async {
                 let module_path = resolve_bundle_file(&manifest_path, &entry.file, "entry")?;
-                let source = fs::read_to_string(&module_path)
-                    .map_err(|e| error(format!("Could not read facet bundle entry {}: {e}", module_path.display())))?;
+                let source = fs::read_to_string(&module_path).map_err(|e| {
+                    error(format!(
+                        "Could not read facet bundle entry {}: {e}",
+                        module_path.display()
+                    ))
+                })?;
                 if verify_integrity {
                     verify_source(&source, &entry)?;
                 }
-                module_loader.load_entry(&module_path, &entry.external_imports).await
+                module_loader
+                    .load_entry(&module_path, &entry.external_imports)
+                    .await
             })()
             .await;
             match result {
@@ -368,7 +405,8 @@ pub fn validate_artifact(value: &JsonValue) -> Result<FacetBundleArtifact, AnyEr
 }
 
 fn artifact_version_matches(value: &JsonValue) -> bool {
-    value.get("formatVersion").and_then(JsonValue::as_u64) == Some(FACET_BUNDLE_ARTIFACT_FORMAT_VERSION)
+    value.get("formatVersion").and_then(JsonValue::as_u64)
+        == Some(FACET_BUNDLE_ARTIFACT_FORMAT_VERSION)
 }
 
 fn build_validated_artifact(value: &JsonValue) -> Result<FacetBundleArtifact, AnyError> {
@@ -386,21 +424,44 @@ fn build_validated_artifact(value: &JsonValue) -> Result<FacetBundleArtifact, An
         },
     });
     let manifest = validate_manifest(&synthetic, "facet bundle artifact")?;
-    let entry_name = value.get("entryName").and_then(JsonValue::as_str).unwrap().to_string();
+    let entry_name = value
+        .get("entryName")
+        .and_then(JsonValue::as_str)
+        .unwrap()
+        .to_string();
     let entry = manifest.entries.get(&entry_name).cloned().unwrap();
     if entry.source_map.is_none() {
-        if value.get("sourceMapContents").map(|v| !v.is_null()).unwrap_or(false) {
-            return Err(error("Facet bundle artifact has source map contents without a source map"));
+        if value
+            .get("sourceMapContents")
+            .map(|v| !v.is_null())
+            .unwrap_or(false)
+        {
+            return Err(error(
+                "Facet bundle artifact has source map contents without a source map",
+            ));
         }
-    } else if value.get("sourceMapContents").and_then(JsonValue::as_str).is_none() {
-        return Err(error("Facet bundle artifact is missing its source map contents"));
+    } else if value
+        .get("sourceMapContents")
+        .and_then(JsonValue::as_str)
+        .is_none()
+    {
+        return Err(error(
+            "Facet bundle artifact is missing its source map contents",
+        ));
     }
-    verify_source(value.get("source").and_then(JsonValue::as_str).unwrap(), &entry)?;
+    verify_source(
+        value.get("source").and_then(JsonValue::as_str).unwrap(),
+        &entry,
+    )?;
     Ok(FacetBundleArtifact {
         plugin: manifest.plugin,
         entry_name,
         entry,
-        source: value.get("source").and_then(JsonValue::as_str).unwrap().to_string(),
+        source: value
+            .get("source")
+            .and_then(JsonValue::as_str)
+            .unwrap()
+            .to_string(),
         source_map_contents: value
             .get("sourceMapContents")
             .and_then(JsonValue::as_str)
@@ -409,14 +470,20 @@ fn build_validated_artifact(value: &JsonValue) -> Result<FacetBundleArtifact, An
 }
 
 /// Port of upstream `materializeArtifact`.
-pub fn materialize_artifact(directory: &Path, artifact: &FacetBundleArtifact) -> Result<(), AnyError> {
+pub fn materialize_artifact(
+    directory: &Path,
+    artifact: &FacetBundleArtifact,
+) -> Result<(), AnyError> {
     let manifest = FacetBundleManifest {
         format: crate::node::manifest::FACET_BUNDLE_FORMAT.to_string(),
         format_version: crate::node::manifest::FACET_BUNDLE_FORMAT_VERSION,
         plugin: artifact.plugin.clone(),
         entries: std::iter::once((artifact.entry_name.clone(), artifact.entry.clone())).collect(),
     };
-    let serialized = format!("{}\n", serde_json::to_string_pretty(&manifest).map_err(|e| error(e.to_string()))?);
+    let serialized = format!(
+        "{}\n",
+        serde_json::to_string_pretty(&manifest).map_err(|e| error(e.to_string()))?
+    );
     fs::write(directory.join(&artifact.entry.file), &artifact.source)
         .map_err(|e| error(format!("Could not write facet bundle entry: {e}")))?;
     fs::write(directory.join(FACET_BUNDLE_MANIFEST_FILE), serialized)
@@ -453,8 +520,12 @@ pub fn validate_package_specifier(specifier: &str) -> Result<(), AnyError> {
 }
 
 fn read_string(path: PathBuf) -> Result<String, AnyError> {
-    fs::read_to_string(&path)
-        .map_err(|e| error(format!("Could not read facet bundle file {}: {e}", path.display())))
+    fs::read_to_string(&path).map_err(|e| {
+        error(format!(
+            "Could not read facet bundle file {}: {e}",
+            path.display()
+        ))
+    })
 }
 
 /// `path.resolve(...)`.
@@ -499,7 +570,11 @@ mod tests {
 
     /// Builds a real on-disk facet bundle (manifest + entry + optional source
     /// map) and returns (directory, manifest_path, entry_name, entry_source).
-    fn write_bundle(dir: &Path, with_source_map: bool, entry_source: &str) -> (PathBuf, PathBuf, String, String) {
+    fn write_bundle(
+        dir: &Path,
+        with_source_map: bool,
+        entry_source: &str,
+    ) -> (PathBuf, PathBuf, String, String) {
         let file = "facet-0123456789abcdef-deadbeef.cjs";
         let mut entry = serde_json::json!({
             "file": file,
@@ -521,13 +596,26 @@ mod tests {
             fs::write(dir.join(format!("{file}.map")), "{\"version\":3}").unwrap();
         }
         let manifest_path = dir.join(FACET_BUNDLE_MANIFEST_FILE);
-        fs::write(&manifest_path, format!("{}\n", serde_json::to_string_pretty(&manifest).unwrap())).unwrap();
-        (dir.to_path_buf(), manifest_path, "worker".to_string(), entry_source.to_string())
+        fs::write(
+            &manifest_path,
+            format!("{}\n", serde_json::to_string_pretty(&manifest).unwrap()),
+        )
+        .unwrap();
+        (
+            dir.to_path_buf(),
+            manifest_path,
+            "worker".to_string(),
+            entry_source.to_string(),
+        )
     }
 
     #[test]
     fn reads_and_validates_a_manifest_from_disk() {
-        let dir = std::env::temp_dir().join(format!("pi-chord-bl-{}-{}", std::process::id(), unique_suffix()));
+        let dir = std::env::temp_dir().join(format!(
+            "pi-chord-bl-{}-{}",
+            std::process::id(),
+            unique_suffix()
+        ));
         fs::create_dir_all(&dir).unwrap();
         let (_, manifest_path, _, _) = write_bundle(&dir, false, "module.exports = {};");
         let manifest = read_facet_bundle_manifest(&manifest_path).unwrap();
@@ -548,7 +636,11 @@ mod tests {
 
     #[test]
     fn reads_a_verified_artifact_round_trip() {
-        let dir = std::env::temp_dir().join(format!("pi-chord-bl-{}-{}", std::process::id(), unique_suffix()));
+        let dir = std::env::temp_dir().join(format!(
+            "pi-chord-bl-{}-{}",
+            std::process::id(),
+            unique_suffix()
+        ));
         let source = "module.exports = { default: { id: \"worker\", setup: function () {} } };";
         let (_, manifest_path, entry_name, _) = write_bundle(&dir, true, source);
         let artifact = read_facet_bundle_artifact(&FacetBundleArtifactReadOptions {
@@ -558,7 +650,10 @@ mod tests {
         .unwrap();
         assert_eq!(artifact.entry_name, "worker");
         assert_eq!(artifact.source, source);
-        assert_eq!(artifact.source_map_contents.as_deref(), Some("{\"version\":3}"));
+        assert_eq!(
+            artifact.source_map_contents.as_deref(),
+            Some("{\"version\":3}")
+        );
         assert_eq!(artifact.entry.file, "facet-0123456789abcdef-deadbeef.cjs");
 
         // validateArtifact round-trips the serialized artifact.
@@ -577,7 +672,11 @@ mod tests {
 
     #[test]
     fn rejects_artifacts_with_bad_integrity_or_shape() {
-        let dir = std::env::temp_dir().join(format!("pi-chord-bl-{}-{}", std::process::id(), unique_suffix()));
+        let dir = std::env::temp_dir().join(format!(
+            "pi-chord-bl-{}-{}",
+            std::process::id(),
+            unique_suffix()
+        ));
         let (_, manifest_path, entry_name, _) = write_bundle(&dir, false, "version-one");
         // Tamper with the entry file: integrity check must fail.
         let file = "facet-0123456789abcdef-deadbeef.cjs";
@@ -588,20 +687,29 @@ mod tests {
         })
         .unwrap_err()
         .to_string();
-        assert_eq!(err, format!("Facet bundle integrity check failed for {file}"));
+        assert_eq!(
+            err,
+            format!("Facet bundle integrity check failed for {file}")
+        );
 
         let err = validate_artifact(&serde_json::json!({ "format": "nope" }))
             .unwrap_err()
             .to_string();
         assert_eq!(err, "Invalid facet bundle artifact");
 
-        let err = validate_artifact(&serde_json::json!(null)).unwrap_err().to_string();
+        let err = validate_artifact(&serde_json::json!(null))
+            .unwrap_err()
+            .to_string();
         assert_eq!(err, "Invalid facet bundle artifact");
     }
 
     #[test]
     fn enforces_source_map_consistency_rules() {
-        let dir = std::env::temp_dir().join(format!("pi-chord-bl-{}-{}", std::process::id(), unique_suffix()));
+        let dir = std::env::temp_dir().join(format!(
+            "pi-chord-bl-{}-{}",
+            std::process::id(),
+            unique_suffix()
+        ));
         let (_, manifest_path, entry_name, _source) = write_bundle(&dir, false, &source_line());
         let artifact = read_facet_bundle_artifact(&FacetBundleArtifactReadOptions {
             manifest_path: manifest_path.clone(),
@@ -612,7 +720,10 @@ mod tests {
         let err = validate_artifact(&artifact_json(&artifact, Some("{\"version\":3}")))
             .unwrap_err()
             .to_string();
-        assert_eq!(err, "Facet bundle artifact has source map contents without a source map");
+        assert_eq!(
+            err,
+            "Facet bundle artifact has source map contents without a source map"
+        );
 
         // Source map declared but contents missing.
         let (_, manifest_path, entry_name, _source) = write_bundle(&dir, true, &source_line());
@@ -624,14 +735,20 @@ mod tests {
         let err = validate_artifact(&artifact_json_no_maps(&artifact))
             .unwrap_err()
             .to_string();
-        assert_eq!(err, "Facet bundle artifact is missing its source map contents");
+        assert_eq!(
+            err,
+            "Facet bundle artifact is missing its source map contents"
+        );
     }
 
     fn source_line() -> String {
         "module.exports = { default: [{ id: \"a\", setup: function () {} }] };".to_string()
     }
 
-    fn artifact_json(artifact: &FacetBundleArtifact, source_map_contents: Option<&str>) -> JsonValue {
+    fn artifact_json(
+        artifact: &FacetBundleArtifact,
+        source_map_contents: Option<&str>,
+    ) -> JsonValue {
         let mut value = serde_json::json!({
             "format": "chord.facet-bundle-artifact",
             "formatVersion": 2,
@@ -659,7 +776,11 @@ mod tests {
 
     #[test]
     fn rejects_unknown_entries() {
-        let dir = std::env::temp_dir().join(format!("pi-chord-bl-{}-{}", std::process::id(), unique_suffix()));
+        let dir = std::env::temp_dir().join(format!(
+            "pi-chord-bl-{}-{}",
+            std::process::id(),
+            unique_suffix()
+        ));
         let (_, manifest_path, _, _) = write_bundle(&dir, false, "x");
         let err = read_facet_bundle_artifact(&FacetBundleArtifactReadOptions {
             manifest_path,
@@ -672,7 +793,11 @@ mod tests {
 
     #[tokio::test]
     async fn artifact_loader_materializes_and_cleans_up() {
-        let dir = std::env::temp_dir().join(format!("pi-chord-bl-{}-{}", std::process::id(), unique_suffix()));
+        let dir = std::env::temp_dir().join(format!(
+            "pi-chord-bl-{}-{}",
+            std::process::id(),
+            unique_suffix()
+        ));
         let materialized = dir.join("materialized");
         let (_, manifest_path, entry_name, _) = write_bundle(&dir, true, &source_line());
         let artifact = read_facet_bundle_artifact(&FacetBundleArtifactReadOptions {
@@ -702,7 +827,10 @@ mod tests {
             Ok(_) => panic!("expected load failure at the JS boundary"),
             Err(e) => e.to_string(),
         };
-        assert!(err.starts_with("Could not load facet bundle entry test-bundle/worker"), "{err}");
+        assert!(
+            err.starts_with("Could not load facet bundle entry test-bundle/worker"),
+            "{err}"
+        );
         assert!(err.contains("requires a JavaScript runtime host"), "{err}");
         let leftovers = fs::read_dir(&materialized).unwrap().count();
         assert_eq!(leftovers, 0);
@@ -713,7 +841,9 @@ mod tests {
         assert!(validate_package_specifier("@scope/pkg/sub").is_ok());
         assert!(validate_package_specifier("pkg").is_ok());
         assert_eq!(
-            validate_package_specifier("../escape").unwrap_err().to_string(),
+            validate_package_specifier("../escape")
+                .unwrap_err()
+                .to_string(),
             "Facet bundle artifact has an unsupported external import: ../escape"
         );
         assert!(validate_package_specifier("pkg/../sub").is_err());
@@ -730,7 +860,10 @@ mod tests {
             "default": [{ "id": "a", "setup": { "js": "setup" } }, { "id": "b", "setup": { "js": "setup" } }]
         });
         let facets = facets_from_module(&label_ok, "plugin", "entry").unwrap();
-        assert_eq!(facets.iter().map(|f| f.id.as_str()).collect::<Vec<_>>(), ["a", "b"]);
+        assert_eq!(
+            facets.iter().map(|f| f.id.as_str()).collect::<Vec<_>>(),
+            ["a", "b"]
+        );
 
         assert_eq!(
             facets_from_module(&serde_json::json!("str"), "plugin", "entry")
@@ -745,15 +878,23 @@ mod tests {
             "Facet bundle entry plugin/entry exported no facets"
         );
         assert_eq!(
-            facets_from_module(&serde_json::json!({ "default": [{ "id": "" }] }), "plugin", "entry")
-                .unwrap_err()
-                .to_string(),
+            facets_from_module(
+                &serde_json::json!({ "default": [{ "id": "" }] }),
+                "plugin",
+                "entry"
+            )
+            .unwrap_err()
+            .to_string(),
             "Facet bundle entry plugin/entry has a facet with an invalid ID"
         );
         assert_eq!(
-            facets_from_module(&serde_json::json!({ "default": [{ "id": "a" }] }), "plugin", "entry")
-                .unwrap_err()
-                .to_string(),
+            facets_from_module(
+                &serde_json::json!({ "default": [{ "id": "a" }] }),
+                "plugin",
+                "entry"
+            )
+            .unwrap_err()
+            .to_string(),
             "Facet bundle entry plugin/entry facet a has no setup function"
         );
         assert_eq!(
@@ -777,14 +918,22 @@ mod tests {
 
     #[async_trait]
     impl FacetBundleModuleLoader for EmptyModuleLoader {
-        async fn load_entry(&self, _module_path: &Path, _external_imports: &[String]) -> Result<Vec<Facet>, AnyError> {
+        async fn load_entry(
+            &self,
+            _module_path: &Path,
+            _external_imports: &[String],
+        ) -> Result<Vec<Facet>, AnyError> {
             Ok(Vec::new())
         }
     }
 
     #[tokio::test]
     async fn artifact_loader_disposes_by_removing_the_materialized_directory() {
-        let dir = std::env::temp_dir().join(format!("pi-chord-bl-{}-{}", std::process::id(), unique_suffix()));
+        let dir = std::env::temp_dir().join(format!(
+            "pi-chord-bl-{}-{}",
+            std::process::id(),
+            unique_suffix()
+        ));
         let materialized = dir.join("materialized");
         let (_, manifest_path, entry_name, _) = write_bundle(&dir, true, &source_line());
         let artifact = read_facet_bundle_artifact(&FacetBundleArtifactReadOptions {

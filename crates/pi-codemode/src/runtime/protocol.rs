@@ -57,8 +57,13 @@ pub type ScriptErrorJson = String;
 #[serde(untagged)]
 pub enum DoneOutcome {
     /// `writes` is a JSON array of `[key, json]` for `store()` and `[key]` for deletions.
-    Ok { value: Option<String>, writes: String },
-    Err { error: ScriptErrorJson },
+    Ok {
+        value: Option<String>,
+        writes: String,
+    },
+    Err {
+        error: ScriptErrorJson,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -106,9 +111,10 @@ pub enum HostToWorkerMessage {
 /// Structural guard matching upstream `isWorkerToHostMessage`: checks the `type` tag without
 /// fully validating the payload shape.
 pub fn is_worker_to_host_message(value: &Value) -> bool {
-    value.get("type").and_then(Value::as_str).is_some_and(|ty| {
-        matches!(ty, "call" | "output" | "done" | "crash")
-    })
+    value
+        .get("type")
+        .and_then(Value::as_str)
+        .is_some_and(|ty| matches!(ty, "call" | "output" | "done" | "crash"))
 }
 
 /// Structural guard matching upstream `isHostToWorkerMessage`.
@@ -129,7 +135,12 @@ mod tests {
         .unwrap();
         assert_eq!(
             call,
-            WorkerToHostMessage::Call { id: 3, target: CallTarget::Tool, name: "echo".into(), args: Some("1".into()) }
+            WorkerToHostMessage::Call {
+                id: 3,
+                target: CallTarget::Tool,
+                name: "echo".into(),
+                args: Some("1".into())
+            }
         );
         assert_eq!(
             serde_json::to_value(&call).unwrap(),
@@ -145,15 +156,21 @@ mod tests {
             json!({ "type": "done", "ok": true, "value": "\"x\"", "writes": "[]" })
         );
 
-        let failure: WorkerToHostMessage =
-            serde_json::from_value(json!({ "type": "done", "ok": false, "error": "{\"message\":\"nope\"}" })).unwrap();
+        let failure: WorkerToHostMessage = serde_json::from_value(
+            json!({ "type": "done", "ok": false, "error": "{\"message\":\"nope\"}" }),
+        )
+        .unwrap();
         assert_eq!(
             serde_json::to_value(&failure).unwrap(),
             json!({ "type": "done", "ok": false, "error": "{\"message\":\"nope\"}" })
         );
 
-        let crash: WorkerToHostMessage = serde_json::from_value(json!({ "type": "crash", "message": "trap" })).unwrap();
-        assert_eq!(serde_json::to_value(&crash).unwrap(), json!({ "type": "crash", "message": "trap" }));
+        let crash: WorkerToHostMessage =
+            serde_json::from_value(json!({ "type": "crash", "message": "trap" })).unwrap();
+        assert_eq!(
+            serde_json::to_value(&crash).unwrap(),
+            json!({ "type": "crash", "message": "trap" })
+        );
 
         let output: WorkerToHostMessage = serde_json::from_value(json!({
             "type": "output", "item": { "type": "image", "data": "AAAA", "mimeType": "image/png" }
@@ -167,7 +184,11 @@ mod tests {
 
     #[test]
     fn host_to_worker_messages_round_trip() {
-        let message = HostToWorkerMessage::Result { id: 7, ok: true, payload: Some("null".into()) };
+        let message = HostToWorkerMessage::Result {
+            id: 7,
+            ok: true,
+            payload: Some("null".into()),
+        };
         assert_eq!(
             serde_json::to_value(&message).unwrap(),
             json!({ "type": "result", "id": 7, "ok": true, "payload": "null" })

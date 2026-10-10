@@ -19,7 +19,11 @@ use serde_json::Value;
 /// present, is `head\n{stack}` with `head` being `"Name: message"` (or `"Name"` without a
 /// message), and the stack trimmed of trailing whitespace.
 pub fn script_error_json(name: &str, message: &str, stack: Option<&str>) -> Value {
-    let head = if message.is_empty() { name.to_string() } else { format!("{name}: {message}") };
+    let head = if message.is_empty() {
+        name.to_string()
+    } else {
+        format!("{name}: {message}")
+    };
     let stack = stack.map(|stack| stack.trim_end());
     let stack_value = match stack {
         Some(stack) if !stack.is_empty() => Value::String(format!("{head}\n{stack}")),

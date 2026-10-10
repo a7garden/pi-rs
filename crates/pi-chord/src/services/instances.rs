@@ -11,7 +11,7 @@
 use std::collections::HashMap;
 use std::panic::AssertUnwindSafe;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc};
+use std::sync::Arc;
 use {parking_lot::Mutex, parking_lot::MutexGuard};
 
 use futures::FutureExt;
@@ -193,7 +193,11 @@ impl<T: InstanceDirectoryEntry> InstanceDirectory<T> {
         let inner = Arc::clone(&self.inner);
         Ok(Box::new(move || {
             let mut inner = lock(&inner);
-            let Some(observer) = inner.observers.iter_mut().find(|observer| observer.id == id) else {
+            let Some(observer) = inner
+                .observers
+                .iter_mut()
+                .find(|observer| observer.id == id)
+            else {
                 return;
             };
             if observer.closed {
@@ -262,8 +266,17 @@ impl<T: InstanceDirectoryEntry> InstanceDirectory<T> {
         }
     }
 
-    fn start_observer(on_error: &ErrorHandler, inner: &mut DirectoryInner<T>, observer_id: u64, entry: &T) {
-        let Some(observer) = inner.observers.iter_mut().find(|observer| observer.id == observer_id) else {
+    fn start_observer(
+        on_error: &ErrorHandler,
+        inner: &mut DirectoryInner<T>,
+        observer_id: u64,
+        entry: &T,
+    ) {
+        let Some(observer) = inner
+            .observers
+            .iter_mut()
+            .find(|observer| observer.id == observer_id)
+        else {
             return;
         };
         if observer.closed || observer.tasks.contains_key(entry.key()) {
@@ -288,9 +301,13 @@ impl<T: InstanceDirectoryEntry> InstanceDirectory<T> {
             .iter_mut()
             .find(|observer| observer.id == observer_id)
             .expect("observer registered above");
-        observer
-            .tasks
-            .insert(entry.key().to_string(), ObserverTask { context: child, task });
+        observer.tasks.insert(
+            entry.key().to_string(),
+            ObserverTask {
+                context: child,
+                task,
+            },
+        );
     }
 }
 
@@ -343,24 +360,35 @@ mod tests {
     fn collect_errors() -> (ErrorHandler, Arc<Mutex<Vec<String>>>) {
         let errors = Arc::new(Mutex::new(Vec::new()));
         let sink = Arc::clone(&errors);
-        (Arc::new(move |error: AnyError| sink.lock().push(error.to_string())), errors)
+        (
+            Arc::new(move |error: AnyError| sink.lock().push(error.to_string())),
+            errors,
+        )
     }
 
     #[test]
     fn insert_rejects_duplicate_live_keys() {
-        let directory: InstanceDirectory<TestEntry> = InstanceDirectory::new(true, collect_errors().0);
+        let directory: InstanceDirectory<TestEntry> =
+            InstanceDirectory::new(true, collect_errors().0);
         directory.insert(TestEntry::new("a", 1)).expect("insert");
         let error = directory.insert(TestEntry::new("a", 2)).unwrap_err();
-        assert_eq!(error.to_string(), "Keyed service already has a live instance with key a");
+        assert_eq!(
+            error.to_string(),
+            "Keyed service already has a live instance with key a"
+        );
     }
 
     #[test]
     fn replace_rejects_repeated_generations_and_deactivates_previous() {
-        let directory: InstanceDirectory<TestEntry> = InstanceDirectory::new(true, collect_errors().0);
+        let directory: InstanceDirectory<TestEntry> =
+            InstanceDirectory::new(true, collect_errors().0);
         let first = TestEntry::new("a", 1);
         directory.replace(first.clone()).expect("replace");
         let error = directory.replace(TestEntry::new("a", 1)).unwrap_err();
-        assert_eq!(error.to_string(), "Keyed service repeated a live generation");
+        assert_eq!(
+            error.to_string(),
+            "Keyed service repeated a live generation"
+        );
 
         let second = TestEntry::new("a", 2);
         directory.replace(second).expect("replace");
@@ -370,7 +398,8 @@ mod tests {
 
     #[test]
     fn remove_ignores_stale_entries() {
-        let directory: InstanceDirectory<TestEntry> = InstanceDirectory::new(true, collect_errors().0);
+        let directory: InstanceDirectory<TestEntry> =
+            InstanceDirectory::new(true, collect_errors().0);
         let live = TestEntry::new("a", 1);
         directory.insert(live.clone()).expect("insert");
         directory.remove(&TestEntry::new("a", 9));
@@ -390,7 +419,8 @@ mod tests {
             .observe(Arc::new(move |entry: TestEntry, context: Context| {
                 let sink = Arc::clone(&sink);
                 Box::pin(async move {
-                    sink.lock().push((entry.key().to_string(), context.abort_signal().is_some()));
+                    sink.lock()
+                        .push((entry.key().to_string(), context.abort_signal().is_some()));
                 }) as BoxFuture<()>
             }))
             .expect("observe");
@@ -434,18 +464,22 @@ mod tests {
 
     #[test]
     fn reset_clears_entries_without_disposing() {
-        let directory: InstanceDirectory<TestEntry> = InstanceDirectory::new(true, collect_errors().0);
+        let directory: InstanceDirectory<TestEntry> =
+            InstanceDirectory::new(true, collect_errors().0);
         let entry = TestEntry::new("a", 1);
         directory.insert(entry.clone()).expect("insert");
         directory.reset();
         assert_eq!(directory.values().len(), 0);
         assert!(!entry.active.load(Ordering::Acquire));
-        directory.insert(TestEntry::new("b", 1)).expect("insert after reset");
+        directory
+            .insert(TestEntry::new("b", 1))
+            .expect("insert after reset");
     }
 
     #[tokio::test]
     async fn ready_starts_observers_for_existing_entries() {
-        let directory: InstanceDirectory<TestEntry> = InstanceDirectory::new(false, collect_errors().0);
+        let directory: InstanceDirectory<TestEntry> =
+            InstanceDirectory::new(false, collect_errors().0);
         directory.insert(TestEntry::new("a", 1)).expect("insert");
         let started = Arc::new(AtomicBool::new(false));
         let flag = Arc::clone(&started);

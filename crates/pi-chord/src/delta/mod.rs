@@ -29,8 +29,8 @@ mod revision_validator;
 pub use apply_immutable_trusted::apply_immutable_trusted;
 pub use diff::diff_revisions;
 pub use draft::Draft;
-pub use tracker::{track, Change, Prepared, Tracker};
 pub use revision_validator::JsonRevisionValidator;
+pub use tracker::{track, Change, Prepared, Tracker};
 
 /// A single path segment: an object key or an array index.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -97,7 +97,11 @@ fn json_integer(number: &serde_json::Number) -> Option<i64> {
         return i64::try_from(int).ok();
     }
     let float = number.as_f64()?;
-    if float.fract() != 0.0 || !float.is_finite() || float < i64::MIN as f64 || float > i64::MAX as f64 {
+    if float.fract() != 0.0
+        || !float.is_finite()
+        || float < i64::MIN as f64
+        || float > i64::MAX as f64
+    {
         return None;
     }
     Some(float as i64)
@@ -124,7 +128,10 @@ pub enum Op {
     /// `["r", value]`
     Replace(JsonValue),
     /// `["s", path, value]`
-    Set { path: NonEmptyPath, value: JsonValue },
+    Set {
+        path: NonEmptyPath,
+        value: JsonValue,
+    },
     /// `["d", path]`
     Delete { path: NonEmptyPath },
     /// `["a", path, text]`
@@ -162,7 +169,10 @@ impl Op {
         if path.is_empty() {
             return Err(DeltaError::invalid("path is empty"));
         }
-        Ok(Op::Append { path, text: text.into() })
+        Ok(Op::Append {
+            path,
+            text: text.into(),
+        })
     }
 
     pub fn truncate(path: NonEmptyPath, count: usize) -> Result<Op, DeltaError> {
@@ -336,7 +346,10 @@ pub type WireOp = JsonValue;
 
 /// `r` is the only root-replacing verb.
 pub fn is_replace(op: &WireOp) -> bool {
-    op.as_array().and_then(|tuple| tuple.first()).and_then(Value::as_str) == Some("r")
+    op.as_array()
+        .and_then(|tuple| tuple.first())
+        .and_then(Value::as_str)
+        == Some("r")
 }
 
 /// A batch begins with a replacement. Flush guarantees `r` is at index 0 or absent,
@@ -403,7 +416,10 @@ impl DeltaError {
 pub fn assert_valid_op(op: &Op) -> Result<(), DeltaError> {
     match op {
         Op::Replace(_) => Ok(()),
-        Op::Set { path, .. } | Op::Delete { path } | Op::Append { path, .. } | Op::Truncate { path, .. } => {
+        Op::Set { path, .. }
+        | Op::Delete { path }
+        | Op::Append { path, .. }
+        | Op::Truncate { path, .. } => {
             if path.is_empty() {
                 return Err(DeltaError::invalid("path is empty"));
             }
@@ -515,8 +531,12 @@ fn assert_permutation(value: &JsonValue) -> Result<(), DeltaError> {
         .ok_or_else(|| DeltaError::invalid("m permutation is not an array"))?;
     let mut seen = vec![false; permutation.len()];
     for index in permutation {
-        let int = json_integer(index.as_number().ok_or_else(|| DeltaError::invalid("m permutation is not a bijection"))?)
-            .ok_or_else(|| DeltaError::invalid("m permutation is not a bijection"))?;
+        let int = json_integer(
+            index
+                .as_number()
+                .ok_or_else(|| DeltaError::invalid("m permutation is not a bijection"))?,
+        )
+        .ok_or_else(|| DeltaError::invalid("m permutation is not a bijection"))?;
         if int < 0 || int as usize >= permutation.len() || seen[int as usize] {
             return Err(DeltaError::invalid("m permutation is not a bijection"));
         }
@@ -533,18 +553,25 @@ fn assert_safe_wire_path(value: &JsonValue) -> Result<(), DeltaError> {
         match segment {
             JsonValue::String(key) => {
                 if is_reserved_segment(key) {
-                    return Err(DeltaError::UnsafePath { segment: key.clone() });
+                    return Err(DeltaError::UnsafePath {
+                        segment: key.clone(),
+                    });
                 }
             }
             JsonValue::Number(number) => {
-                let int = json_integer(number).ok_or_else(|| DeltaError::invalid("path is not an array"))?;
+                let int = json_integer(number)
+                    .ok_or_else(|| DeltaError::invalid("path is not an array"))?;
                 if int < 0 {
                     return Err(DeltaError::UnsafePath {
                         segment: number.to_string(),
                     });
                 }
             }
-            _ => return Err(DeltaError::UnsafePath { segment: segment.to_string() }),
+            _ => {
+                return Err(DeltaError::UnsafePath {
+                    segment: segment.to_string(),
+                })
+            }
         }
     }
     Ok(())
@@ -618,7 +645,12 @@ pub fn assert_valid_wire_op(op: &WireOp) -> Result<(), DeltaError> {
         }
         "t" => {
             let non_negative = |value: &JsonValue| -> Result<(), DeltaError> {
-                if value.as_number().and_then(json_integer).filter(|int| *int >= 0).is_none() {
+                if value
+                    .as_number()
+                    .and_then(json_integer)
+                    .filter(|int| *int >= 0)
+                    .is_none()
+                {
                     return Err(DeltaError::invalid("t count"));
                 }
                 Ok(())
@@ -689,7 +721,9 @@ pub fn assert_safe_path(path: &[Seg]) -> Result<(), DeltaError> {
         match segment {
             Seg::Key(key) => {
                 if is_reserved_segment(key) {
-                    return Err(DeltaError::UnsafePath { segment: key.clone() });
+                    return Err(DeltaError::UnsafePath {
+                        segment: key.clone(),
+                    });
                 }
             }
             Seg::Index(_) => {}
@@ -720,7 +754,12 @@ fn apply_one(target: &mut JsonValue, op: &Op) -> Result<(), DeltaError> {
             *target = value.clone();
             Ok(())
         }
-        Op::Splice { path, start, remove, items } => {
+        Op::Splice {
+            path,
+            start,
+            remove,
+            items,
+        } => {
             let array = resolve_array(target, path)?;
             splice_array(array, *start, *remove, items);
             Ok(())
@@ -758,8 +797,12 @@ fn apply_one(target: &mut JsonValue, op: &Op) -> Result<(), DeltaError> {
                     object.remove(key);
                     Ok(())
                 }
-                (JsonValue::Array(_), Seg::Key(_)) => Err(DeltaError::UnsafePath { segment: key_display(&key) }),
-                _ => Err(DeltaError::UnsafePath { segment: key_display(&key) }),
+                (JsonValue::Array(_), Seg::Key(_)) => Err(DeltaError::UnsafePath {
+                    segment: key_display(&key),
+                }),
+                _ => Err(DeltaError::UnsafePath {
+                    segment: key_display(&key),
+                }),
             }
         }
         Op::Append { path, text } => {
@@ -805,15 +848,25 @@ fn splice_array(array: &mut Vec<JsonValue>, start: usize, remove: usize, items: 
     array.splice(start..start + remove, items.iter().cloned());
 }
 
-fn resolve_array<'a>(root: &'a mut JsonValue, path: &[Seg]) -> Result<&'a mut Vec<JsonValue>, DeltaError> {
-    let node = if path.is_empty() { root } else { resolve_mut(root, path)? };
+fn resolve_array<'a>(
+    root: &'a mut JsonValue,
+    path: &[Seg],
+) -> Result<&'a mut Vec<JsonValue>, DeltaError> {
+    let node = if path.is_empty() {
+        root
+    } else {
+        resolve_mut(root, path)?
+    };
     node.as_array_mut().ok_or_else(|| DeltaError::Unresolvable {
         path: serde_json::to_string(&path_to_json(path)).unwrap_or_default(),
     })
 }
 
 /// Resolve `path` to its parent container and return it with the final segment.
-fn resolve_parent<'a>(root: &'a mut JsonValue, path: &[Seg]) -> Result<(&'a mut JsonValue, Seg), DeltaError> {
+fn resolve_parent<'a>(
+    root: &'a mut JsonValue,
+    path: &[Seg],
+) -> Result<(&'a mut JsonValue, Seg), DeltaError> {
     let (last, parents) = path.split_last().ok_or_else(|| DeltaError::Unresolvable {
         path: "[]".to_string(),
     })?;
@@ -826,9 +879,11 @@ fn resolve_mut<'a>(root: &'a mut JsonValue, path: &[Seg]) -> Result<&'a mut Json
     for segment in path {
         match segment {
             Seg::Key(key) => {
-                let object = node.as_object_mut().ok_or_else(|| DeltaError::Unresolvable {
-                    path: serde_json::to_string(&path_to_json(path)).unwrap_or_default(),
-                })?;
+                let object = node
+                    .as_object_mut()
+                    .ok_or_else(|| DeltaError::Unresolvable {
+                        path: serde_json::to_string(&path_to_json(path)).unwrap_or_default(),
+                    })?;
                 node = object
                     .get_mut(key)
                     .ok_or_else(|| DeltaError::Unresolvable {
@@ -839,9 +894,11 @@ fn resolve_mut<'a>(root: &'a mut JsonValue, path: &[Seg]) -> Result<&'a mut Json
                 let array = node.as_array_mut().ok_or_else(|| DeltaError::UnsafePath {
                     segment: index.to_string(),
                 })?;
-                node = array.get_mut(*index).ok_or_else(|| DeltaError::Unresolvable {
-                    path: serde_json::to_string(&path_to_json(path)).unwrap_or_default(),
-                })?;
+                node = array
+                    .get_mut(*index)
+                    .ok_or_else(|| DeltaError::Unresolvable {
+                        path: serde_json::to_string(&path_to_json(path)).unwrap_or_default(),
+                    })?;
             }
         }
     }
@@ -872,7 +929,11 @@ fn assert_index_in_range(parent: &[JsonValue], index: usize) -> Result<(), Delta
     Ok(())
 }
 
-fn write_container_value(parent: &mut JsonValue, key: &Seg, value: JsonValue) -> Result<(), DeltaError> {
+fn write_container_value(
+    parent: &mut JsonValue,
+    key: &Seg,
+    value: JsonValue,
+) -> Result<(), DeltaError> {
     match (parent, key) {
         (JsonValue::Array(array), Seg::Index(index)) => {
             assert_index_in_range(array, *index)?;
@@ -887,8 +948,12 @@ fn write_container_value(parent: &mut JsonValue, key: &Seg, value: JsonValue) ->
             object.insert(key.clone(), value);
             Ok(())
         }
-        (JsonValue::Array(_), Seg::Key(key)) => Err(DeltaError::UnsafePath { segment: key.clone() }),
-        _ => Err(DeltaError::UnsafePath { segment: key_display(key) }),
+        (JsonValue::Array(_), Seg::Key(key)) => Err(DeltaError::UnsafePath {
+            segment: key.clone(),
+        }),
+        _ => Err(DeltaError::UnsafePath {
+            segment: key_display(key),
+        }),
     }
 }
 
@@ -901,7 +966,10 @@ pub fn apply_immutable(target: &JsonValue, ops: &[Op]) -> Result<JsonValue, Delt
 ///
 /// Containers copied for an earlier batch may be mutated while applying a later
 /// batch, so this deliberately exposes no intermediate revisions.
-pub fn apply_immutable_batches<'a, I>(target: &JsonValue, batches: I) -> Result<JsonValue, DeltaError>
+pub fn apply_immutable_batches<'a, I>(
+    target: &JsonValue,
+    batches: I,
+) -> Result<JsonValue, DeltaError>
 where
     I: IntoIterator<Item = &'a [Op]>,
 {
@@ -960,9 +1028,7 @@ impl Encoder {
         let mut out = Vec::with_capacity(ops.len());
         for op in ops {
             if let Op::Replace(value) = op {
-                out.push(
-                    serde_json::json!(["r", value])
-                );
+                out.push(serde_json::json!(["r", value]));
                 // A base batch is a RECOVERY POINT: a reader replays from the last one
                 // with a fresh decoder. So everything after it must be self-contained.
                 self.seen.clear();
@@ -981,10 +1047,15 @@ impl Encoder {
                     Op::Delete { .. } => out.push(serde_json::json!(["d"])),
                     Op::Append { text, .. } => out.push(serde_json::json!(["a", text])),
                     Op::Truncate { count, .. } => out.push(serde_json::json!(["t", count])),
-                    Op::Splice { start, remove, items, .. } => {
-                        out.push(serde_json::json!(["p", start, remove, items]))
+                    Op::Splice {
+                        start,
+                        remove,
+                        items,
+                        ..
+                    } => out.push(serde_json::json!(["p", start, remove, items])),
+                    Op::Permute { permutation, .. } => {
+                        out.push(serde_json::json!(["m", permutation]))
                     }
-                    Op::Permute { permutation, .. } => out.push(serde_json::json!(["m", permutation])),
                     Op::Replace(_) => unreachable!(),
                 }
                 continue;
@@ -1008,10 +1079,15 @@ impl Encoder {
                 Op::Delete { .. } => out.push(serde_json::json!(["d", reference])),
                 Op::Append { text, .. } => out.push(serde_json::json!(["a", reference, text])),
                 Op::Truncate { count, .. } => out.push(serde_json::json!(["t", reference, count])),
-                Op::Splice { start, remove, items, .. } => {
-                    out.push(serde_json::json!(["p", reference, start, remove, items]))
+                Op::Splice {
+                    start,
+                    remove,
+                    items,
+                    ..
+                } => out.push(serde_json::json!(["p", reference, start, remove, items])),
+                Op::Permute { permutation, .. } => {
+                    out.push(serde_json::json!(["m", reference, permutation]))
                 }
-                Op::Permute { permutation, .. } => out.push(serde_json::json!(["m", reference, permutation])),
                 Op::Replace(_) => unreachable!(),
             }
             self.previous = Some(key);
@@ -1040,7 +1116,8 @@ impl Decoder {
             let verb = tuple[0].as_str().expect("validated");
             if verb == "#" {
                 let id = json_integer(tuple[1].as_number().expect("validated")).expect("validated");
-                let path = path_from_json(tuple[2].as_array().expect("validated")).expect("validated");
+                let path =
+                    path_from_json(tuple[2].as_array().expect("validated")).expect("validated");
                 assert_safe_path(&path)?;
                 self.paths.insert(id as u64, path);
                 continue;
@@ -1060,35 +1137,59 @@ impl Decoder {
             let path: Path = if short {
                 match &previous {
                     Some(path) => path.clone(),
-                    None => return Err(DeltaError::Unresolvable { path: "[]".to_string() }),
+                    None => {
+                        return Err(DeltaError::Unresolvable {
+                            path: "[]".to_string(),
+                        })
+                    }
                 }
             } else {
                 let reference = &tuple[1];
                 let path = match reference.as_u64() {
-                    Some(id) => self.paths.get(&id).cloned().ok_or(DeltaError::Unresolvable { path: id.to_string() })?,
-                    _ => path_from_json(reference.as_array().expect("validated")).expect("validated"),
+                    Some(id) => self
+                        .paths
+                        .get(&id)
+                        .cloned()
+                        .ok_or(DeltaError::Unresolvable {
+                            path: id.to_string(),
+                        })?,
+                    _ => {
+                        path_from_json(reference.as_array().expect("validated")).expect("validated")
+                    }
                 };
                 previous = Some(path.clone());
                 path
             };
 
             if verb != "p" && verb != "m" && path.is_empty() {
-                return Err(DeltaError::Unresolvable { path: "[]".to_string() });
+                return Err(DeltaError::Unresolvable {
+                    path: "[]".to_string(),
+                });
             }
             match verb {
                 "s" => {
                     let value = if short { &tuple[1] } else { &tuple[2] };
-                    out.push(Op::Set { path, value: value.clone() });
+                    out.push(Op::Set {
+                        path,
+                        value: value.clone(),
+                    });
                 }
                 "d" => out.push(Op::Delete { path }),
                 "a" => {
                     let text = if short { &tuple[1] } else { &tuple[2] };
-                    out.push(Op::Append { path, text: text.as_str().expect("validated").to_string() });
+                    out.push(Op::Append {
+                        path,
+                        text: text.as_str().expect("validated").to_string(),
+                    });
                 }
                 "t" => {
                     let count = if short { &tuple[1] } else { &tuple[2] };
-                    let int = json_integer(count.as_number().expect("validated")).expect("validated");
-                    out.push(Op::Truncate { path, count: int as usize });
+                    let int =
+                        json_integer(count.as_number().expect("validated")).expect("validated");
+                    out.push(Op::Truncate {
+                        path,
+                        count: int as usize,
+                    });
                 }
                 "p" => {
                     let (start, remove, items) = if short {
@@ -1098,8 +1199,10 @@ impl Decoder {
                     };
                     out.push(Op::Splice {
                         path,
-                        start: json_integer(start.as_number().expect("validated")).expect("validated") as usize,
-                        remove: json_integer(remove.as_number().expect("validated")).expect("validated") as usize,
+                        start: json_integer(start.as_number().expect("validated"))
+                            .expect("validated") as usize,
+                        remove: json_integer(remove.as_number().expect("validated"))
+                            .expect("validated") as usize,
                         items: items.as_array().expect("validated").clone(),
                     });
                 }
@@ -1111,7 +1214,10 @@ impl Decoder {
                             .as_array()
                             .expect("validated")
                             .iter()
-                            .map(|index| json_integer(index.as_number().expect("validated")).expect("validated") as usize)
+                            .map(|index| {
+                                json_integer(index.as_number().expect("validated"))
+                                    .expect("validated") as usize
+                            })
                             .collect(),
                     });
                 }
@@ -1213,7 +1319,10 @@ mod tests {
 
         let prepared = change.prepare().unwrap();
         assert_eq!(prepared.base, *tracker.value());
-        assert_eq!(prepared.value, json!({"count": 2, "nested": {"text": "ab"}, "values": [1, 2]}));
+        assert_eq!(
+            prepared.value,
+            json!({"count": 2, "nested": {"text": "ab"}, "values": [1, 2]})
+        );
         assert_eq!(
             serde_json::to_value(&prepared.ops).unwrap(),
             json!([
@@ -1280,10 +1389,15 @@ mod tests {
         let replacement = json!({"nested": {"value": 2}});
         let prepared = tracker.prepare_replace(replacement.clone()).unwrap();
         assert_eq!(prepared.value, replacement);
-        assert_eq!(serde_json::to_value(&prepared.ops).unwrap(), json!([["r", replacement]]));
+        assert_eq!(
+            serde_json::to_value(&prepared.ops).unwrap(),
+            json!([["r", replacement]])
+        );
         tracker.adopt(prepared).unwrap();
 
-        let no_op = tracker.prepare_replace(json!({"nested": {"value": 2}})).unwrap();
+        let no_op = tracker
+            .prepare_replace(json!({"nested": {"value": 2}}))
+            .unwrap();
         assert_eq!(no_op.value, *tracker.value());
         assert!(no_op.ops.is_empty());
     }
@@ -1294,7 +1408,9 @@ mod tests {
         let mut change = tracker.begin_change();
         let prepared = {
             let mut state = change.state();
-            state.push(&[Seg::key("rows")], vec![json!({"id": 1})]).unwrap();
+            state
+                .push(&[Seg::key("rows")], vec![json!({"id": 1})])
+                .unwrap();
             change.prepare().unwrap()
         };
         let Op::Splice { items, .. } = &prepared.ops[0] else {
@@ -1344,8 +1460,16 @@ mod tests {
         let stale = first.prepare_replace(json!({"value": 2})).unwrap();
         let winner = first.prepare_replace(json!({"value": 3})).unwrap();
         first.adopt(winner).unwrap();
-        assert!(first.adopt(stale.clone()).unwrap_err().to_string().contains("stale"));
-        assert!(first.adopt(stale).unwrap_err().to_string().contains("stale"));
+        assert!(first
+            .adopt(stale.clone())
+            .unwrap_err()
+            .to_string()
+            .contains("stale"));
+        assert!(first
+            .adopt(stale)
+            .unwrap_err()
+            .to_string()
+            .contains("stale"));
     }
 
     #[test]
@@ -1360,14 +1484,22 @@ mod tests {
         // Upstream calls `change.abort()` after preparing; the Rust API aborts
         // the prepared candidate directly (the change was consumed).
         prepared.abort();
-        assert!(tracker.adopt(prepared).unwrap_err().to_string().contains("aborted"));
+        assert!(tracker
+            .adopt(prepared)
+            .unwrap_err()
+            .to_string()
+            .contains("aborted"));
     }
 
     #[test]
     fn makes_competing_same_base_preparations_stale_after_adopting_a_no_op() {
         let mut tracker = Tracker::new(json!({"value": {"count": 1}}));
-        let first = tracker.prepare_replace(json!({"value": {"count": 1}})).unwrap();
-        let competing = tracker.prepare_replace(json!({"value": {"count": 1}})).unwrap();
+        let first = tracker
+            .prepare_replace(json!({"value": {"count": 1}}))
+            .unwrap();
+        let competing = tracker
+            .prepare_replace(json!({"value": {"count": 1}}))
+            .unwrap();
         assert_eq!(first.value, first.base);
         assert_eq!(competing.value, competing.base);
         tracker.adopt(first.clone()).unwrap();
@@ -1376,7 +1508,11 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("already been used"));
-        assert!(tracker.adopt(competing).unwrap_err().to_string().contains("stale"));
+        assert!(tracker
+            .adopt(competing)
+            .unwrap_err()
+            .to_string()
+            .contains("stale"));
     }
 
     #[test]
@@ -1390,7 +1526,10 @@ mod tests {
         let replacement = json!({"rows": replacement_rows});
         let prepared = tracker.prepare_replace(replacement.clone()).unwrap();
         assert_eq!(prepared.value, replacement);
-        assert_eq!(serde_json::to_value(&prepared.ops).unwrap(), json!([["r", replacement]]));
+        assert_eq!(
+            serde_json::to_value(&prepared.ops).unwrap(),
+            json!([["r", replacement]])
+        );
         let replay = apply_immutable(&prepared.base, &prepared.ops).unwrap();
         assert_eq!(replay, prepared.value);
     }
@@ -1403,26 +1542,38 @@ mod tests {
         let mut change = tracker.begin_change();
         let prepared = {
             let mut state = change.state();
-            let text = state.get(&[Seg::key("text")]).unwrap().unwrap().as_str().unwrap();
+            let text = state
+                .get(&[Seg::key("text")])
+                .unwrap()
+                .unwrap()
+                .as_str()
+                .unwrap();
             state.set(&[], "text", json!(format!("{text}ij"))).unwrap();
             change.prepare().unwrap()
         };
-        assert_eq!(serde_json::to_value(&prepared.ops).unwrap(), json!([["a", ["text"], "ij"]]));
+        assert_eq!(
+            serde_json::to_value(&prepared.ops).unwrap(),
+            json!([["a", ["text"], "ij"]])
+        );
         tracker.adopt(prepared).unwrap();
 
         let mut change = tracker.begin_change();
         let prepared = {
             let mut state = change.state();
-            let text = state.get(&[Seg::key("text")]).unwrap().unwrap().as_str().unwrap();
-            state.set(&[], "text", json!(format!("{}xyz", &text[3..]))).unwrap();
+            let text = state
+                .get(&[Seg::key("text")])
+                .unwrap()
+                .unwrap()
+                .as_str()
+                .unwrap();
+            state
+                .set(&[], "text", json!(format!("{}xyz", &text[3..])))
+                .unwrap();
             change.prepare().unwrap()
         };
         assert_eq!(
             serde_json::to_value(&prepared.ops).unwrap(),
-            json!([
-                ["t", ["text"], 3],
-                ["a", ["text"], "xyz"],
-            ])
+            json!([["t", ["text"], 3], ["a", ["text"], "xyz"],])
         );
     }
 
@@ -1452,7 +1603,8 @@ mod tests {
                 value: json!(2),
             },
         ];
-        let base = json!({"text": "a", "values": [1, 2], "nested": {"value": 1}, "stable": {"value": 9}});
+        let base =
+            json!({"text": "a", "values": [1, 2], "nested": {"value": 1}, "stable": {"value": 9}});
         let immutable = apply_immutable(&base, &operations).unwrap();
         assert_eq!(
             immutable,
@@ -1542,10 +1694,13 @@ mod tests {
         // precedes traversal; serde values have no accessors, so the ordering
         // guarantee is asserted by rejecting the batch without output.
         let target = json!({});
-        assert!(apply_immutable(&target, &[Op::Set {
-            path: vec![],
-            value: json!(1),
-        }])
+        assert!(apply_immutable(
+            &target,
+            &[Op::Set {
+                path: vec![],
+                value: json!(1),
+            }]
+        )
         .is_err());
     }
 
@@ -1586,10 +1741,7 @@ mod tests {
         let wire = enc.encode(&second);
         assert_eq!(
             serde_json::to_value(&wire).unwrap(),
-            json!([
-                ["#", 0, ["nested", "text"]],
-                ["a", 0, "y"],
-            ])
+            json!([["#", 0, ["nested", "text"]], ["a", 0, "y"],])
         );
         assert_eq!(dec.decode(&wire).unwrap(), second);
     }
@@ -1643,10 +1795,7 @@ mod tests {
         ]);
         assert_eq!(
             serde_json::to_value(&wire).unwrap(),
-            json!([
-                ["s", ["value"], 1],
-                ["s", 2],
-            ])
+            json!([["s", ["value"], 1], ["s", 2],])
         );
     }
 
@@ -1668,10 +1817,7 @@ mod tests {
         }]);
         assert_eq!(
             serde_json::to_value(&second).unwrap(),
-            json!([
-                ["#", 0, ["a", "deep"]],
-                ["a", 0, "2"],
-            ])
+            json!([["#", 0, ["a", "deep"]], ["a", 0, "2"],])
         );
     }
 
@@ -1695,7 +1841,8 @@ mod tests {
     #[test]
     fn clears_decoder_ids_on_a_base_batch() {
         let mut dec = Decoder::new();
-        dec.decode(&[json!(["#", 0, ["a"]]), json!(["a", 0, "1"])]).unwrap();
+        dec.decode(&[json!(["#", 0, ["a"]]), json!(["a", 0, "1"])])
+            .unwrap();
         dec.decode(&[json!(["r", {"a": ""}])]).unwrap();
         assert!(dec.decode(&[json!(["a", 0, "2"])]).is_err());
     }
@@ -1717,7 +1864,10 @@ mod tests {
             path: path.clone(),
             text: "3".into(),
         }]);
-        assert_eq!(serde_json::to_value(&after).unwrap(), json!([["a", ["a", "deep"], "3"]]));
+        assert_eq!(
+            serde_json::to_value(&after).unwrap(),
+            json!([["a", ["a", "deep"], "3"]])
+        );
         let mut dec = Decoder::new();
         assert_eq!(
             dec.decode(&base).unwrap(),
@@ -1796,16 +1946,20 @@ mod tests {
     fn rejects_constructor_walks_and_forbidden_interned_paths() {
         // The validation rejects before any target is touched; upstream applies
         // to `({})` and asserts no pollution, which is structural in serde maps.
-        let wire_ops = serde_json::from_str::<Vec<WireOp>>("[[\"s\",[\"constructor\",\"prototype\",\"gadget\"],true]]")
-            .unwrap();
+        let wire_ops = serde_json::from_str::<Vec<WireOp>>(
+            "[[\"s\",[\"constructor\",\"prototype\",\"gadget\"],true]]",
+        )
+        .unwrap();
         for op in &wire_ops {
             assert!(assert_valid_wire_op(op).is_err());
         }
         // `({}).gadget === undefined` holds by construction in Rust.
-        assert!(serde_json::from_str::<serde_json::Map<String, JsonValue>>("{}")
-            .unwrap()
-            .get("gadget")
-            .is_none());
+        assert!(
+            serde_json::from_str::<serde_json::Map<String, JsonValue>>("{}")
+                .unwrap()
+                .get("gadget")
+                .is_none()
+        );
         let wire = [json!(["#", 0, ["__proto__", "w"]]), json!(["s", 0, true])];
         assert!(Decoder::new().decode(&wire).is_err());
     }
@@ -1828,8 +1982,7 @@ mod tests {
 
     #[test]
     fn allows_reserved_names_inside_values_without_prototype_pollution() {
-        let value: JsonValue =
-            serde_json::from_str("{\"__proto__\":{\"z\":1}}").unwrap();
+        let value: JsonValue = serde_json::from_str("{\"__proto__\":{\"z\":1}}").unwrap();
         let mut target = json!({});
         apply(
             &mut target,
@@ -1841,11 +1994,16 @@ mod tests {
         .unwrap();
         // `__proto__` is an ordinary data property of the stored value; it
         // never reaches a prototype chain.
-        assert!(target["value"].as_object().unwrap().contains_key("__proto__"));
-        assert!(serde_json::from_str::<serde_json::Map<String, JsonValue>>("{}")
+        assert!(target["value"]
+            .as_object()
             .unwrap()
-            .get("z")
-            .is_none());
+            .contains_key("__proto__"));
+        assert!(
+            serde_json::from_str::<serde_json::Map<String, JsonValue>>("{}")
+                .unwrap()
+                .get("z")
+                .is_none()
+        );
     }
 
     // "imports own properties without invoking inherited setters" exercises
@@ -1993,7 +2151,9 @@ mod tests {
         )
         .is_err());
         assert!(assert_valid_raw_op(&json!(["t", ["value"], -1])).is_err());
-        assert!(Decoder::new().decode(&[json!(["t", ["value"], -1])]).is_err());
+        assert!(Decoder::new()
+            .decode(&[json!(["t", ["value"], -1])])
+            .is_err());
     }
 
     #[test]

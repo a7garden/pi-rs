@@ -69,7 +69,11 @@ pub struct FacetBundleArtifact {
 /// Resolve one entry file relative to a manifest directory.
 ///
 /// Port of upstream `resolveBundleFile`: the file must be a bare filename.
-pub fn resolve_bundle_file(manifest_path: &Path, file: &str, label: &str) -> Result<PathBuf, AnyError> {
+pub fn resolve_bundle_file(
+    manifest_path: &Path,
+    file: &str,
+    label: &str,
+) -> Result<PathBuf, AnyError> {
     let invalid = file.is_empty()
         || Path::new(file).is_absolute()
         || Path::new(file).file_name().and_then(|name| name.to_str()) != Some(file)
@@ -88,7 +92,9 @@ pub fn resolve_bundle_file(manifest_path: &Path, file: &str, label: &str) -> Res
 pub fn parse_integrity(integrity: &str) -> Result<String, AnyError> {
     const PREFIX: &str = "sha256-";
     if !integrity.starts_with(PREFIX) || integrity.len() == PREFIX.len() {
-        return Err(error("Facet bundle entry has an invalid SHA-256 integrity value"));
+        return Err(error(
+            "Facet bundle entry has an invalid SHA-256 integrity value",
+        ));
     }
     Ok(integrity[PREFIX.len()..].to_string())
 }
@@ -97,10 +103,14 @@ pub fn parse_integrity(integrity: &str) -> Result<String, AnyError> {
 /// upstream `validateManifest` (exact error messages).
 pub fn validate_manifest(value: &JsonValue, path: &str) -> Result<FacetBundleManifest, AnyError> {
     let Some(obj) = value.as_object() else {
-        return Err(error(format!("Invalid facet bundle manifest format in {path}")));
+        return Err(error(format!(
+            "Invalid facet bundle manifest format in {path}"
+        )));
     };
     if obj.get("format").and_then(JsonValue::as_str) != Some(FACET_BUNDLE_FORMAT) {
-        return Err(error(format!("Invalid facet bundle manifest format in {path}")));
+        return Err(error(format!(
+            "Invalid facet bundle manifest format in {path}"
+        )));
     }
     if obj.get("formatVersion").map(facet_version_matches) != Some(true) {
         let shown = format_version_display(obj.get("formatVersion"));
@@ -109,13 +119,19 @@ pub fn validate_manifest(value: &JsonValue, path: &str) -> Result<FacetBundleMan
         )));
     }
     let plugin = obj.get("plugin").ok_or_else(|| {
-        error(format!("Facet bundle manifest has an invalid plugin identity in {path}"))
+        error(format!(
+            "Facet bundle manifest has an invalid plugin identity in {path}"
+        ))
     })?;
     let plugin_id = plugin
         .get("id")
         .and_then(JsonValue::as_str)
         .filter(|id| !id.is_empty())
-        .ok_or_else(|| error(format!("Facet bundle manifest has an invalid plugin identity in {path}")))?;
+        .ok_or_else(|| {
+            error(format!(
+                "Facet bundle manifest has an invalid plugin identity in {path}"
+            ))
+        })?;
     let plugin_version = match plugin.get("version") {
         None | Some(JsonValue::Null) => None,
         Some(JsonValue::String(version)) if !version.is_empty() => Some(version.clone()),
@@ -125,16 +141,21 @@ pub fn validate_manifest(value: &JsonValue, path: &str) -> Result<FacetBundleMan
             )))
         }
     };
-    let raw_entries = obj.get("entries").and_then(JsonValue::as_object).ok_or_else(|| {
-        error(format!("Facet bundle manifest has no entries in {path}"))
-    })?;
+    let raw_entries = obj
+        .get("entries")
+        .and_then(JsonValue::as_object)
+        .ok_or_else(|| error(format!("Facet bundle manifest has no entries in {path}")))?;
     if raw_entries.is_empty() {
-        return Err(error(format!("Facet bundle manifest has no entries in {path}")));
+        return Err(error(format!(
+            "Facet bundle manifest has no entries in {path}"
+        )));
     }
     let mut entries = BTreeMap::new();
     for (name, candidate) in raw_entries {
         if name.is_empty() || !candidate.is_object() {
-            return Err(error(format!("Facet bundle manifest has an invalid entry in {path}")));
+            return Err(error(format!(
+                "Facet bundle manifest has an invalid entry in {path}"
+            )));
         }
         let file = candidate
             .get("file")
@@ -147,7 +168,10 @@ pub fn validate_manifest(value: &JsonValue, path: &str) -> Result<FacetBundleMan
             .ok_or_else(|| error(format!("Facet bundle entry {name} has no integrity")))?;
         parse_integrity(integrity)?;
         let mut external_imports = Vec::new();
-        match candidate.get("externalImports").and_then(JsonValue::as_array) {
+        match candidate
+            .get("externalImports")
+            .and_then(JsonValue::as_array)
+        {
             Some(items) => {
                 for item in items {
                     match item.as_str() {
@@ -166,7 +190,12 @@ pub fn validate_manifest(value: &JsonValue, path: &str) -> Result<FacetBundleMan
                 )))
             }
         }
-        if external_imports.iter().collect::<std::collections::BTreeSet<_>>().len() != external_imports.len() {
+        if external_imports
+            .iter()
+            .collect::<std::collections::BTreeSet<_>>()
+            .len()
+            != external_imports.len()
+        {
             return Err(error(format!(
                 "Facet bundle entry {name} has duplicate external imports"
             )));
@@ -258,17 +287,24 @@ mod tests {
         let entry = manifest.entries.get("worker").unwrap();
         assert_eq!(entry.file, "facet-aaaaaaaaaaaaaaaaaaaaaaaa.cjs");
         assert_eq!(entry.external_imports, ["@earendil-works/chord"]);
-        assert_eq!(entry.source_map.as_deref(), Some("facet-aaaaaaaaaaaaaaaaaaaaaaaa.cjs.map"));
+        assert_eq!(
+            entry.source_map.as_deref(),
+            Some("facet-aaaaaaaaaaaaaaaaaaaaaaaa.cjs.map")
+        );
     }
 
     #[test]
     fn rejects_invalid_format() {
         let mut value = valid_manifest();
         value["format"] = json!("other");
-        let err = validate_manifest(&value, "/x.json").unwrap_err().to_string();
+        let err = validate_manifest(&value, "/x.json")
+            .unwrap_err()
+            .to_string();
         assert_eq!(err, "Invalid facet bundle manifest format in /x.json");
 
-        let err = validate_manifest(&json!([]), "/x.json").unwrap_err().to_string();
+        let err = validate_manifest(&json!([]), "/x.json")
+            .unwrap_err()
+            .to_string();
         assert_eq!(err, "Invalid facet bundle manifest format in /x.json");
     }
 
@@ -276,48 +312,77 @@ mod tests {
     fn rejects_unsupported_version() {
         let mut value = valid_manifest();
         value["formatVersion"] = json!(1);
-        let err = validate_manifest(&value, "/x.json").unwrap_err().to_string();
-        assert_eq!(err, "Unsupported facet bundle manifest version in /x.json: 1");
+        let err = validate_manifest(&value, "/x.json")
+            .unwrap_err()
+            .to_string();
+        assert_eq!(
+            err,
+            "Unsupported facet bundle manifest version in /x.json: 1"
+        );
 
         value["formatVersion"] = json!(null);
-        let err = validate_manifest(&value, "/x.json").unwrap_err().to_string();
-        assert_eq!(err, "Unsupported facet bundle manifest version in /x.json: undefined");
+        let err = validate_manifest(&value, "/x.json")
+            .unwrap_err()
+            .to_string();
+        assert_eq!(
+            err,
+            "Unsupported facet bundle manifest version in /x.json: undefined"
+        );
     }
 
     #[test]
     fn rejects_invalid_plugin_identity_and_version() {
         let mut value = valid_manifest();
         value["plugin"] = json!({ "id": "" });
-        let err = validate_manifest(&value, "/x.json").unwrap_err().to_string();
-        assert_eq!(err, "Facet bundle manifest has an invalid plugin identity in /x.json");
+        let err = validate_manifest(&value, "/x.json")
+            .unwrap_err()
+            .to_string();
+        assert_eq!(
+            err,
+            "Facet bundle manifest has an invalid plugin identity in /x.json"
+        );
 
         value["plugin"] = json!({ "id": "p", "version": "" });
-        let err = validate_manifest(&value, "/x.json").unwrap_err().to_string();
-        assert_eq!(err, "Facet bundle manifest has an invalid plugin version in /x.json");
+        let err = validate_manifest(&value, "/x.json")
+            .unwrap_err()
+            .to_string();
+        assert_eq!(
+            err,
+            "Facet bundle manifest has an invalid plugin version in /x.json"
+        );
     }
 
     #[test]
     fn rejects_missing_or_invalid_entries() {
         let mut value = valid_manifest();
         value["entries"] = json!({});
-        let err = validate_manifest(&value, "/x.json").unwrap_err().to_string();
+        let err = validate_manifest(&value, "/x.json")
+            .unwrap_err()
+            .to_string();
         assert_eq!(err, "Facet bundle manifest has no entries in /x.json");
 
         value["entries"] = json!([]);
         assert_eq!(
-            validate_manifest(&value, "/x.json").unwrap_err().to_string(),
+            validate_manifest(&value, "/x.json")
+                .unwrap_err()
+                .to_string(),
             "Facet bundle manifest has no entries in /x.json"
         );
 
         value["entries"] = json!({ "worker": "nope" });
         assert_eq!(
-            validate_manifest(&value, "/x.json").unwrap_err().to_string(),
+            validate_manifest(&value, "/x.json")
+                .unwrap_err()
+                .to_string(),
             "Facet bundle manifest has an invalid entry in /x.json"
         );
 
-        value["entries"] = json!({ "": { "file": "a.cjs", "integrity": "sha256-x", "externalImports": [] } });
+        value["entries"] =
+            json!({ "": { "file": "a.cjs", "integrity": "sha256-x", "externalImports": [] } });
         assert_eq!(
-            validate_manifest(&value, "/x.json").unwrap_err().to_string(),
+            validate_manifest(&value, "/x.json")
+                .unwrap_err()
+                .to_string(),
             "Facet bundle manifest has an invalid entry in /x.json"
         );
     }
@@ -325,16 +390,26 @@ mod tests {
     #[test]
     fn rejects_entries_without_file_or_integrity() {
         let mut value = valid_manifest();
-        value["entries"]["worker"].as_object_mut().unwrap().remove("file");
+        value["entries"]["worker"]
+            .as_object_mut()
+            .unwrap()
+            .remove("file");
         assert_eq!(
-            validate_manifest(&value, "/x.json").unwrap_err().to_string(),
+            validate_manifest(&value, "/x.json")
+                .unwrap_err()
+                .to_string(),
             "Facet bundle entry worker has no file"
         );
 
         let mut value = valid_manifest();
-        value["entries"]["worker"].as_object_mut().unwrap().remove("integrity");
+        value["entries"]["worker"]
+            .as_object_mut()
+            .unwrap()
+            .remove("integrity");
         assert_eq!(
-            validate_manifest(&value, "/x.json").unwrap_err().to_string(),
+            validate_manifest(&value, "/x.json")
+                .unwrap_err()
+                .to_string(),
             "Facet bundle entry worker has no integrity"
         );
     }
@@ -344,12 +419,16 @@ mod tests {
         let mut value = valid_manifest();
         value["entries"]["worker"]["integrity"] = json!("md5-abc");
         assert_eq!(
-            validate_manifest(&value, "/x.json").unwrap_err().to_string(),
+            validate_manifest(&value, "/x.json")
+                .unwrap_err()
+                .to_string(),
             "Facet bundle entry has an invalid SHA-256 integrity value"
         );
         value["entries"]["worker"]["integrity"] = json!("sha256-");
         assert_eq!(
-            validate_manifest(&value, "/x.json").unwrap_err().to_string(),
+            validate_manifest(&value, "/x.json")
+                .unwrap_err()
+                .to_string(),
             "Facet bundle entry has an invalid SHA-256 integrity value"
         );
         assert_eq!(parse_integrity("sha256-abc").unwrap(), "abc");
@@ -360,12 +439,16 @@ mod tests {
         let mut value = valid_manifest();
         value["entries"]["worker"]["externalImports"] = json!(["ok", 3]);
         assert_eq!(
-            validate_manifest(&value, "/x.json").unwrap_err().to_string(),
+            validate_manifest(&value, "/x.json")
+                .unwrap_err()
+                .to_string(),
             "Facet bundle entry worker has invalid external imports"
         );
         value["entries"]["worker"]["externalImports"] = json!(["a", "a"]);
         assert_eq!(
-            validate_manifest(&value, "/x.json").unwrap_err().to_string(),
+            validate_manifest(&value, "/x.json")
+                .unwrap_err()
+                .to_string(),
             "Facet bundle entry worker has duplicate external imports"
         );
     }
@@ -375,12 +458,16 @@ mod tests {
         let mut value = valid_manifest();
         value["entries"]["worker"]["sourceMap"] = json!(42);
         assert_eq!(
-            validate_manifest(&value, "/x.json").unwrap_err().to_string(),
+            validate_manifest(&value, "/x.json")
+                .unwrap_err()
+                .to_string(),
             "Facet bundle entry worker has an invalid source map"
         );
         value["entries"]["worker"]["sourceMap"] = json!("../escape.map");
         assert_eq!(
-            validate_manifest(&value, "/x.json").unwrap_err().to_string(),
+            validate_manifest(&value, "/x.json")
+                .unwrap_err()
+                .to_string(),
             "Facet bundle entry worker source map must be a filename relative to its manifest"
         );
     }
@@ -393,8 +480,13 @@ mod tests {
             PathBuf::from("/bundle/a.cjs")
         );
         for bad in ["", "/abs/a.cjs", "dir/a.cjs", ".", ".."] {
-            let err = resolve_bundle_file(manifest_path, bad, "entry").unwrap_err().to_string();
-            assert_eq!(err, "Facet bundle entry must be a filename relative to its manifest");
+            let err = resolve_bundle_file(manifest_path, bad, "entry")
+                .unwrap_err()
+                .to_string();
+            assert_eq!(
+                err,
+                "Facet bundle entry must be a filename relative to its manifest"
+            );
         }
     }
 }

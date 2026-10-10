@@ -21,15 +21,18 @@ fn sandbox(tools: Vec<CodemodeTool>) -> CodemodeSandbox {
 
 use std::sync::Arc;
 
-async fn ok_result(result: Result<pi_codemode::types::CodemodeResult, String>) -> pi_codemode::types::CodemodeResult {
+async fn ok_result(
+    result: Result<pi_codemode::types::CodemodeResult, String>,
+) -> pi_codemode::types::CodemodeResult {
     result.unwrap_or_else(|error| panic!("sandbox error: {error}"))
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn runs_a_script_that_calls_tools_and_produces_output() {
-    let sandbox = sandbox(vec![CodemodeTool::new("echo", |args: Option<serde_json::Value>, _ctx| async move {
-        Ok(args)
-    })]);
+    let sandbox = sandbox(vec![CodemodeTool::new(
+        "echo",
+        |args: Option<serde_json::Value>, _ctx| async move { Ok(args) },
+    )]);
 
     let result = ok_result(
         sandbox
@@ -46,13 +49,25 @@ return { echoed, all: ALL_TOOLS.map((tool) => tool.name) };
     )
     .await;
 
-    let pi_codemode::types::CodemodeResult::Ok { value, output, calls, .. } = result else {
+    let pi_codemode::types::CodemodeResult::Ok {
+        value,
+        output,
+        calls,
+        ..
+    } = result
+    else {
         panic!("expected ok result, got {result:?}");
     };
-    assert_eq!(value, Some(json!({ "echoed": { "hello": "world" }, "all": ["echo"] })));
+    assert_eq!(
+        value,
+        Some(json!({ "echoed": { "hello": "world" }, "all": ["echo"] }))
+    );
     assert_eq!(
         output,
-        vec![CodemodeOutputItem::Text { text: "echoed {\"hello\":\"world\"}".to_string() }]
+        vec![CodemodeOutputItem::Text {
+            text: "echoed {\"hello\":\"world\"}".to_string(),
+            console: None
+        }]
     );
     assert_eq!(calls.len(), 1);
     assert_eq!(calls[0].name, "echo");
@@ -82,7 +97,12 @@ return load("count");
     )
     .await;
 
-    let pi_codemode::types::CodemodeResult::Ok { value, store_writes, .. } = result else {
+    let pi_codemode::types::CodemodeResult::Ok {
+        value,
+        store_writes,
+        ..
+    } = result
+    else {
         panic!("expected ok result, got {result:?}");
     };
     assert_eq!(value, Some(json!(3)));
@@ -94,7 +114,10 @@ async fn script_errors_report_the_script_error_shape() {
     let sandbox = sandbox(Vec::new());
     let result = ok_result(
         sandbox
-            .execute("throw new TypeError(\"boom\");".to_string(), Default::default())
+            .execute(
+                "throw new TypeError(\"boom\");".to_string(),
+                Default::default(),
+            )
             .await,
     )
     .await;
@@ -105,7 +128,11 @@ async fn script_errors_report_the_script_error_shape() {
     assert_eq!(error.kind, CodemodeErrorKind::Script);
     assert_eq!(error.name.as_deref(), Some("TypeError"));
     assert_eq!(error.message, "boom");
-    assert!(error.stack.as_deref().unwrap_or_default().contains("codemode.js"));
+    assert!(error
+        .stack
+        .as_deref()
+        .unwrap_or_default()
+        .contains("codemode.js"));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -129,7 +156,10 @@ async fn timeouts_terminate_a_spinning_script() {
         panic!("expected error result, got {result:?}");
     };
     assert_eq!(error.kind, CodemodeErrorKind::Timeout);
-    assert!(started.elapsed() < Duration::from_secs(10), "termination must not hang");
+    assert!(
+        started.elapsed() < Duration::from_secs(10),
+        "termination must not hang"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -167,7 +197,10 @@ async fn a_stalled_script_reports_a_sandbox_script_error() {
     let sandbox = sandbox(Vec::new());
     let result = ok_result(
         sandbox
-            .execute("await new Promise(() => {});".to_string(), Default::default())
+            .execute(
+                "await new Promise(() => {});".to_string(),
+                Default::default(),
+            )
             .await,
     )
     .await;
@@ -184,12 +217,17 @@ async fn a_stalled_script_reports_a_sandbox_script_error() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn tool_errors_surface_in_the_script() {
-    let sandbox = sandbox(vec![CodemodeTool::new("fail", |_args: Option<serde_json::Value>, _ctx| async move {
-        Err("tool exploded".to_string())
-    })]);
+    let sandbox = sandbox(vec![CodemodeTool::new(
+        "fail",
+        |_args: Option<serde_json::Value>, _ctx| async move { Err("tool exploded".to_string()) },
+    )]);
     let result = ok_result(
         sandbox
-            .execute("try { await tools.fail(); } catch (error) { return String(error.message); }".to_string(), Default::default())
+            .execute(
+                "try { await tools.fail(); } catch (error) { return String(error.message); }"
+                    .to_string(),
+                Default::default(),
+            )
             .await,
     )
     .await;
@@ -197,7 +235,10 @@ async fn tool_errors_surface_in_the_script() {
         panic!("expected ok result, got {result:?}");
     };
     assert_eq!(value, Some(json!("tool exploded")));
-    assert_eq!(calls[0].status, pi_codemode::types::CodemodeCallStatus::Error);
+    assert_eq!(
+        calls[0].status,
+        pi_codemode::types::CodemodeCallStatus::Error
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -224,5 +265,184 @@ return results;
         panic!("expected ok result, got {result:?}");
     };
     // Upstream: no timers, no fetch, no process, no require — only the prelude surface.
-    assert_eq!(value, Some(json!(["undefined", "undefined", "undefined", "undefined"])));
+    assert_eq!(
+        value,
+        Some(json!(["undefined", "undefined", "undefined", "undefined"]))
+    );
+}
+
+// Port of sandbox.test.ts "collects output items" (v1.1.0): `console.*` items are marked with
+// `console: true`; `text()` items are not.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn console_output_is_marked_as_console() {
+    let sandbox = sandbox(Vec::new());
+    let result = ok_result(
+        sandbox
+            .execute(
+                r#"
+console.log("hello", 1, { a: 1 });
+text("from text");
+return undefined;
+"#
+                .to_string(),
+                Default::default(),
+            )
+            .await,
+    )
+    .await;
+    let pi_codemode::types::CodemodeResult::Ok { output, .. } = result else {
+        panic!("expected ok result, got {result:?}");
+    };
+    assert_eq!(
+        output,
+        vec![
+            CodemodeOutputItem::Text {
+                text: "hello 1 {\"a\":1}".to_string(),
+                console: Some(pi_codemode::types::True)
+            },
+            CodemodeOutputItem::Text {
+                text: "from text".to_string(),
+                console: None
+            },
+        ]
+    );
+}
+
+// Port of sandbox.test.ts "ignores patches to built-ins and built-in globals" (#10444): the
+// prelude freezes the built-ins it shares with the script, so patches such as
+// `Array.prototype.toJSON` have no effect on what it reports to the host.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ignores_patches_to_builtins_and_builtin_globals() {
+    let sandbox = sandbox(vec![CodemodeTool::new(
+        "echo",
+        |args: Option<serde_json::Value>, _ctx| async move { Ok(args) },
+    )]);
+    let result = ok_result(
+        sandbox
+            .execute(
+                r#"
+Array.prototype.toJSON = () => null;
+Object.prototype.toJSON = () => 5;
+Promise.prototype.then = () => {};
+Map.prototype.get = () => undefined;
+globalThis.JSON = { stringify: () => "x", parse: () => "x" };
+store("k", [1]);
+return [await tools.echo([2]), JSON.stringify({ a: 1 })];
+"#
+                .to_string(),
+                Default::default(),
+            )
+            .await,
+    )
+    .await;
+    let pi_codemode::types::CodemodeResult::Ok {
+        value,
+        store_writes,
+        ..
+    } = result
+    else {
+        panic!("expected ok result, got {result:?}");
+    };
+    assert_eq!(value, Some(json!([[2], "{\"a\":1}"])));
+    assert_eq!(store_writes.set.get("k"), Some(&json!([1])));
+}
+
+// Port of sandbox.test.ts "freezes intrinsics that are only reachable from instances" (#10444).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn freezes_intrinsics_only_reachable_from_instances() {
+    let sandbox = sandbox(Vec::new());
+    let result = ok_result(
+        sandbox
+            .execute(
+                r#"
+return [
+    Object.getPrototypeOf(function* () {}).prototype,
+    Object.getPrototypeOf(async function () {}),
+    Object.getPrototypeOf(Int8Array).prototype,
+    Object.getPrototypeOf([][Symbol.iterator]()),
+    Object.getPrototypeOf(Object.getPrototypeOf([][Symbol.iterator]())),
+    Object.getPrototypeOf(new Map()[Symbol.iterator]()),
+    Object.getPrototypeOf(/a/[Symbol.matchAll]("")),
+].every((object) => Object.isFrozen(object));
+"#
+                .to_string(),
+                Default::default(),
+            )
+            .await,
+    )
+    .await;
+    let pi_codemode::types::CodemodeResult::Ok { value, .. } = result else {
+        panic!("expected ok result, got {result:?}");
+    };
+    assert_eq!(value, Some(json!(true)));
+}
+
+// Port of sandbox.test.ts "still lets instances override properties of frozen prototypes"
+// (#10444): the "override mistake" workaround keeps ordinary code working.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn still_lets_instances_override_properties_of_frozen_prototypes() {
+    let sandbox = sandbox(Vec::new());
+    let result = ok_result(
+        sandbox
+            .execute(
+                r#"
+const object = {};
+object.toString = () => "custom";
+function Legacy() {}
+Legacy.prototype = Object.create(Error.prototype);
+Legacy.prototype.constructor = Legacy;
+const bare = new Error();
+bare.message = "set later";
+class MyError extends Error {
+    constructor(message) {
+        super(message);
+        this.name = "MyError";
+    }
+}
+let patched = "silent";
+try { Error.prototype.name = "Patched"; } catch (error) { patched = error.constructor.name; }
+return [String(object), new Legacy().constructor === Legacy, bare.message, new MyError("x").name, Error.prototype.name, patched];
+"#
+                .to_string(),
+                Default::default(),
+            )
+            .await,
+    )
+    .await;
+    let pi_codemode::types::CodemodeResult::Ok { value, .. } = result else {
+        panic!("expected ok result, got {result:?}");
+    };
+    assert_eq!(
+        value,
+        Some(json!([
+            "custom",
+            true,
+            "set later",
+            "MyError",
+            "Error",
+            "TypeError"
+        ]))
+    );
+}
+
+// Port of sandbox.test.ts "reports errors whose name or message is not a string" (v1.1.0):
+// the prelude coerces them, so the host always receives string fields.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn reports_errors_whose_name_or_message_is_not_a_string() {
+    let sandbox = sandbox(Vec::new());
+    let result = ok_result(
+        sandbox
+            .execute(
+                "const error = new Error('x'); error.message = 42; throw error;".to_string(),
+                Default::default(),
+            )
+            .await,
+    )
+    .await;
+    let pi_codemode::types::CodemodeResult::Err { error, .. } = result else {
+        panic!("expected error result, got {result:?}");
+    };
+    assert_eq!(error.kind, CodemodeErrorKind::Script);
+    assert_eq!(error.name.as_deref(), Some("Error"));
+    assert_eq!(error.message, "42");
 }

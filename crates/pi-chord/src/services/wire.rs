@@ -60,13 +60,19 @@ pub enum WireServiceProviderUpdate {
         ops: Vec<WireOp>,
     },
     #[serde(rename = "reset")]
-    Reset { snapshot: WireServiceSubscriptionSnapshot },
+    Reset {
+        snapshot: WireServiceSubscriptionSnapshot,
+    },
     #[serde(rename = "unavailable")]
     Unavailable,
     #[serde(rename = "replaced")]
-    Replaced { snapshot: WireServiceInstanceSnapshot },
+    Replaced {
+        snapshot: WireServiceInstanceSnapshot,
+    },
     #[serde(rename = "spawned")]
-    Spawned { instance: WireServiceInstanceSnapshot },
+    Spawned {
+        instance: WireServiceInstanceSnapshot,
+    },
     #[serde(rename = "closed")]
     Closed { instance: ServiceInstanceAddress },
 }
@@ -98,7 +104,11 @@ pub fn create_service_catalogue_call() -> ServiceCall {
     }
 }
 
-pub fn create_service_subscribe_call(subscription_id: &str, service_id: &str, mode: ServiceMode) -> ServiceCall {
+pub fn create_service_subscribe_call(
+    subscription_id: &str,
+    service_id: &str,
+    mode: ServiceMode,
+) -> ServiceCall {
     ServiceCall {
         service_id: SERVICE_CONTROL_ID.to_string(),
         instance: None,
@@ -128,7 +138,9 @@ pub fn decode_service_control_call(call: &ServiceCall) -> Option<ServiceControlC
         return Some(ServiceControlCall::Catalogue);
     }
     if call.member == SERVICE_SUBSCRIBE_MEMBER && call.args.len() == 3 {
-        let (Some(subscription_id), Some(service_id)) = (is_id(&call.args[0]), is_id(&call.args[1])) else {
+        let (Some(subscription_id), Some(service_id)) =
+            (is_id(&call.args[0]), is_id(&call.args[1]))
+        else {
             return None;
         };
         let mode = match call.args[2].as_str() {
@@ -153,7 +165,12 @@ pub fn decode_service_control_call(call: &ServiceCall) -> Option<ServiceControlC
 /// Parse and validate a service call record.
 pub fn parse_service_call(value: &JsonValue) -> Result<ServiceCall, AnyError> {
     let record = record(value, "service call")?;
-    assert_keys(record, &["serviceId", "member", "args"], &["instance"], "service call")?;
+    assert_keys(
+        record,
+        &["serviceId", "member", "args"],
+        &["instance"],
+        "service call",
+    )?;
     let service_id = record
         .get("serviceId")
         .and_then(is_id)
@@ -187,13 +204,22 @@ pub fn parse_service_catalogue(value: &JsonValue) -> Result<Vec<ServiceCatalogue
     let mut ids = std::collections::HashSet::new();
     for candidate in entries {
         let entry = record(candidate, "service catalogue entry")?;
-        assert_keys(entry, &["serviceId", "mode"], &[], "service catalogue entry")?;
+        assert_keys(
+            entry,
+            &["serviceId", "mode"],
+            &[],
+            "service catalogue entry",
+        )?;
         let service_id = entry
             .get("serviceId")
             .and_then(is_id)
             .ok_or_else(|| type_error("Invalid service catalogue"))?;
-        let mode = parse_mode(entry.get("mode").ok_or_else(|| type_error("Invalid service catalogue"))?)
-            .ok_or_else(|| type_error("Invalid service catalogue"))?;
+        let mode = parse_mode(
+            entry
+                .get("mode")
+                .ok_or_else(|| type_error("Invalid service catalogue"))?,
+        )
+        .ok_or_else(|| type_error("Invalid service catalogue"))?;
         if ids.contains(&service_id) {
             return Err(type_error("Invalid service catalogue"));
         }
@@ -204,13 +230,19 @@ pub fn parse_service_catalogue(value: &JsonValue) -> Result<Vec<ServiceCatalogue
 }
 
 /// Parse and validate a subscription snapshot with decoded operations.
-pub fn parse_service_subscription_snapshot(value: &JsonValue) -> Result<ServiceSubscriptionSnapshot, AnyError> {
-    assert_subscription_snapshot(value, |op| assert_valid_raw_op(op).map_err(|err| type_error(err.to_string())))?;
+pub fn parse_service_subscription_snapshot(
+    value: &JsonValue,
+) -> Result<ServiceSubscriptionSnapshot, AnyError> {
+    assert_subscription_snapshot(value, |op| {
+        assert_valid_raw_op(op).map_err(|err| type_error(err.to_string()))
+    })?;
     deserialize_assuming_valid(value)
 }
 
 /// Parse and validate a subscription snapshot with wire operations.
-pub fn parse_wire_service_subscription_snapshot(value: &JsonValue) -> Result<WireServiceSubscriptionSnapshot, AnyError> {
+pub fn parse_wire_service_subscription_snapshot(
+    value: &JsonValue,
+) -> Result<WireServiceSubscriptionSnapshot, AnyError> {
     assert_subscription_snapshot(value, |op| {
         assert_valid_wire_op(op).map_err(|_| type_error("invalid op"))
     })?;
@@ -219,12 +251,16 @@ pub fn parse_wire_service_subscription_snapshot(value: &JsonValue) -> Result<Wir
 
 /// Parse and validate a provider update with decoded operations.
 pub fn parse_service_provider_update(value: &JsonValue) -> Result<ServiceProviderUpdate, AnyError> {
-    assert_provider_update(value, |op| assert_valid_raw_op(op).map_err(|err| type_error(err.to_string())))?;
+    assert_provider_update(value, |op| {
+        assert_valid_raw_op(op).map_err(|err| type_error(err.to_string()))
+    })?;
     deserialize_assuming_valid(value)
 }
 
 /// Parse and validate a provider update with wire operations.
-pub fn parse_wire_service_provider_update(value: &JsonValue) -> Result<WireServiceProviderUpdate, AnyError> {
+pub fn parse_wire_service_provider_update(
+    value: &JsonValue,
+) -> Result<WireServiceProviderUpdate, AnyError> {
     assert_provider_update(value, |op| {
         assert_valid_wire_op(op).map_err(|_| type_error("invalid op"))
     })?;
@@ -246,8 +282,12 @@ fn assert_subscription_snapshot(
         .get("serviceId")
         .and_then(is_id)
         .ok_or_else(|| type_error("Invalid service subscription snapshot"))?;
-    parse_mode(snapshot.get("mode").ok_or_else(|| type_error("Invalid service subscription snapshot"))?)
-        .ok_or_else(|| type_error("Invalid service subscription snapshot"))?;
+    parse_mode(
+        snapshot
+            .get("mode")
+            .ok_or_else(|| type_error("Invalid service subscription snapshot"))?,
+    )
+    .ok_or_else(|| type_error("Invalid service subscription snapshot"))?;
     let instances = snapshot
         .get("instances")
         .and_then(JsonValue::as_array)
@@ -267,7 +307,12 @@ fn assert_provider_update(
     let kind = update.get("type").and_then(JsonValue::as_str).unwrap_or("");
     match kind {
         "state" => {
-            assert_keys(update, &["type", "member", "sequence", "ops"], &["instance"], "state update")?;
+            assert_keys(
+                update,
+                &["type", "member", "sequence", "ops"],
+                &["instance"],
+                "state update",
+            )?;
             if update.get("member").and_then(is_id).is_none()
                 || !is_integer(update.get("sequence"), 1)
                 || update.get("ops").and_then(JsonValue::as_array).is_none()
@@ -284,17 +329,29 @@ fn assert_provider_update(
         }
         "reset" => {
             assert_keys(update, &["type", "snapshot"], &[], "reset update")?;
-            let snapshot = update.get("snapshot").ok_or_else(|| type_error("Invalid service provider update"))?;
+            let snapshot = update
+                .get("snapshot")
+                .ok_or_else(|| type_error("Invalid service provider update"))?;
             assert_subscription_snapshot(snapshot, &assert_op)?;
             let instances = snapshot["instances"].as_array().expect("checked");
             for instance in instances {
                 for member in instance["members"].as_array().into_iter().flatten() {
                     if member["kind"] == "state" {
-                        let ops = member["ops"].as_array().into_iter().flatten().collect::<Vec<_>>();
-                        let is_full_replacement =
-                            ops.len() == 1 && ops[0].as_array().and_then(|tuple| tuple.first()).and_then(JsonValue::as_str) == Some("r");
+                        let ops = member["ops"]
+                            .as_array()
+                            .into_iter()
+                            .flatten()
+                            .collect::<Vec<_>>();
+                        let is_full_replacement = ops.len() == 1
+                            && ops[0]
+                                .as_array()
+                                .and_then(|tuple| tuple.first())
+                                .and_then(JsonValue::as_str)
+                                == Some("r");
                         if !is_full_replacement {
-                            return Err(type_error("Service reset must contain full root replacements"));
+                            return Err(type_error(
+                                "Service reset must contain full root replacements",
+                            ));
                         }
                     }
                 }
@@ -307,19 +364,25 @@ fn assert_provider_update(
         }
         "replaced" => {
             assert_keys(update, &["type", "snapshot"], &[], "replacement update")?;
-            let snapshot = update.get("snapshot").ok_or_else(|| type_error("Invalid service provider update"))?;
+            let snapshot = update
+                .get("snapshot")
+                .ok_or_else(|| type_error("Invalid service provider update"))?;
             assert_instance(snapshot, &assert_op)?;
             Ok(())
         }
         "spawned" => {
             assert_keys(update, &["type", "instance"], &[], "spawn update")?;
-            let instance = update.get("instance").ok_or_else(|| type_error("Invalid service provider update"))?;
+            let instance = update
+                .get("instance")
+                .ok_or_else(|| type_error("Invalid service provider update"))?;
             assert_instance(instance, &assert_op)?;
             Ok(())
         }
         "closed" => {
             assert_keys(update, &["type", "instance"], &[], "close update")?;
-            let instance = update.get("instance").ok_or_else(|| type_error("Invalid service provider update"))?;
+            let instance = update
+                .get("instance")
+                .ok_or_else(|| type_error("Invalid service provider update"))?;
             assert_address(instance)?;
             Ok(())
         }
@@ -332,7 +395,12 @@ fn assert_instance(
     assert_op: &impl Fn(&WireOp) -> Result<(), AnyError>,
 ) -> Result<(), AnyError> {
     let instance = record(value, "service instance snapshot")?;
-    assert_keys(instance, &["members"], &["instance"], "service instance snapshot")?;
+    assert_keys(
+        instance,
+        &["members"],
+        &["instance"],
+        "service instance snapshot",
+    )?;
     if let Some(address) = instance.get("instance") {
         assert_address(address)?;
     }
@@ -351,7 +419,12 @@ fn assert_instance(
             continue;
         }
         if kind == "state" {
-            assert_keys(member, &["name", "kind", "sequence", "ops"], &[], "service state snapshot")?;
+            assert_keys(
+                member,
+                &["name", "kind", "sequence", "ops"],
+                &[],
+                "service state snapshot",
+            )?;
             if member.get("name").and_then(is_id).is_none()
                 || !is_integer(member.get("sequence"), 0)
                 || member.get("ops").and_then(JsonValue::as_array).is_none()
@@ -370,7 +443,12 @@ fn assert_instance(
 
 fn assert_address(value: &JsonValue) -> Result<ServiceInstanceAddress, AnyError> {
     let address = record(value, "service instance address")?;
-    assert_keys(address, &["key", "generation"], &[], "service instance address")?;
+    assert_keys(
+        address,
+        &["key", "generation"],
+        &[],
+        "service instance address",
+    )?;
     let key = address
         .get("key")
         .and_then(is_id)
@@ -382,7 +460,10 @@ fn assert_address(value: &JsonValue) -> Result<ServiceInstanceAddress, AnyError>
     Ok(ServiceInstanceAddress { key, generation })
 }
 
-fn record<'a>(value: &'a JsonValue, description: &str) -> Result<&'a serde_json::Map<String, JsonValue>, AnyError> {
+fn record<'a>(
+    value: &'a JsonValue,
+    description: &str,
+) -> Result<&'a serde_json::Map<String, JsonValue>, AnyError> {
     value
         .as_object()
         .ok_or_else(|| type_error(format!("Invalid {description}")))
@@ -394,7 +475,8 @@ fn assert_keys(
     optional: &[&str],
     description: &str,
 ) -> Result<(), AnyError> {
-    let allowed: std::collections::HashSet<&str> = required.iter().chain(optional).copied().collect();
+    let allowed: std::collections::HashSet<&str> =
+        required.iter().chain(optional).copied().collect();
     if required.iter().any(|key| !value.contains_key(*key))
         || value.keys().any(|key| !allowed.contains(key.as_str()))
     {
@@ -432,6 +514,8 @@ fn is_integer(value: Option<&JsonValue>, minimum: i64) -> bool {
 }
 
 /// Validation already succeeded; convert the value through serde.
-fn deserialize_assuming_valid<T: serde::de::DeserializeOwned>(value: &JsonValue) -> Result<T, AnyError> {
+fn deserialize_assuming_valid<T: serde::de::DeserializeOwned>(
+    value: &JsonValue,
+) -> Result<T, AnyError> {
     serde_json::from_value(value.clone()).map_err(|serde_error| error(serde_error.to_string()))
 }

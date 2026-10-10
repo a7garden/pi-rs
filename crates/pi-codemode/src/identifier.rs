@@ -12,7 +12,11 @@ pub fn to_codemode_identifier(name: &str) -> String {
         };
         identifier.push(if valid { ch } else { '_' });
     }
-    if identifier.is_empty() { "_".to_string() } else { identifier }
+    if identifier.is_empty() {
+        "_".to_string()
+    } else {
+        identifier
+    }
 }
 
 #[cfg(test)]
@@ -21,7 +25,10 @@ mod tests {
 
     #[test]
     fn normalizes_invalid_characters() {
-        assert_eq!(to_codemode_identifier("mcp__docs__search"), "mcp__docs__search");
+        assert_eq!(
+            to_codemode_identifier("mcp__docs__search"),
+            "mcp__docs__search"
+        );
         assert_eq!(to_codemode_identifier("my-tool"), "my_tool");
         assert_eq!(to_codemode_identifier(""), "_");
         assert_eq!(to_codemode_identifier("9lives"), "_lives");

@@ -1,4 +1,4 @@
-//! Port of `@earendil-works/pi-codemode` (upstream: `packages/codemode`), v1.0.3.
+//! Port of `@earendil-works/pi-codemode` (upstream: `packages/codemode`), v1.1.0.
 //!
 //! Codemode is sandboxed JavaScript execution where the only capability is calling injected
 //! tools: each run goes into a fresh QuickJS VM (its own wasm instance) inside a worker, the
@@ -49,13 +49,15 @@
 //! - **Sandbox test scope.** Upstream `test/sandbox.test.ts` runs real JS in QuickJS. Cases
 //!   asserting host-side behavior (timeouts, aborts, close, call records, store snapshot
 //!   serialization, worker/wasm failure paths, registration validation, parallel execution
-//!   isolation) are ported in `tests/sandbox.rs` against an in-process worker fake that
-//!   reproduces the upstream host/worker protocol semantics. Cases whose assertions live
-//!   inside JS semantics of the VM (script values, `image()`/`text()` validation, V8-shaped
-//!   stacks and line numbers, the `tools` guard proxy messages, store size errors raised by
-//!   the prelude, escape hatches like eval/`Function`/import denial, deep-recursion
-//!   `RangeError`, output-limit enforcement inside the prelude) cannot be expressed without
-//!   a real JS engine and are deferred to pi-runtime's QuickJS integration.
+//!   isolation, broken-bridge sandbox errors posted by a raw worker, the `console: true`
+//!   flag on console items) are ported in `tests/sandbox.rs` against an in-process worker
+//!   fake that reproduces the upstream host/worker protocol semantics. Cases whose assertions
+//!   live inside JS semantics of the VM (script values, `image()`/`text()` validation,
+//!   V8-shaped stacks and line numbers, the `tools` guard proxy messages, store size errors
+//!   raised by the prelude, escape hatches like eval/`Function`/import denial, deep-recursion
+//!   `RangeError`, output-limit enforcement inside the prelude, the built-in lockdown and
+//!   error-description coercion the prelude performs inside the VM) cannot be expressed
+//!   without a real JS engine and are deferred to pi-runtime's QuickJS integration.
 //! - **`CodemodeJsonSchema`** is `serde_json::Value` (upstream `{ [key]: unknown } | boolean`);
 //!   non-object non-boolean values render as `unknown`, matching the upstream `isObject`
 //!   guards.
@@ -77,12 +79,13 @@ pub mod wasm;
 
 // Mirrors upstream `src/index.ts` re-exports.
 pub use declarations::{
-    mcp_structured_content_schema, render_declarations, render_tool_output_type, render_tool_sample,
-    render_tool_signature, schema_to_type, to_codemode_identifier, MCP_TYPESCRIPT_PREAMBLE,
-    DEFAULT_INPUT_SCHEMA_MAX_CHARS, RenderDeclarationsOptions, SampleTool, SignatureTool,
+    mcp_structured_content_schema, render_declarations, render_tool_output_type,
+    render_tool_sample, render_tool_signature, schema_to_type, to_codemode_identifier,
+    RenderDeclarationsOptions, SampleTool, SignatureTool, DEFAULT_INPUT_SCHEMA_MAX_CHARS,
+    MCP_TYPESCRIPT_PREAMBLE,
 };
 pub use runtime::host::{
-    CodemodeSandbox, CodemodeSandboxOptions, CodeModeWorkerFactory, NoWorkerFactory, RunningWorker,
+    CodeModeWorkerFactory, CodemodeSandbox, CodemodeSandboxOptions, NoWorkerFactory, RunningWorker,
     WorkerHandle,
 };
 pub use runtime::prelude_source::{

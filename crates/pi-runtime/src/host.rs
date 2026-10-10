@@ -22,10 +22,7 @@ fn op_runtime_console(#[string] text: &str) {
     tracing::info!(target: "pi::js", "{text}");
 }
 
-deno_core::extension!(
-    pi_runtime_console,
-    ops = [op_runtime_console],
-);
+deno_core::extension!(pi_runtime_console, ops = [op_runtime_console],);
 
 /// Ops every runtime gets (console bridge); consumers append their own.
 pub(crate) fn base_extensions() -> Vec<Extension> {
@@ -53,7 +50,10 @@ pub(crate) fn make_runtime(
 pub(crate) fn js_error_parts(error: &JsError) -> (String, String, Option<String>) {
     let name = error.name.clone().unwrap_or_else(|| "Error".to_string());
     let message = error.message.clone().unwrap_or_default();
-    let stack = error.stack.clone().map(|stack| stack.trim_end().to_string());
+    let stack = error
+        .stack
+        .clone()
+        .map(|stack| stack.trim_end().to_string());
     (name, message, stack)
 }
 

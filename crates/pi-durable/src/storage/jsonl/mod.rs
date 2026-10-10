@@ -33,4 +33,6 @@ mod storage;
 #[cfg(test)]
 mod storage_tests;
 
-pub use storage::{JsonlCorruptionError, JsonlError, JsonlStorage, JsonlStorageOptions, JsonlStoragePoisonedError};
+pub use storage::{
+    JsonlCorruptionError, JsonlError, JsonlStorage, JsonlStorageOptions, JsonlStoragePoisonedError,
+};

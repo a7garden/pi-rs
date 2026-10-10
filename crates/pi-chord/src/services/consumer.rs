@@ -16,31 +16,35 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc};
+use std::sync::Arc;
 use {parking_lot::Mutex, parking_lot::MutexGuard};
 
 use async_trait::async_trait;
 use futures::future::try_join_all;
 
-use crate::context::{await_with_context, BACKGROUND_CONTEXT, Context};
+use crate::context::{await_with_context, Context, BACKGROUND_CONTEXT};
 use crate::delta::Op;
 use crate::json::JsonValue;
 use crate::services::errors::{
     error, remote_service_error, type_error, AggregateError, AnyError, RemoteServiceErrorCode,
 };
-use crate::services::instances::{InstanceDirectory, InstanceDirectoryEntry, InstanceObserverHandler};
+use crate::services::instances::{
+    InstanceDirectory, InstanceDirectoryEntry, InstanceObserverHandler,
+};
 use crate::services::state::{service_delivery_context, ReplicatedStateReplica};
 use crate::types::{
-    arc_error, BoxFuture, KeyedObservationHandler, RemoteServiceBindingOptions, RemoteServiceTransport,
-    RemoteServices, ReplicatedState, ServiceCall, ServiceClientHandle, ServiceInstanceAddress,
-    ServiceInstanceSnapshot, ServiceMemberSnapshot, ServiceMode, ServiceProviderUpdate,
-    ServiceSubscription, ServiceSubscriptionSnapshot, StateListener, UpdateListener, Unsubscribe,
+    arc_error, BoxFuture, KeyedObservationHandler, RemoteServiceBindingOptions,
+    RemoteServiceTransport, RemoteServices, ReplicatedState, ServiceCall, ServiceClientHandle,
+    ServiceInstanceAddress, ServiceInstanceSnapshot, ServiceMemberSnapshot, ServiceMode,
+    ServiceProviderUpdate, ServiceSubscription, ServiceSubscriptionSnapshot, StateListener,
+    Unsubscribe, UpdateListener,
 };
 
 type AccessChecker = Arc<dyn Fn() -> Result<(), AnyError> + Send + Sync>;
 type IsActive = Arc<dyn Fn() -> bool + Send + Sync>;
-type MemberInvoke =
-    Arc<dyn Fn(Vec<JsonValue>, Context) -> BoxFuture<Result<Option<JsonValue>, AnyError>> + Send + Sync>;
+type MemberInvoke = Arc<
+    dyn Fn(Vec<JsonValue>, Context) -> BoxFuture<Result<Option<JsonValue>, AnyError>> + Send + Sync,
+>;
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock()
@@ -309,7 +313,11 @@ impl ServiceFacade {
         &self.service_id
     }
 
-    pub fn install(&self, snapshot: &ServiceInstanceSnapshot, context: &Context) -> Result<(), AnyError> {
+    pub fn install(
+        &self,
+        snapshot: &ServiceInstanceSnapshot,
+        context: &Context,
+    ) -> Result<(), AnyError> {
         if !same_address(snapshot.instance.as_ref(), self.address.as_ref()) {
             return Err(error("Remote service snapshot has the wrong address"));
         }
@@ -334,7 +342,11 @@ impl ServiceFacade {
         }
         for member in &snapshot.members {
             match member {
-                ServiceMemberSnapshot::State { name, sequence, ops } => {
+                ServiceMemberSnapshot::State {
+                    name,
+                    sequence,
+                    ops,
+                } => {
                     let slot = self.slot(name)?;
                     slot.hydrate(*sequence, ops, context)?;
                 }
@@ -409,7 +421,9 @@ impl ServiceFacade {
         if let Some(kind) = kind {
             slot.set_description(kind)?;
         }
-        lock(&self.state).slots.insert(member.to_string(), Arc::clone(&slot));
+        lock(&self.state)
+            .slots
+            .insert(member.to_string(), Arc::clone(&slot));
         Ok(slot)
     }
 }
@@ -547,7 +561,10 @@ impl KeyedBinding {
         })
     }
 
-    fn observe(me: &Arc<KeyedBinding>, handler: KeyedObservationHandler) -> Result<Unsubscribe, AnyError> {
+    fn observe(
+        me: &Arc<KeyedBinding>,
+        handler: KeyedObservationHandler,
+    ) -> Result<Unsubscribe, AnyError> {
         if me.closed.load(Ordering::SeqCst) {
             return Err(error("Remote keyed service binding is closed"));
         }
@@ -580,7 +597,11 @@ impl KeyedBinding {
         }))
     }
 
-    async fn rebind(me: &Arc<KeyedBinding>, bound: bool, context: &Context) -> Result<(), AnyError> {
+    async fn rebind(
+        me: &Arc<KeyedBinding>,
+        bound: bool,
+        context: &Context,
+    ) -> Result<(), AnyError> {
         if me.closed.load(Ordering::SeqCst) {
             return Ok(());
         }
@@ -633,12 +654,13 @@ impl KeyedBinding {
     fn start(me: &Arc<KeyedBinding>, revision: u64) -> Arc<StartingTask> {
         let transport = Arc::clone(&me.transport);
         let listener_binding = Arc::clone(me);
-        let listener: UpdateListener = Arc::new(move |update: &ServiceProviderUpdate, context: &Context| {
-            if listener_binding.revision.load(Ordering::SeqCst) != revision {
-                return;
-            }
-            listener_binding.handle_update(update, context);
-        });
+        let listener: UpdateListener =
+            Arc::new(move |update: &ServiceProviderUpdate, context: &Context| {
+                if listener_binding.revision.load(Ordering::SeqCst) != revision {
+                    return;
+                }
+                listener_binding.handle_update(update, context);
+            });
         let on_error_at_settle = {
             let binding = Arc::clone(me);
             Box::new(move |failure: AnyError| {
@@ -653,7 +675,12 @@ impl KeyedBinding {
         let binding = Arc::clone(me);
         let future: BoxFuture<Result<(), AnyError>> = Box::pin(async move {
             let subscription = transport
-                .subscribe(&binding.service_id, ServiceMode::Keyed, listener, &BACKGROUND_CONTEXT)
+                .subscribe(
+                    &binding.service_id,
+                    ServiceMode::Keyed,
+                    listener,
+                    &BACKGROUND_CONTEXT,
+                )
                 .await?;
             if binding.closed.load(Ordering::SeqCst)
                 || !binding.bound.load(Ordering::SeqCst)
@@ -696,7 +723,11 @@ impl KeyedBinding {
         }
     }
 
-    fn apply_update(&self, update: &ServiceProviderUpdate, context: &Context) -> Result<(), AnyError> {
+    fn apply_update(
+        &self,
+        update: &ServiceProviderUpdate,
+        context: &Context,
+    ) -> Result<(), AnyError> {
         match update {
             ServiceProviderUpdate::Reset { snapshot } => {
                 validate_reset_snapshot(snapshot, &self.service_id, ServiceMode::Keyed)?;
@@ -842,7 +873,9 @@ impl RemoteServiceBinding {
         let mut seen = HashSet::new();
         for id in &options.services {
             if !seen.insert(id.as_str()) {
-                return Err(type_error("Remote service binding has duplicate service IDs"));
+                return Err(type_error(
+                    "Remote service binding has duplicate service IDs",
+                ));
             }
         }
         Ok(RemoteServiceBinding {
@@ -998,25 +1031,31 @@ fn start_singleton_task(
     let listener_binding = Arc::clone(binding);
     let listener_report = Arc::clone(report_error);
     let listener_service_id = service_id.to_string();
-    let listener: UpdateListener = Arc::new(move |update: &ServiceProviderUpdate, context: &Context| {
-        if !listener_active.load(Ordering::SeqCst)
-            || listener_binding.revision.load(Ordering::SeqCst) != revision
-        {
-            return;
-        }
-        if let Err(failure) =
-            handle_singleton_update(&listener_binding, &listener_service_id, update, context)
-        {
-            listener_report(failure);
-        }
-    });
+    let listener: UpdateListener =
+        Arc::new(move |update: &ServiceProviderUpdate, context: &Context| {
+            if !listener_active.load(Ordering::SeqCst)
+                || listener_binding.revision.load(Ordering::SeqCst) != revision
+            {
+                return;
+            }
+            if let Err(failure) =
+                handle_singleton_update(&listener_binding, &listener_service_id, update, context)
+            {
+                listener_report(failure);
+            }
+        });
     let flags_for_task = Arc::clone(flags);
     let binding_for_task = Arc::clone(binding);
     let transport = Arc::clone(transport);
     let service_id = service_id.to_string();
     let future: BoxFuture<Result<(), AnyError>> = Box::pin(async move {
         let subscription = transport
-            .subscribe(&service_id, ServiceMode::Singleton, listener, &BACKGROUND_CONTEXT)
+            .subscribe(
+                &service_id,
+                ServiceMode::Singleton,
+                listener,
+                &BACKGROUND_CONTEXT,
+            )
             .await?;
         if !binding_for_task.active.load(Ordering::SeqCst)
             || flags_for_task.disposed.load(Ordering::SeqCst)
@@ -1116,7 +1155,9 @@ impl RemoteServices for RemoteServiceBinding {
             subscription: Mutex::new(None),
             starting: Mutex::new(None),
         });
-        inner.singletons.insert(service_id.to_string(), Arc::clone(&binding));
+        inner
+            .singletons
+            .insert(service_id.to_string(), Arc::clone(&binding));
         inner.readiness_revision += 1;
         if self.flags.bound.load(Ordering::SeqCst) {
             let revision = binding.revision.load(Ordering::SeqCst);
@@ -1148,7 +1189,11 @@ impl RemoteServices for RemoteServiceBinding {
         Ok(facade as Arc<dyn ServiceClientHandle>)
     }
 
-    fn observe(&self, service_id: &str, handler: KeyedObservationHandler) -> Result<Unsubscribe, AnyError> {
+    fn observe(
+        &self,
+        service_id: &str,
+        handler: KeyedObservationHandler,
+    ) -> Result<Unsubscribe, AnyError> {
         self.assert_available(service_id, ServiceMode::Keyed)?;
         let binding = {
             let mut inner = lock(&self.inner);
@@ -1162,7 +1207,9 @@ impl RemoteServices for RemoteServiceBinding {
                         self.handle_access_checker(),
                         self.flags.bound.load(Ordering::SeqCst),
                     );
-                    inner.keyed.insert(service_id.to_string(), Arc::clone(&binding));
+                    inner
+                        .keyed
+                        .insert(service_id.to_string(), Arc::clone(&binding));
                     inner.readiness_revision += 1;
                     binding
                 }
@@ -1299,10 +1346,14 @@ fn validate_reset_snapshot(
     for instance in &snapshot.instances {
         if mode == ServiceMode::Singleton {
             if instance.instance.is_some() {
-                return Err(error("Remote service reset has an invalid instance address"));
+                return Err(error(
+                    "Remote service reset has an invalid instance address",
+                ));
             }
         } else if instance.instance.is_none() {
-            return Err(error("Remote service reset has an invalid instance address"));
+            return Err(error(
+                "Remote service reset has an invalid instance address",
+            ));
         }
         if let Some(address) = &instance.instance {
             if !keys.insert(address.key.as_str()) {
@@ -1311,9 +1362,12 @@ fn validate_reset_snapshot(
         }
         for member in &instance.members {
             if let ServiceMemberSnapshot::State { ops, .. } = member {
-                let is_root_replacement = ops.len() == 1 && matches!(ops.first(), Some(Op::Replace(_)));
+                let is_root_replacement =
+                    ops.len() == 1 && matches!(ops.first(), Some(Op::Replace(_)));
                 if !is_root_replacement {
-                    return Err(error("Remote service reset must contain full root replacements"));
+                    return Err(error(
+                        "Remote service reset must contain full root replacements",
+                    ));
                 }
             }
         }
@@ -1321,7 +1375,9 @@ fn validate_reset_snapshot(
     Ok(())
 }
 
-fn validate_members(members: &[ServiceMemberSnapshot]) -> Result<BTreeMap<String, &'static str>, AnyError> {
+fn validate_members(
+    members: &[ServiceMemberSnapshot],
+) -> Result<BTreeMap<String, &'static str>, AnyError> {
     let mut result = BTreeMap::new();
     for member in members {
         if member.name().is_empty() || result.contains_key(member.name()) {
@@ -1332,7 +1388,10 @@ fn validate_members(members: &[ServiceMemberSnapshot]) -> Result<BTreeMap<String
     Ok(result)
 }
 
-fn same_address(left: Option<&ServiceInstanceAddress>, right: Option<&ServiceInstanceAddress>) -> bool {
+fn same_address(
+    left: Option<&ServiceInstanceAddress>,
+    right: Option<&ServiceInstanceAddress>,
+) -> bool {
     match (left, right) {
         (None, None) => true,
         (Some(left), Some(right)) => left.key == right.key && left.generation == right.generation,
@@ -1350,7 +1409,9 @@ mod tests {
     use super::*;
     use crate::context::BACKGROUND_CONTEXT;
     use crate::services::loopback::create_loopback_service_transport;
-    use crate::services::provider::tests::{object_with_state, update_kind as provider_update_kind, FakeState};
+    use crate::services::provider::tests::{
+        object_with_state, update_kind as provider_update_kind, FakeState,
+    };
     use crate::services::provider::{ProviderDefinition, RemoteServiceProvider};
     use crate::types::{RemoteServiceTransport, RemoteServices, ServiceMemberSnapshot};
     use serde_json::json;
@@ -1377,7 +1438,10 @@ mod tests {
         }
     }
 
-    fn error_sink() -> (crate::types::arc_error::ErrorHandler, Arc<Mutex<Vec<String>>>) {
+    fn error_sink() -> (
+        crate::types::arc_error::ErrorHandler,
+        Arc<Mutex<Vec<String>>>,
+    ) {
         let errors = Arc::new(Mutex::new(Vec::new()));
         let sink = Arc::clone(&errors);
         (
@@ -1411,8 +1475,11 @@ mod tests {
 
     async fn singleton_provider() -> (StdArc<RemoteServiceProvider>, Arc<FakeState>) {
         let provider = StdArc::new(
-            RemoteServiceProvider::new(vec![ProviderDefinition::new("test.models", ServiceMode::Singleton)])
-                .expect("provider"),
+            RemoteServiceProvider::new(vec![ProviderDefinition::new(
+                "test.models",
+                ServiceMode::Singleton,
+            )])
+            .expect("provider"),
         );
         let state = FakeState::new(json!({ "selected": null, "revision": 0 }));
         let received = Arc::new(Mutex::new(Vec::<(JsonValue, Context)>::new()));
@@ -1421,7 +1488,11 @@ mod tests {
         let method: crate::services::provider::tests::TestMethod = {
             let state = Arc::clone(&state);
             Box::new(move |mut args: Vec<JsonValue>, context: Context| {
-                let model = if args.is_empty() { JsonValue::Null } else { args.remove(0) };
+                let model = if args.is_empty() {
+                    JsonValue::Null
+                } else {
+                    args.remove(0)
+                };
                 sink.lock().push((model.clone(), context.clone()));
                 let next = revision.fetch_add(1, Ordering::SeqCst) + 1;
                 state.replace_with(json!({ "selected": model, "revision": next }), &context);
@@ -1440,8 +1511,11 @@ mod tests {
         // identity is unportable (Rust hands each side owned JSON trees), so the
         // round trip is asserted by content.
         let provider = StdArc::new(
-            RemoteServiceProvider::new(vec![ProviderDefinition::new("test.echo", ServiceMode::Singleton)])
-                .expect("provider"),
+            RemoteServiceProvider::new(vec![ProviderDefinition::new(
+                "test.echo",
+                ServiceMode::Singleton,
+            )])
+            .expect("provider"),
         );
         let received = Arc::new(Mutex::new(Vec::<JsonValue>::new()));
         let sink = Arc::clone(&received);
@@ -1464,7 +1538,11 @@ mod tests {
         let echo = binding.use_service("test.echo").expect("use");
         binding.ready(&BACKGROUND_CONTEXT).await.expect("ready");
         let response = echo
-            .invoke("echo", vec![json!({ "value": "request" })], &BACKGROUND_CONTEXT)
+            .invoke(
+                "echo",
+                vec![json!({ "value": "request" })],
+                &BACKGROUND_CONTEXT,
+            )
             .await
             .expect("invoke");
         assert_eq!(response, Some(json!({ "value": "response" })));
@@ -1513,13 +1591,19 @@ mod tests {
             )
             .await
             .expect("select");
-        assert_eq!(first_state.value(), Some(&json!({
-            "selected": { "provider": "test", "modelId": "one" },
-            "revision": 1,
-        })));
+        assert_eq!(
+            first_state.value(),
+            Some(&json!({
+                "selected": { "provider": "test", "modelId": "one" },
+                "revision": 1,
+            }))
+        );
         assert_eq!(
             *lock(&updates),
-            vec![initial, json!({ "selected": { "provider": "test", "modelId": "one" }, "revision": 1 })]
+            vec![
+                initial,
+                json!({ "selected": { "provider": "test", "modelId": "one" }, "revision": 1 })
+            ]
         );
         assert!(lock(&errors).is_empty());
 
@@ -1529,13 +1613,28 @@ mod tests {
         ))
         .expect("late binding");
         let late = late_namespace.use_service("test.models").expect("late use");
-        late_namespace.ready(&BACKGROUND_CONTEXT).await.expect("late ready");
-        let late_state = late.state("state").expect("late state").expect("state member");
-        assert_eq!(late_state.value().expect("state hydrated")["revision"], json!(1));
+        late_namespace
+            .ready(&BACKGROUND_CONTEXT)
+            .await
+            .expect("late ready");
+        let late_state = late
+            .state("state")
+            .expect("late state")
+            .expect("state member");
+        assert_eq!(
+            late_state.value().expect("state hydrated")["revision"],
+            json!(1)
+        );
 
         unsubscribe();
-        namespace.dispose(&BACKGROUND_CONTEXT).await.expect("dispose");
-        late_namespace.dispose(&BACKGROUND_CONTEXT).await.expect("dispose");
+        namespace
+            .dispose(&BACKGROUND_CONTEXT)
+            .await
+            .expect("dispose");
+        late_namespace
+            .dispose(&BACKGROUND_CONTEXT)
+            .await
+            .expect("dispose");
         provider.dispose().expect("dispose");
     }
 
@@ -1545,23 +1644,33 @@ mod tests {
     ) -> Unsubscribe {
         let state = handle.state("state").expect("state").expect("state member");
         let on_value = StdArc::new(on_value);
-        state.subscribe(Arc::new(move |value: &JsonValue, _context: &Context, _delivery: &crate::types::ReplicatedStateDelivery| {
-            let on_value = StdArc::clone(&on_value);
-            let value = value.clone();
-            Box::pin(async move { on_value(&value) }) as BoxFuture<()>
-        }))
+        state.subscribe(Arc::new(
+            move |value: &JsonValue,
+                  _context: &Context,
+                  _delivery: &crate::types::ReplicatedStateDelivery| {
+                let on_value = StdArc::clone(&on_value);
+                let value = value.clone();
+                Box::pin(async move { on_value(&value) }) as BoxFuture<()>
+            },
+        ))
     }
 
     #[tokio::test]
     async fn publishes_compact_tracked_operations_through_the_binding() {
         let provider = StdArc::new(
-            RemoteServiceProvider::new(vec![ProviderDefinition::new("test.timeline", ServiceMode::Singleton)])
-                .expect("provider"),
+            RemoteServiceProvider::new(vec![ProviderDefinition::new(
+                "test.timeline",
+                ServiceMode::Singleton,
+            )])
+            .expect("provider"),
         );
         let initial = json!({ "entries": [{ "id": "one" }], "retained": { "value": 1 } });
         let state = FakeState::new(initial.clone());
         provider
-            .provide("test.timeline", object_with_state(&state, "extend", method_noop()))
+            .provide(
+                "test.timeline",
+                object_with_state(&state, "extend", method_noop()),
+            )
             .expect("provide");
         let updates: Arc<Mutex<Vec<ServiceProviderUpdate>>> = Arc::new(Mutex::new(Vec::new()));
         let sink = Arc::clone(&updates);
@@ -1588,7 +1697,10 @@ mod tests {
         .expect("binding");
         let timeline = namespace.use_service("test.timeline").expect("use");
         namespace.ready(&BACKGROUND_CONTEXT).await.expect("ready");
-        let timeline_state = timeline.state("state").expect("state").expect("state member");
+        let timeline_state = timeline
+            .state("state")
+            .expect("state")
+            .expect("state member");
         assert_eq!(
             timeline_state.value(),
             Some(&json!({ "entries": [{ "id": "one" }], "retained": { "value": 1 } }))
@@ -1604,7 +1716,9 @@ mod tests {
         );
         assert_eq!(
             timeline_state.value(),
-            Some(&json!({ "entries": [{ "id": "one" }, { "id": "two" }], "retained": { "value": 1 } }))
+            Some(
+                &json!({ "entries": [{ "id": "one" }, { "id": "two" }], "retained": { "value": 1 } })
+            )
         );
         assert!(lock(&updates).iter().any(|update| {
             serde_json::to_value(update).expect("update")
@@ -1616,7 +1730,10 @@ mod tests {
                 })
         }));
 
-        namespace.dispose(&BACKGROUND_CONTEXT).await.expect("dispose");
+        namespace
+            .dispose(&BACKGROUND_CONTEXT)
+            .await
+            .expect("dispose");
         futures::executor::block_on(raw.close(None));
         provider.dispose().expect("dispose");
     }
@@ -1624,8 +1741,11 @@ mod tests {
     #[tokio::test]
     async fn keeps_singleton_facades_stable_when_their_provider_is_replaced() {
         let provider = StdArc::new(
-            RemoteServiceProvider::new(vec![ProviderDefinition::new("test.models", ServiceMode::Singleton)])
-                .expect("provider"),
+            RemoteServiceProvider::new(vec![ProviderDefinition::new(
+                "test.models",
+                ServiceMode::Singleton,
+            )])
+            .expect("provider"),
         );
         let initial_state = FakeState::new(json!({ "selected": null, "revision": 1 }));
         provider
@@ -1647,15 +1767,19 @@ mod tests {
         let replacement_calls = Arc::new(Mutex::new(0usize));
         provider.withdraw("test.models").expect("withdraw");
         assert!(state.value().is_none());
-        let error = err_of(models
-            .invoke(
-                "select",
-                vec![json!({ "provider": "test", "modelId": "unavailable" })],
-                &BACKGROUND_CONTEXT,
-            )
-            .await
-            );
-        assert_eq!(error.to_string(), "Remote service test.models has no provider");
+        let error = err_of(
+            models
+                .invoke(
+                    "select",
+                    vec![json!({ "provider": "test", "modelId": "unavailable" })],
+                    &BACKGROUND_CONTEXT,
+                )
+                .await,
+        );
+        assert_eq!(
+            error.to_string(),
+            "Remote service test.models has no provider"
+        );
 
         let calls_for_replacement = Arc::clone(&replacement_calls);
         let replacement_method: crate::services::provider::tests::TestMethod =
@@ -1691,21 +1815,32 @@ mod tests {
                 .method("select", method_noop())
                 .build();
         let error = err_of(provider.replace("test.models", mismatched));
-        assert!(error.to_string().contains("replacement must preserve its member shape"));
+        assert!(error
+            .to_string()
+            .contains("replacement must preserve its member shape"));
 
-        namespace.dispose(&BACKGROUND_CONTEXT).await.expect("dispose");
+        namespace
+            .dispose(&BACKGROUND_CONTEXT)
+            .await
+            .expect("dispose");
         provider.dispose().expect("dispose");
     }
 
     #[tokio::test]
     async fn clears_retained_facades_when_providers_and_bindings_are_disposed() {
         let provider = StdArc::new(
-            RemoteServiceProvider::new(vec![ProviderDefinition::new("test.models", ServiceMode::Singleton)])
-                .expect("provider"),
+            RemoteServiceProvider::new(vec![ProviderDefinition::new(
+                "test.models",
+                ServiceMode::Singleton,
+            )])
+            .expect("provider"),
         );
         let initial_state = FakeState::new(json!({ "selected": null, "revision": 1 }));
         provider
-            .provide("test.models", object_with_state(&initial_state, "select", method_noop()))
+            .provide(
+                "test.models",
+                object_with_state(&initial_state, "select", method_noop()),
+            )
             .expect("provide");
         let namespace = RemoteServiceBinding::new(default_binding_options(
             &["test.models"],
@@ -1719,13 +1854,21 @@ mod tests {
 
         provider.dispose().expect("dispose");
         assert!(state.value().is_none());
-        let error = err_of(models
-            .invoke("select", vec![json!({"provider": "test", "modelId": "one"})], &BACKGROUND_CONTEXT)
-            .await
-            );
+        let error = err_of(
+            models
+                .invoke(
+                    "select",
+                    vec![json!({"provider": "test", "modelId": "one"})],
+                    &BACKGROUND_CONTEXT,
+                )
+                .await,
+        );
         assert_eq!(error.to_string(), "Remote service provider is disposed");
 
-        namespace.dispose(&BACKGROUND_CONTEXT).await.expect("dispose");
+        namespace
+            .dispose(&BACKGROUND_CONTEXT)
+            .await
+            .expect("dispose");
         let error = err_of(models.state("state"));
         assert_eq!(error.to_string(), "Remote service binding is disposed");
     }
@@ -1741,11 +1884,18 @@ mod tests {
         );
         let models_state = FakeState::new(json!({ "selected": null, "revision": 1 }));
         provider
-            .provide("test.models", object_with_state(&models_state, "select", method_noop()))
+            .provide(
+                "test.models",
+                object_with_state(&models_state, "select", method_noop()),
+            )
             .expect("provide");
         let dialog_state = FakeState::new(json!({ "question": "Pending?" }));
         let _close = provider
-            .spawn("test.question-dialog", "pending", object_with_state(&dialog_state, "submit", method_noop()))
+            .spawn(
+                "test.question-dialog",
+                "pending",
+                object_with_state(&dialog_state, "submit", method_noop()),
+            )
             .expect("spawn");
 
         let (on_error, errors) = error_sink();
@@ -1766,14 +1916,16 @@ mod tests {
         let _observation = namespace
             .observe(
                 "test.question-dialog",
-                Arc::new(move |handle: Arc<dyn ServiceClientHandle>, _context: Context| {
-                    let sink = Arc::clone(&sink);
-                    let gate = StdArc::clone(&handler_gate);
-                    Box::pin(async move {
-                        gate.notified().await;
-                        sink.lock().push(handle.service_id().to_string());
-                    }) as BoxFuture<()>
-                }),
+                Arc::new(
+                    move |handle: Arc<dyn ServiceClientHandle>, _context: Context| {
+                        let sink = Arc::clone(&sink);
+                        let gate = StdArc::clone(&handler_gate);
+                        Box::pin(async move {
+                            gate.notified().await;
+                            sink.lock().push(handle.service_id().to_string());
+                        }) as BoxFuture<()>
+                    },
+                ),
             )
             .expect("observe");
 
@@ -1787,18 +1939,27 @@ mod tests {
         assert!(lock(&observed).is_empty());
         assert!(lock(&errors).is_empty(), "errors: {:?}", lock(&errors));
 
-        namespace.dispose(&BACKGROUND_CONTEXT).await.expect("dispose");
+        namespace
+            .dispose(&BACKGROUND_CONTEXT)
+            .await
+            .expect("dispose");
     }
 
     #[tokio::test]
     async fn keeps_deferred_service_handles_inaccessible_until_host_activation() {
         let provider = StdArc::new(
-            RemoteServiceProvider::new(vec![ProviderDefinition::new("test.models", ServiceMode::Singleton)])
-                .expect("provider"),
+            RemoteServiceProvider::new(vec![ProviderDefinition::new(
+                "test.models",
+                ServiceMode::Singleton,
+            )])
+            .expect("provider"),
         );
         let initial_state = FakeState::new(json!({ "selected": null, "revision": 0 }));
         provider
-            .provide("test.models", object_with_state(&initial_state, "select", method_noop()))
+            .provide(
+                "test.models",
+                object_with_state(&initial_state, "select", method_noop()),
+            )
             .expect("provide");
         let mut options = default_binding_options(
             &["test.models"],
@@ -1819,19 +1980,30 @@ mod tests {
 
         let error = err_of(models.state("state"));
         assert_eq!(error.to_string(), "Service handles are not active");
-        let error = err_of(models
-            .invoke("select", vec![json!({ "provider": "test", "modelId": "one" })], &BACKGROUND_CONTEXT)
-            .await
-            );
+        let error = err_of(
+            models
+                .invoke(
+                    "select",
+                    vec![json!({ "provider": "test", "modelId": "one" })],
+                    &BACKGROUND_CONTEXT,
+                )
+                .await,
+        );
         assert_eq!(error.to_string(), "Service handles are not active");
 
-        namespace.rebind(true, &BACKGROUND_CONTEXT).await.expect("rebind");
+        namespace
+            .rebind(true, &BACKGROUND_CONTEXT)
+            .await
+            .expect("rebind");
         active.store(true, Ordering::SeqCst);
         namespace.ready(&BACKGROUND_CONTEXT).await.expect("ready");
         let state = models.state("state").expect("state").expect("state member");
         assert_eq!(state.value().expect("state hydrated")["revision"], json!(0));
 
-        namespace.dispose(&BACKGROUND_CONTEXT).await.expect("dispose");
+        namespace
+            .dispose(&BACKGROUND_CONTEXT)
+            .await
+            .expect("dispose");
         provider.dispose().expect("dispose");
     }
 
@@ -1840,7 +2012,11 @@ mod tests {
         struct FailingTransport;
         #[async_trait]
         impl RemoteServiceTransport for FailingTransport {
-            async fn invoke(&self, _call: &crate::types::ServiceCall, _context: &Context) -> Result<Option<JsonValue>, AnyError> {
+            async fn invoke(
+                &self,
+                _call: &crate::types::ServiceCall,
+                _context: &Context,
+            ) -> Result<Option<JsonValue>, AnyError> {
                 Err(error("unexpected invocation"))
             }
             async fn subscribe(
@@ -1864,7 +2040,10 @@ mod tests {
         let state = models.state("state").expect("state").expect("state member");
         assert!(state.value().is_none());
         assert_eq!(*lock(&errors), vec!["initial hydration failed".to_string()]);
-        namespace.dispose(&BACKGROUND_CONTEXT).await.expect("dispose");
+        namespace
+            .dispose(&BACKGROUND_CONTEXT)
+            .await
+            .expect("dispose");
     }
 
     #[tokio::test]
@@ -1875,7 +2054,11 @@ mod tests {
         }
         #[async_trait]
         impl RemoteServiceTransport for RacingTransport {
-            async fn invoke(&self, call: &crate::types::ServiceCall, context: &Context) -> Result<Option<JsonValue>, AnyError> {
+            async fn invoke(
+                &self,
+                call: &crate::types::ServiceCall,
+                context: &Context,
+            ) -> Result<Option<JsonValue>, AnyError> {
                 self.provider.invoke(call, context).await
             }
             async fn subscribe(
@@ -1886,34 +2069,50 @@ mod tests {
                 _context: &Context,
             ) -> Result<Box<dyn ServiceSubscription>, AnyError> {
                 let subscription = self.provider.subscribe(service_id, mode, listener)?;
-                self.state.replace_with(json!({ "selected": null, "revision": 1 }), &BACKGROUND_CONTEXT);
+                self.state.replace_with(
+                    json!({ "selected": null, "revision": 1 }),
+                    &BACKGROUND_CONTEXT,
+                );
                 Ok(subscription)
             }
         }
         let (provider, state) = singleton_provider().await;
         let namespace = RemoteServiceBinding::new(default_binding_options(
             &["test.models"],
-            StdArc::new(RacingTransport { provider: StdArc::clone(&provider), state }),
+            StdArc::new(RacingTransport {
+                provider: StdArc::clone(&provider),
+                state,
+            }),
         ))
         .expect("binding");
         let models = namespace.use_service("test.models").expect("use");
         let revisions: Arc<Mutex<Vec<i64>>> = Arc::new(Mutex::new(Vec::new()));
         let sink = Arc::clone(&revisions);
         let state_view = models.state("state").expect("state").expect("state member");
-        let unsubscribe = state_view.subscribe(Arc::new(move |value: &JsonValue, _context: &Context, _delivery: &crate::types::ReplicatedStateDelivery| {
-            let sink = Arc::clone(&sink);
-            let revision = value["revision"].as_i64();
-            Box::pin(async move {
-                if let Some(revision) = revision {
-                    sink.lock().push(revision);
-                }
-            }) as BoxFuture<()>
-        }));
+        let unsubscribe = state_view.subscribe(Arc::new(
+            move |value: &JsonValue,
+                  _context: &Context,
+                  _delivery: &crate::types::ReplicatedStateDelivery| {
+                let sink = Arc::clone(&sink);
+                let revision = value["revision"].as_i64();
+                Box::pin(async move {
+                    if let Some(revision) = revision {
+                        sink.lock().push(revision);
+                    }
+                }) as BoxFuture<()>
+            },
+        ));
         namespace.ready(&BACKGROUND_CONTEXT).await.expect("ready");
         assert_eq!(*lock(&revisions), vec![0, 1]);
-        assert_eq!(state_view.value().expect("state hydrated")["revision"], json!(1));
+        assert_eq!(
+            state_view.value().expect("state hydrated")["revision"],
+            json!(1)
+        );
         unsubscribe();
-        namespace.dispose(&BACKGROUND_CONTEXT).await.expect("dispose");
+        namespace
+            .dispose(&BACKGROUND_CONTEXT)
+            .await
+            .expect("dispose");
         provider.dispose().expect("dispose");
     }
 
@@ -1934,7 +2133,11 @@ mod tests {
         }
         #[async_trait]
         impl RemoteServiceTransport for ManualTransport {
-            async fn invoke(&self, _call: &crate::types::ServiceCall, _context: &Context) -> Result<Option<JsonValue>, AnyError> {
+            async fn invoke(
+                &self,
+                _call: &crate::types::ServiceCall,
+                _context: &Context,
+            ) -> Result<Option<JsonValue>, AnyError> {
                 Err(error("unexpected invocation"))
             }
             async fn subscribe(
@@ -1968,7 +2171,9 @@ mod tests {
             instances: vec![ServiceInstanceSnapshot {
                 instance: None,
                 members: vec![
-                    ServiceMemberSnapshot::Method { name: "select".into() },
+                    ServiceMemberSnapshot::Method {
+                        name: "select".into(),
+                    },
                     ServiceMemberSnapshot::State {
                         name: "state".into(),
                         sequence: 0,
@@ -1990,20 +2195,31 @@ mod tests {
         let state = models.state("state").expect("state").expect("state member");
         assert_eq!(state.value().expect("state hydrated")["revision"], json!(0));
 
-        let listener = lock(&transport.send_update).clone().expect("listener registered");
+        let listener = lock(&transport.send_update)
+            .clone()
+            .expect("listener registered");
         listener(
             &ServiceProviderUpdate::State {
                 instance: None,
                 member: "state".into(),
                 sequence,
-                ops: vec![Op::Replace(json!({ "selected": null, "revision": sequence }))],
+                ops: vec![Op::Replace(
+                    json!({ "selected": null, "revision": sequence }),
+                )],
             },
             &BACKGROUND_CONTEXT,
         );
         assert!(state.value().is_none());
         assert_eq!(lock(&errors).len(), 1);
-        assert!(lock(&errors)[0].contains("sequence has a gap"), "errors: {:?}", lock(&errors));
-        namespace.dispose(&BACKGROUND_CONTEXT).await.expect("dispose");
+        assert!(
+            lock(&errors)[0].contains("sequence has a gap"),
+            "errors: {:?}",
+            lock(&errors)
+        );
+        namespace
+            .dispose(&BACKGROUND_CONTEXT)
+            .await
+            .expect("dispose");
     }
 
     #[tokio::test]
@@ -2019,35 +2235,66 @@ mod tests {
         let revisions: Arc<Mutex<Vec<i64>>> = Arc::new(Mutex::new(Vec::new()));
         let sink = Arc::clone(&revisions);
         let state_view = models.state("state").expect("state").expect("state member");
-        let unsubscribe = state_view.subscribe(Arc::new(move |value: &JsonValue, _context: &Context, _delivery: &crate::types::ReplicatedStateDelivery| {
-            let sink = Arc::clone(&sink);
-            let revision = value["revision"].as_i64();
-            Box::pin(async move {
-                if let Some(revision) = revision {
-                    sink.lock().push(revision);
-                }
-            }) as BoxFuture<()>
-        }));
+        let unsubscribe = state_view.subscribe(Arc::new(
+            move |value: &JsonValue,
+                  _context: &Context,
+                  _delivery: &crate::types::ReplicatedStateDelivery| {
+                let sink = Arc::clone(&sink);
+                let revision = value["revision"].as_i64();
+                Box::pin(async move {
+                    if let Some(revision) = revision {
+                        sink.lock().push(revision);
+                    }
+                }) as BoxFuture<()>
+            },
+        ));
         assert!(state_view.value().is_none());
         assert!(lock(&revisions).is_empty());
 
-        state.replace_with(json!({ "selected": null, "revision": 1 }), &BACKGROUND_CONTEXT);
-        namespace.rebind(true, &BACKGROUND_CONTEXT).await.expect("rebind");
-        assert_eq!(state_view.value().expect("state hydrated")["revision"], json!(1));
+        state.replace_with(
+            json!({ "selected": null, "revision": 1 }),
+            &BACKGROUND_CONTEXT,
+        );
+        namespace
+            .rebind(true, &BACKGROUND_CONTEXT)
+            .await
+            .expect("rebind");
+        assert_eq!(
+            state_view.value().expect("state hydrated")["revision"],
+            json!(1)
+        );
         assert_eq!(*lock(&revisions), vec![1]);
-        state.replace_with(json!({ "selected": null, "revision": 2 }), &BACKGROUND_CONTEXT);
+        state.replace_with(
+            json!({ "selected": null, "revision": 2 }),
+            &BACKGROUND_CONTEXT,
+        );
         assert_eq!(*lock(&revisions), vec![1, 2]);
 
-        namespace.rebind(false, &BACKGROUND_CONTEXT).await.expect("unbind");
+        namespace
+            .rebind(false, &BACKGROUND_CONTEXT)
+            .await
+            .expect("unbind");
         assert!(state_view.value().is_none());
-        state.replace_with(json!({ "selected": null, "revision": 3 }), &BACKGROUND_CONTEXT);
+        state.replace_with(
+            json!({ "selected": null, "revision": 3 }),
+            &BACKGROUND_CONTEXT,
+        );
         assert_eq!(*lock(&revisions), vec![1, 2]);
-        namespace.rebind(true, &BACKGROUND_CONTEXT).await.expect("rebind");
-        assert_eq!(state_view.value().expect("state hydrated")["revision"], json!(3));
+        namespace
+            .rebind(true, &BACKGROUND_CONTEXT)
+            .await
+            .expect("rebind");
+        assert_eq!(
+            state_view.value().expect("state hydrated")["revision"],
+            json!(3)
+        );
         assert_eq!(*lock(&revisions), vec![1, 2, 3]);
 
         unsubscribe();
-        namespace.dispose(&BACKGROUND_CONTEXT).await.expect("dispose");
+        namespace
+            .dispose(&BACKGROUND_CONTEXT)
+            .await
+            .expect("dispose");
         provider.dispose().expect("dispose");
     }
 
@@ -2076,33 +2323,39 @@ mod tests {
         let stop = namespace
             .observe(
                 "test.question-dialog",
-                Arc::new(move |handle: Arc<dyn ServiceClientHandle>, context: Context| {
-                    let sink = Arc::clone(&sink);
-                    Box::pin(async move {
-                        let question = handle
-                            .state("request")
-                            .expect("request state")
-                            .expect("request member")
-                            .value()
-                            .cloned();
-                        sink.lock().push(Observed {
-                            question,
-                            handle,
-                            context,
-                        });
-                    }) as BoxFuture<()>
-                }),
+                Arc::new(
+                    move |handle: Arc<dyn ServiceClientHandle>, context: Context| {
+                        let sink = Arc::clone(&sink);
+                        Box::pin(async move {
+                            let question = handle
+                                .state("request")
+                                .expect("request state")
+                                .expect("request member")
+                                .value()
+                                .cloned();
+                            sink.lock().push(Observed {
+                                question,
+                                handle,
+                                context,
+                            });
+                        }) as BoxFuture<()>
+                    },
+                ),
             )
             .expect("observe");
         flush_tasks().await;
         assert!(lock(&errors).is_empty(), "errors: {:?}", lock(&errors));
 
         let first_request = FakeState::new(json!({ "question": "First?" }));
-        let first_calls: Arc<Mutex<Vec<(JsonValue, Context)>> > = Arc::new(Mutex::new(Vec::new()));
+        let first_calls: Arc<Mutex<Vec<(JsonValue, Context)>>> = Arc::new(Mutex::new(Vec::new()));
         let calls_sink = Arc::clone(&first_calls);
         let first_submit: crate::services::provider::tests::TestMethod =
             Box::new(move |mut args: Vec<JsonValue>, context: Context| {
-                let answer = if args.is_empty() { JsonValue::Null } else { args.remove(0) };
+                let answer = if args.is_empty() {
+                    JsonValue::Null
+                } else {
+                    args.remove(0)
+                };
                 calls_sink.lock().push((answer, context.clone()));
                 Box::pin(async { Ok(Some(json!({ "accepted": true }))) })
             });
@@ -2119,12 +2372,21 @@ mod tests {
             )
             .expect("spawn");
         wait_for("first observation", || lock(&observed).len() == 1).await;
-        assert_eq!(lock(&observed)[0].question, Some(json!({ "question": "First?" })));
+        assert_eq!(
+            lock(&observed)[0].question,
+            Some(json!({ "question": "First?" }))
+        );
 
         let first_handle: Arc<dyn ServiceClientHandle> = StdArc::clone(&lock(&observed)[0].handle);
         first_request.replace_with(json!({ "question": "Updated?" }), &BACKGROUND_CONTEXT);
-        let request_state = first_handle.state("request").expect("request").expect("member");
-        assert_eq!(request_state.value(), Some(&json!({ "question": "Updated?" })));
+        let request_state = first_handle
+            .state("request")
+            .expect("request")
+            .expect("member");
+        assert_eq!(
+            request_state.value(),
+            Some(&json!({ "question": "Updated?" }))
+        );
         let response = first_handle
             .invoke("submit", vec![json!("yes")], &BACKGROUND_CONTEXT)
             .await
@@ -2134,27 +2396,34 @@ mod tests {
             let calls = lock(&first_calls);
             assert_eq!(calls.len(), 1);
             assert_eq!(calls[0].0, json!("yes"));
-            assert!(calls[0].1.abort_signal().is_none(), "caller context is forwarded");
+            assert!(
+                calls[0].1.abort_signal().is_none(),
+                "caller context is forwarded"
+            );
         }
 
         close_first();
-        wait_for(
-            "first observation context aborted",
-            || {
-                lock(&observed)[0]
-                    .context
-                    .abort_signal()
-                    .is_some_and(|signal| signal.aborted())
-            },
-        )
+        wait_for("first observation context aborted", || {
+            lock(&observed)[0]
+                .context
+                .abort_signal()
+                .is_some_and(|signal| signal.aborted())
+        })
         .await;
         let error = err_of(first_handle.state("request"));
-        assert!(error.to_string().contains("observation is closed"), "error: {error}");
-        let error = err_of(first_handle
-            .invoke("submit", vec![json!("late")], &BACKGROUND_CONTEXT)
-            .await
-            );
-        assert!(error.to_string().contains("observation is closed"), "error: {error}");
+        assert!(
+            error.to_string().contains("observation is closed"),
+            "error: {error}"
+        );
+        let error = err_of(
+            first_handle
+                .invoke("submit", vec![json!("late")], &BACKGROUND_CONTEXT)
+                .await,
+        );
+        assert!(
+            error.to_string().contains("observation is closed"),
+            "error: {error}"
+        );
 
         let second_request = FakeState::new(json!({ "question": "Again?" }));
         let close_second = provider
@@ -2170,7 +2439,10 @@ mod tests {
             )
             .expect("respawn");
         wait_for("second observation", || lock(&observed).len() == 2).await;
-        assert_eq!(lock(&observed)[1].question, Some(json!({ "question": "Again?" })));
+        assert_eq!(
+            lock(&observed)[1].question,
+            Some(json!({ "question": "Again?" }))
+        );
         assert!(!Arc::ptr_eq(
             &first_handle,
             &(StdArc::clone(&lock(&observed)[1].handle) as Arc<dyn ServiceClientHandle>)
@@ -2179,26 +2451,33 @@ mod tests {
 
         let second_handle: Arc<dyn ServiceClientHandle> = StdArc::clone(&lock(&observed)[1].handle);
         stop();
-        wait_for(
-            "second observation context aborted",
-            || {
-                lock(&observed)[1]
-                    .context
-                    .abort_signal()
-                    .is_some_and(|signal| signal.aborted())
-            },
-        )
+        wait_for("second observation context aborted", || {
+            lock(&observed)[1]
+                .context
+                .abort_signal()
+                .is_some_and(|signal| signal.aborted())
+        })
         .await;
         let error = err_of(second_handle.state("request"));
-        assert!(error.to_string().contains("observation is closed"), "error: {error}");
-        let error = err_of(second_handle
-            .invoke("submit", vec![json!("late")], &BACKGROUND_CONTEXT)
-            .await
-            );
-        assert!(error.to_string().contains("observation is closed"), "error: {error}");
+        assert!(
+            error.to_string().contains("observation is closed"),
+            "error: {error}"
+        );
+        let error = err_of(
+            second_handle
+                .invoke("submit", vec![json!("late")], &BACKGROUND_CONTEXT)
+                .await,
+        );
+        assert!(
+            error.to_string().contains("observation is closed"),
+            "error: {error}"
+        );
         close_second();
 
-        namespace.dispose(&BACKGROUND_CONTEXT).await.expect("dispose");
+        namespace
+            .dispose(&BACKGROUND_CONTEXT)
+            .await
+            .expect("dispose");
         provider.dispose().expect("dispose");
     }
 
@@ -2214,7 +2493,11 @@ mod tests {
         }
         #[async_trait]
         impl RemoteServiceTransport for WireTransport {
-            async fn invoke(&self, call: &crate::types::ServiceCall, context: &Context) -> Result<Option<JsonValue>, AnyError> {
+            async fn invoke(
+                &self,
+                call: &crate::types::ServiceCall,
+                context: &Context,
+            ) -> Result<Option<JsonValue>, AnyError> {
                 self.provider.invoke(call, context).await
             }
             async fn subscribe(
@@ -2233,7 +2516,8 @@ mod tests {
                         listener(update, context);
                     }),
                 )?;
-                let encoded = serde_json::to_value(subscription.snapshot()).expect("snapshot serializes");
+                let encoded =
+                    serde_json::to_value(subscription.snapshot()).expect("snapshot serializes");
                 let snapshot = crate::services::wire::parse_service_subscription_snapshot(&encoded)
                     .expect("snapshot parses");
                 Ok(Box::new(WireSubscription {
@@ -2263,16 +2547,27 @@ mod tests {
         }
 
         let provider = StdArc::new(
-            RemoteServiceProvider::new(vec![ProviderDefinition::new("test.pair", ServiceMode::Singleton)])
-                .expect("provider"),
+            RemoteServiceProvider::new(vec![ProviderDefinition::new(
+                "test.pair",
+                ServiceMode::Singleton,
+            )])
+            .expect("provider"),
         );
         let left = FakeState::new(json!({ "value": 0 }));
         let right = FakeState::new(json!({ "value": 0 }));
         let members: Arc<dyn crate::types::RemoteServiceImpl> =
             crate::services::provider::RemoteServiceObject::builder()
-            .state("left", StdArc::clone(&left) as Arc<dyn crate::services::state_internals::StateInternals>)
-            .state("right", StdArc::clone(&right) as Arc<dyn crate::services::state_internals::StateInternals>)
-            .build();
+                .state(
+                    "left",
+                    StdArc::clone(&left)
+                        as Arc<dyn crate::services::state_internals::StateInternals>,
+                )
+                .state(
+                    "right",
+                    StdArc::clone(&right)
+                        as Arc<dyn crate::services::state_internals::StateInternals>,
+                )
+                .build();
         provider.provide("test.pair", members).expect("provide");
 
         let (on_error, errors) = error_sink();
@@ -2314,7 +2609,10 @@ mod tests {
         assert_eq!(right_state.value(), Some(&json!({ "value": 104 })));
         assert!(lock(&errors).is_empty(), "errors: {:?}", lock(&errors));
 
-        namespace.dispose(&BACKGROUND_CONTEXT).await.expect("dispose");
+        namespace
+            .dispose(&BACKGROUND_CONTEXT)
+            .await
+            .expect("dispose");
         provider.dispose().expect("dispose");
     }
 
@@ -2327,7 +2625,11 @@ mod tests {
         }
         #[async_trait]
         impl RemoteServiceTransport for BeforeActivateTransport {
-            async fn invoke(&self, call: &crate::types::ServiceCall, context: &Context) -> Result<Option<JsonValue>, AnyError> {
+            async fn invoke(
+                &self,
+                call: &crate::types::ServiceCall,
+                context: &Context,
+            ) -> Result<Option<JsonValue>, AnyError> {
                 self.provider.invoke(call, context).await
             }
             async fn subscribe(
@@ -2371,12 +2673,18 @@ mod tests {
         }
 
         let provider = StdArc::new(
-            RemoteServiceProvider::new(vec![ProviderDefinition::new("test.counter", ServiceMode::Singleton)])
-                .expect("provider"),
+            RemoteServiceProvider::new(vec![ProviderDefinition::new(
+                "test.counter",
+                ServiceMode::Singleton,
+            )])
+            .expect("provider"),
         );
         let initial_state = FakeState::new(json!({ "value": 0 }));
         provider
-            .provide("test.counter", object_with_state(&initial_state, "bump", method_noop()))
+            .provide(
+                "test.counter",
+                object_with_state(&initial_state, "bump", method_noop()),
+            )
             .expect("provide");
         let (on_error, errors) = error_sink();
         let updates: Arc<Mutex<Vec<ServiceProviderUpdate>>> = Arc::new(Mutex::new(Vec::new()));
@@ -2386,7 +2694,10 @@ mod tests {
                 for value in 1..=100u64 {
                     let state = FakeState::new(json!({ "value": value }));
                     provider
-                        .replace("test.counter", object_with_state(&state, "bump", method_noop()))
+                        .replace(
+                            "test.counter",
+                            object_with_state(&state, "bump", method_noop()),
+                        )
                         .expect("replace");
                 }
                 provider.withdraw("test.counter").expect("withdraw");
@@ -2419,7 +2730,10 @@ mod tests {
 
         let replacement = FakeState::new(json!({ "value": 200 }));
         provider
-            .replace("test.counter", object_with_state(&replacement, "bump", method_noop()))
+            .replace(
+                "test.counter",
+                object_with_state(&replacement, "bump", method_noop()),
+            )
             .expect("replace");
         replacement.replace_with(json!({ "value": 201 }), &BACKGROUND_CONTEXT);
         let reused = namespace.use_service("test.counter").expect("reuse");
@@ -2430,7 +2744,10 @@ mod tests {
         assert_eq!(counter_state.value(), Some(&json!({ "value": 201 })));
         assert!(lock(&errors).is_empty(), "errors: {:?}", lock(&errors));
 
-        namespace.dispose(&BACKGROUND_CONTEXT).await.expect("dispose");
+        namespace
+            .dispose(&BACKGROUND_CONTEXT)
+            .await
+            .expect("dispose");
         provider.dispose().expect("dispose");
     }
 
@@ -2445,7 +2762,11 @@ mod tests {
         }
         #[async_trait]
         impl RemoteServiceTransport for RecordingTransport {
-            async fn invoke(&self, call: &crate::types::ServiceCall, context: &Context) -> Result<Option<JsonValue>, AnyError> {
+            async fn invoke(
+                &self,
+                call: &crate::types::ServiceCall,
+                context: &Context,
+            ) -> Result<Option<JsonValue>, AnyError> {
                 self.inner.invoke(call, context).await
             }
             async fn subscribe(
@@ -2461,7 +2782,9 @@ mod tests {
                         updates.lock().push(update.clone());
                         listener(update, context);
                     });
-                self.inner.subscribe(service_id, mode, inner_listener, context).await
+                self.inner
+                    .subscribe(service_id, mode, inner_listener, context)
+                    .await
             }
         }
 
@@ -2474,20 +2797,32 @@ mod tests {
         );
         let retained = FakeState::new(json!({ "value": 0 }));
         let close_retained = provider
-            .spawn("test.counter", "retained", object_with_state(&retained, "bump", method_noop()))
+            .spawn(
+                "test.counter",
+                "retained",
+                object_with_state(&retained, "bump", method_noop()),
+            )
             .expect("spawn retained");
         let close_old = provider
             .spawn(
                 "test.counter",
                 "reused",
-                object_with_state(&FakeState::new(json!({ "value": 0 })), "bump", method_noop()),
+                object_with_state(
+                    &FakeState::new(json!({ "value": 0 })),
+                    "bump",
+                    method_noop(),
+                ),
             )
             .expect("spawn reused");
         let close_removed = provider
             .spawn(
                 "test.counter",
                 "removed",
-                object_with_state(&FakeState::new(json!({ "value": 0 })), "bump", method_noop()),
+                object_with_state(
+                    &FakeState::new(json!({ "value": 0 })),
+                    "bump",
+                    method_noop(),
+                ),
             )
             .expect("spawn removed");
 
@@ -2512,18 +2847,21 @@ mod tests {
         let _observation = namespace
             .observe(
                 "test.counter",
-                Arc::new(move |handle: Arc<dyn ServiceClientHandle>, context: Context| {
-                    let sink = Arc::clone(&sink);
-                    Box::pin(async move {
-                        sink.lock().push(Observed { handle, context });
-                    }) as BoxFuture<()>
-                }),
+                Arc::new(
+                    move |handle: Arc<dyn ServiceClientHandle>, context: Context| {
+                        let sink = Arc::clone(&sink);
+                        Box::pin(async move {
+                            sink.lock().push(Observed { handle, context });
+                        }) as BoxFuture<()>
+                    },
+                ),
             )
             .expect("observe");
         namespace.ready(&BACKGROUND_CONTEXT).await.expect("ready");
         assert_eq!(lock(&observed).len(), 3);
         let replacement = FakeState::new(json!({ "value": 500 }));
-        let pending_closes: Arc<Mutex<Vec<Unsubscribe>>> = Arc::new(Mutex::new(vec![close_old, close_removed]));
+        let pending_closes: Arc<Mutex<Vec<Unsubscribe>>> =
+            Arc::new(Mutex::new(vec![close_old, close_removed]));
         let storm: StdArc<dyn Fn() + Send + Sync> = {
             let provider = StdArc::clone(&provider);
             let replacement = Arc::clone(&replacement);
@@ -2553,43 +2891,65 @@ mod tests {
         for entry in lock(&observed).iter() {
             let storm = Arc::clone(&storm);
             if let Ok(Some(state)) = entry.handle.state("state") {
-                let _unsubscribe = state.subscribe(StdArc::new(move |value: &JsonValue, _context: &Context, _delivery: &crate::types::ReplicatedStateDelivery| {
-                    let storm = Arc::clone(&storm);
-                    let fire = value["value"] == json!(1);
-                    Box::pin(async move {
-                        if fire {
-                            storm();
-                        }
-                    }) as BoxFuture<()>
-                }));
+                let _unsubscribe = state.subscribe(StdArc::new(
+                    move |value: &JsonValue,
+                          _context: &Context,
+                          _delivery: &crate::types::ReplicatedStateDelivery| {
+                        let storm = Arc::clone(&storm);
+                        let fire = value["value"] == json!(1);
+                        Box::pin(async move {
+                            if fire {
+                                storm();
+                            }
+                        }) as BoxFuture<()>
+                    },
+                ));
             }
         }
         retained.replace_with(json!({ "value": 1 }), &BACKGROUND_CONTEXT);
         wait_for("storm observation", || lock(&observed).len() == 4).await;
-        assert!(lock(&updates).iter().any(|update| matches!(update, ServiceProviderUpdate::Reset { .. })));
+        assert!(lock(&updates)
+            .iter()
+            .any(|update| matches!(update, ServiceProviderUpdate::Reset { .. })));
         let aborted = |entry: &Observed| {
             entry
                 .context
                 .abort_signal()
                 .is_some_and(|signal| signal.aborted())
         };
-        let stable_index = (0..3).find(|index| !aborted(&lock(&observed)[*index])).expect("one live initial entry");
-        assert_eq!(2, (0..3).filter(|index| aborted(&lock(&observed)[*index])).count());
-        let stable_handle: Arc<dyn ServiceClientHandle> = StdArc::clone(&lock(&observed)[stable_index].handle);
-        let retained_state = stable_handle.state("state").expect("state").expect("member");
+        let stable_index = (0..3)
+            .find(|index| !aborted(&lock(&observed)[*index]))
+            .expect("one live initial entry");
+        assert_eq!(
+            2,
+            (0..3)
+                .filter(|index| aborted(&lock(&observed)[*index]))
+                .count()
+        );
+        let stable_handle: Arc<dyn ServiceClientHandle> =
+            StdArc::clone(&lock(&observed)[stable_index].handle);
+        let retained_state = stable_handle
+            .state("state")
+            .expect("state")
+            .expect("member");
         assert_eq!(retained_state.value(), Some(&json!({ "value": 102 })));
-        let replacement_handle: Arc<dyn ServiceClientHandle> = StdArc::clone(&lock(&observed)[3].handle);
+        let replacement_handle: Arc<dyn ServiceClientHandle> =
+            StdArc::clone(&lock(&observed)[3].handle);
         assert!(!aborted(&lock(&observed)[3]));
-        let replacement_state = replacement_handle.state("state").expect("state").expect("member");
+        let replacement_state = replacement_handle
+            .state("state")
+            .expect("state")
+            .expect("member");
         assert_eq!(replacement_state.value(), Some(&json!({ "value": 601 })));
         replacement.replace_with(json!({ "value": 602 }), &BACKGROUND_CONTEXT);
         assert_eq!(replacement_state.value(), Some(&json!({ "value": 602 })));
         assert!(lock(&errors).is_empty(), "errors: {:?}", lock(&errors));
 
         let _ = close_retained;
-        namespace.dispose(&BACKGROUND_CONTEXT).await.expect("dispose");
+        namespace
+            .dispose(&BACKGROUND_CONTEXT)
+            .await
+            .expect("dispose");
         provider.dispose().expect("dispose");
     }
 }
-
-

@@ -215,10 +215,10 @@ mod tests {
     use crate::types::{
         FacetOptions, RemoteServiceImpl, RemoteServices, ServiceMember, ServiceMode,
     };
+    use parking_lot::Mutex;
     use serde_json::json;
     use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
     use std::sync::{Arc, LazyLock};
-    use {parking_lot::Mutex};
 
     type Trace = Arc<Mutex<Vec<String>>>;
 
@@ -469,10 +469,7 @@ mod tests {
         ));
         kernel.lock().await.activate().await.expect("activate");
         let provider = kernel.lock().await.provider().expect("provider");
-        let original_local = local_value
-            .lock()
-            .clone()
-            .unwrap();
+        let original_local = local_value.lock().clone().unwrap();
 
         let remote_services = create_remote_service_binding(RemoteServiceBindingOptions {
             services: vec![REMOTE_GENERATION_VALUE.id().to_string()],
@@ -635,9 +632,7 @@ mod tests {
                         Box::pin(async move {
                             push(&activation_trace, &format!("activate provider {name}"));
                             if name == "B" {
-                                if let Some(started) =
-                                    started_tx.lock().take()
-                                {
+                                if let Some(started) = started_tx.lock().take() {
                                     let _ = started.send(());
                                 }
                                 let continue_signal = {

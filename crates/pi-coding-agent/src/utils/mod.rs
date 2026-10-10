@@ -4,36 +4,36 @@ pub mod abort;
 pub mod ansi;
 pub mod changelog;
 pub mod child_process;
-pub mod deprecation;
-pub mod fs_watch;
-pub mod frontmatter;
-pub mod git;
-pub mod html;
-pub mod json;
-pub mod management_http;
-pub mod mime;
 pub mod clipboard;
 pub mod clipboard_command;
 pub mod clipboard_image;
+pub mod deprecation;
 pub mod exif_orientation;
+pub mod frontmatter;
+pub mod fs_watch;
+pub mod git;
+pub mod html;
 pub mod image_convert;
 pub mod image_process;
 pub mod image_resize;
 pub mod image_resize_core;
 pub mod image_resize_worker;
-pub mod photon;
-pub mod syntax_highlight;
-pub mod tool_result_images;
-pub mod tools_manager;
-pub mod tui_compat;
+pub mod json;
+pub mod management_http;
+pub mod mime;
 pub mod open_browser;
 pub mod output_files;
 pub mod paths;
+pub mod photon;
 pub mod pi_user_agent;
 pub mod shell;
 pub mod sleep;
+pub mod syntax_highlight;
 pub mod text;
 pub mod time;
+pub mod tool_result_images;
+pub mod tools_manager;
+pub mod tui_compat;
 pub mod version_check;
 pub mod windows_self_update;
 pub mod wsl;
@@ -45,6 +45,7 @@ pub mod zip;
 /// Take this guard around every env mutation in `#[cfg(test)]` code.
 #[cfg(test)]
 pub(crate) fn test_env_lock() -> parking_lot::MutexGuard<'static, ()> {
-	static TEST_ENV_LOCK: std::sync::LazyLock<parking_lot::Mutex<()>> = std::sync::LazyLock::new(|| parking_lot::Mutex::new(()));
-	TEST_ENV_LOCK.lock()
+    static TEST_ENV_LOCK: std::sync::LazyLock<parking_lot::Mutex<()>> =
+        std::sync::LazyLock::new(|| parking_lot::Mutex::new(()));
+    TEST_ENV_LOCK.lock()
 }

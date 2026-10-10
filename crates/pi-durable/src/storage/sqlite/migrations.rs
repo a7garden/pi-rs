@@ -11,8 +11,8 @@ use super::database::{SqliteDatabase, SqliteStorageError};
 /// One immutable step of the schema history.
 #[derive(Debug, Clone)]
 pub struct SqliteMigration {
-	pub version: u64,
-	pub statements: Vec<String>,
+    pub version: u64,
+    pub statements: Vec<String>,
 }
 
 const INITIAL_SCHEMA: &[&str] = &[
@@ -46,38 +46,43 @@ const INITIAL_SCHEMA: &[&str] = &[
 /// Immutable, ordered schema history. Append new migrations after the initial
 /// schema ships.
 pub fn sqlite_migrations() -> &'static [SqliteMigration] {
-	static MIGRATIONS: std::sync::LazyLock<Vec<SqliteMigration>> =
-		std::sync::LazyLock::new(|| {
-			vec![SqliteMigration {
-				version: 1,
-				statements: INITIAL_SCHEMA.iter().map(|statement| (*statement).to_string()).collect(),
-			}]
-		});
-	&MIGRATIONS
+    static MIGRATIONS: std::sync::LazyLock<Vec<SqliteMigration>> = std::sync::LazyLock::new(|| {
+        vec![SqliteMigration {
+            version: 1,
+            statements: INITIAL_SCHEMA
+                .iter()
+                .map(|statement| (*statement).to_string())
+                .collect(),
+        }]
+    });
+    &MIGRATIONS
 }
 
 /// Version of the newest migration.
 pub fn current_sqlite_schema_version() -> u64 {
-	sqlite_migrations().last().map(|migration| migration.version).unwrap_or(0)
+    sqlite_migrations()
+        .last()
+        .map(|migration| migration.version)
+        .unwrap_or(0)
 }
 
 /// Apply all pending schema migrations atomically.
 pub async fn apply_sqlite_migrations(
-	database: &SqliteDatabase,
-	migrations: &[SqliteMigration],
+    database: &SqliteDatabase,
+    migrations: &[SqliteMigration],
 ) -> Result<(), SqliteStorageError> {
-	for (index, migration) in migrations.iter().enumerate() {
-		if migration.version != index as u64 + 1 {
-			return Err(SqliteStorageError(
-				"Durable SQLite migrations must have contiguous versions starting at 1".into(),
-			));
-		}
-	}
-	let migrations: Vec<(u64, Vec<String>)> = migrations
-		.iter()
-		.map(|migration| (migration.version, migration.statements.clone()))
-		.collect();
-	database
+    for (index, migration) in migrations.iter().enumerate() {
+        if migration.version != index as u64 + 1 {
+            return Err(SqliteStorageError(
+                "Durable SQLite migrations must have contiguous versions starting at 1".into(),
+            ));
+        }
+    }
+    let migrations: Vec<(u64, Vec<String>)> = migrations
+        .iter()
+        .map(|migration| (migration.version, migration.statements.clone()))
+        .collect();
+    database
 		.transaction(move |connection| {
 			connection.execute_batch(
 				"CREATE TABLE IF NOT EXISTS durable_schema (\n\t\t\tsingleton INTEGER PRIMARY KEY CHECK (singleton = 1),\n\t\t\tversion INTEGER NOT NULL CHECK (version >= 0)\n\t\t) STRICT",

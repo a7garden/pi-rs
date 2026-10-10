@@ -17,16 +17,16 @@ use serde_json::{Map, Value};
 use tokio::sync::mpsc;
 
 use crate::identifier::to_codemode_identifier;
+use crate::runtime::protocol::{
+    CallTarget, DoneOutcome, GlobalInfo, HostToWorkerMessage, ToolInfo, WorkerData,
+    WorkerToHostMessage,
+};
 use crate::types::{
     AbortSignal, CodemodeCall, CodemodeCallStatus, CodemodeError, CodemodeErrorKind,
     CodemodeExecuteOptions, CodemodeOutputItem, CodemodeResult, CodemodeStoreWrites, CodemodeTool,
     CodemodeToolContext,
 };
 use crate::wasm::{UnavailableWasmLoader, WasmLoader};
-use crate::runtime::protocol::{
-    CallTarget, DoneOutcome, GlobalInfo, HostToWorkerMessage, ToolInfo, WorkerData,
-    WorkerToHostMessage,
-};
 
 const DEFAULT_TIMEOUT_MS: f64 = 300_000.0;
 
@@ -42,7 +42,15 @@ fn is_identifier(name: &str) -> bool {
 fn is_reserved_global(name: &str) -> bool {
     matches!(
         name,
-        "tools" | "ALL_TOOLS" | "console" | "text" | "image" | "exit" | "globalThis" | "store" | "load"
+        "tools"
+            | "ALL_TOOLS"
+            | "console"
+            | "text"
+            | "image"
+            | "exit"
+            | "globalThis"
+            | "store"
+            | "load"
     )
 }
 
@@ -58,44 +66,94 @@ fn serialize_store(store: Option<&Map<String, Value>>) -> Map<String, Value> {
     serialized
 }
 
-fn parse_store_writes(json: &str) -> Result<CodemodeStoreWrites, String> {
+/// The prelude that serializes values for the host runs in the same VM as the script, so a
+/// script that patches built-ins (for example `Array.prototype.toJSON`) can make it send
+/// malformed data. Payloads that do not decode carry this error, and the execution fails as
+/// a sandbox error. Upstream `BridgeError`.
+struct BridgeError(String);
+
+fn parse_bridge_json(json: &str, what: &str) -> Result<Value, BridgeError> {
+    serde_json::from_str(json).map_err(|_| BridgeError(format!("{what} is not valid JSON")))
+}
+
+fn parse_store_writes(json: &str) -> Result<CodemodeStoreWrites, BridgeError> {
     // Upstream wire shape: `[key, json]` pairs for `store()` and bare `[key]` for deletions.
-    let entries: Vec<Vec<Value>> = serde_json::from_str(json).map_err(|error| error.to_string())?;
+    let entries = parse_bridge_json(json, "store writes")?;
+    let Value::Array(entries) = entries else {
+        return Err(BridgeError("store writes are not an array".to_string()));
+    };
     let mut writes = CodemodeStoreWrites::default();
     for entry in entries {
-        let mut parts = entry.into_iter();
-        let key = match parts.next() {
-            Some(Value::String(key)) => key,
-            _ => return Err("store write entry must start with a string key".to_string()),
-        };
-        match parts.next() {
-            None => writes.delete.push(key),
-            Some(Value::String(json)) => {
-                let parsed: Value = serde_json::from_str(&json).map_err(|error| error.to_string())?;
-                writes.set.insert(key, parsed);
+        let (key, value) = match entry {
+            Value::Array(values) => match values.as_slice() {
+                [Value::String(key)] => (key.clone(), None),
+                [Value::String(key), Value::String(value)] => (key.clone(), Some(value.clone())),
+                _ => {
+                    return Err(BridgeError(
+                        "store writes contain a malformed entry".to_string(),
+                    ))
+                }
+            },
+            _ => {
+                return Err(BridgeError(
+                    "store writes contain a malformed entry".to_string(),
+                ))
             }
-            Some(_) => return Err("store write value must be JSON text".to_string()),
+        };
+        match value {
+            None => writes.delete.push(key),
+            Some(value) => {
+                // `JSON.stringify(key)` renders the key as JSON, quotes included.
+                let what = format!(
+                    "store value for {}",
+                    serde_json::to_string(&key).unwrap_or_else(|_| key.clone())
+                );
+                writes.set.insert(key, parse_bridge_json(&value, &what)?);
+            }
         }
     }
     Ok(writes)
 }
 
-fn parse_script_error(error_json: &str) -> CodemodeError {
-    let mut error = CodemodeError::new(CodemodeErrorKind::Script, String::new());
-    if let Ok(Value::Object(fields)) = serde_json::from_str::<Value>(error_json) {
-        if let Some(Value::String(name)) = fields.get("name") {
-            error = error.with_name(name.clone());
-        }
-        if let Some(Value::String(message)) = fields.get("message") {
-            error.message = message.clone();
-        }
-        if let Some(Value::String(stack)) = fields.get("stack") {
-            error = error.with_stack(stack.clone());
-        }
-    } else {
-        error.message = error_json.to_string();
+fn parse_script_error(error_json: &str) -> Result<CodemodeError, BridgeError> {
+    let parsed = parse_bridge_json(error_json, "script error")?;
+    if !parsed.is_object() && !parsed.is_array() {
+        // JS typeof calls arrays objects, but they fail the field checks below; everything
+        // else (including null, which upstream also excludes explicitly) is not an object.
+        return Err(BridgeError("script error is not an object".to_string()));
     }
-    error
+    let Value::Object(fields) = parsed else {
+        return Err(BridgeError("script error is malformed".to_string()));
+    };
+    // Only absent fields are optional; `null` fails the upstream `typeof … !== "string"` checks.
+    let string_field = |name: &str| -> Result<Option<String>, BridgeError> {
+        match fields.get(name) {
+            None => Ok(None),
+            Some(Value::String(value)) => Ok(Some(value.clone())),
+            Some(_) => Err(BridgeError("script error is malformed".to_string())),
+        }
+    };
+    let Some(message) = string_field("message")? else {
+        return Err(BridgeError("script error is malformed".to_string()));
+    };
+    let name = string_field("name")?;
+    let stack = string_field("stack")?;
+    let mut error = CodemodeError::new(CodemodeErrorKind::Script, message);
+    if let Some(name) = name {
+        error = error.with_name(name);
+    }
+    if let Some(stack) = stack {
+        error = error.with_stack(stack);
+    }
+    Ok(error)
+}
+
+/// Sandbox message for a decode failure on the worker bridge, naming the likely cause.
+fn bridge_broken(reason: &str) -> CodemodeError {
+    CodemodeError::new(
+        CodemodeErrorKind::Sandbox,
+        format!("Sandbox bridge broken: {reason}. The script may have modified built-ins such as a prototype's toJSON."),
+    )
 }
 
 fn format_timeout(timeout_ms: f64) -> String {
@@ -106,14 +164,17 @@ fn format_timeout(timeout_ms: f64) -> String {
     }
 }
 
-/// A spawned per-execution worker. The host posts [`HostToWorkerMessage`]s, receives
-/// [`WorkerToHostMessage`]s, and can terminate the worker. `interrupt` is the Rust
+/// A spawned per-execution worker. The host posts [`HostToWorkerMessage`]s, receives raw
+/// payloads, and can terminate the worker. Worker-to-host payloads arrive exactly as the
+/// worker posted them (`serde_json::Value`); the host validates each against the protocol,
+/// so a malformed payload breaks the bridge instead of being dropped (upstream checks
+/// `isWorkerToHostMessage` on every `message` event). `interrupt` is the Rust
 /// counterpart of the upstream shared `Int32Array`: the host sets it to non-zero right
 /// before termination, and the VM's interrupt handler polls it so a script spinning in wasm
 /// can be stopped.
 pub struct RunningWorker {
     pub to_worker: mpsc::Sender<HostToWorkerMessage>,
-    pub from_worker: mpsc::Receiver<WorkerToHostMessage>,
+    pub from_worker: mpsc::Receiver<Value>,
     pub interrupt: Arc<AtomicI32>,
     pub handle: Box<dyn WorkerHandle>,
 }
@@ -168,7 +229,10 @@ pub struct NoWorkerFactory;
 
 impl CodeModeWorkerFactory for NoWorkerFactory {
     fn spawn(&self, _data: WorkerData) -> Result<RunningWorker, String> {
-        Err("no worker implementation; configure `CodemodeSandboxOptions::worker_factory`".to_string())
+        Err(
+            "no worker implementation; configure `CodemodeSandboxOptions::worker_factory`"
+                .to_string(),
+        )
     }
 }
 
@@ -253,7 +317,9 @@ impl CodemodeSandbox {
                 globals_by_name: Mutex::new(globals_by_name),
                 timeout_ms: options.timeout_ms.unwrap_or(DEFAULT_TIMEOUT_MS),
                 memory_limit_bytes: options.memory_limit_bytes,
-                wasm_loader: options.wasm_loader.unwrap_or_else(|| Arc::new(UnavailableWasmLoader)),
+                wasm_loader: options
+                    .wasm_loader
+                    .unwrap_or_else(|| Arc::new(UnavailableWasmLoader)),
                 worker_factory: options
                     .worker_factory
                     .unwrap_or_else(|| Arc::new(NoWorkerFactory)),
@@ -282,12 +348,22 @@ impl CodemodeSandbox {
 
     /// Registered tools, in registration order.
     pub fn tools(&self) -> Vec<CodemodeTool> {
-        self.inner.tools_by_name.lock().iter().map(|(_, tool)| tool.clone()).collect()
+        self.inner
+            .tools_by_name
+            .lock()
+            .iter()
+            .map(|(_, tool)| tool.clone())
+            .collect()
     }
 
     /// Registered globals, in registration order.
     pub fn globals(&self) -> Vec<CodemodeTool> {
-        self.inner.globals_by_name.lock().iter().map(|(_, tool)| tool.clone()).collect()
+        self.inner
+            .globals_by_name
+            .lock()
+            .iter()
+            .map(|(_, tool)| tool.clone())
+            .collect()
     }
 
     /// `code` is an async function body: `return` and top-level `await` work. Never fails
@@ -333,7 +409,10 @@ impl CodemodeSandbox {
                 cancel_rx,
             };
             let (done_tx, done_rx) = tokio::sync::oneshot::channel::<()>();
-            let running_entry = RunningEntry { cancel: cancel_tx, done: done_rx };
+            let running_entry = RunningEntry {
+                cancel: cancel_tx,
+                done: done_rx,
+            };
             inner.running.lock().push(running_entry);
             let handle = tokio::spawn(async move {
                 let result = execution.run().await;
@@ -359,7 +438,9 @@ impl CodemodeSandbox {
         let mut completions = Vec::new();
         for entry in running {
             let RunningEntry { cancel, done } = entry;
-            let _ = cancel.send((CodemodeErrorKind::Aborted, "Sandbox closed".to_string())).await;
+            let _ = cancel
+                .send((CodemodeErrorKind::Aborted, "Sandbox closed".to_string()))
+                .await;
             completions.push(done);
         }
         for done in completions {
@@ -401,7 +482,10 @@ impl Execution {
         if self.timeout_ms.is_finite() {
             let cancel_tx = self.cancel_tx.clone();
             let timeout_ms = self.timeout_ms;
-            let message = format!("Execution timed out after {} ms", format_timeout(timeout_ms));
+            let message = format!(
+                "Execution timed out after {} ms",
+                format_timeout(timeout_ms)
+            );
             tokio::spawn(async move {
                 tokio::time::sleep(std::time::Duration::from_secs_f64(timeout_ms / 1000.0)).await;
                 let _ = cancel_tx.send((CodemodeErrorKind::Timeout, message)).await;
@@ -413,7 +497,9 @@ impl Execution {
             let cancel_tx = self.cancel_tx.clone();
             tokio::spawn(async move {
                 signal.wait_aborted().await;
-                let reason = signal.reason().unwrap_or_else(|| "Execution aborted".to_string());
+                let reason = signal
+                    .reason()
+                    .unwrap_or_else(|| "Execution aborted".to_string());
                 let _ = cancel_tx.send((CodemodeErrorKind::Aborted, reason)).await;
             });
         }
@@ -450,7 +536,10 @@ impl Execution {
             globals: self
                 .globals
                 .values()
-                .map(|global| GlobalInfo { name: global.name.clone(), spread: global.spread })
+                .map(|global| GlobalInfo {
+                    name: global.name.clone(),
+                    spread: global.spread,
+                })
                 .collect(),
             wasm: Some(wasm),
             memory_limit_bytes: self.memory_limit_bytes,
@@ -501,9 +590,24 @@ impl Execution {
                             .await;
                     }
                     match message {
-                        Some(message) => {
-                            if let Some(result) = self.on_message(&state, &mut worker, message).await {
-                                return result;
+                        Some(raw) => {
+                            // An exception here would be uncaught in the host process and leave
+                            // the execution unsettled (upstream wraps `handleMessage` in
+                            // try/catch and reports every failure through `finish`).
+                            let message = match serde_json::from_value::<WorkerToHostMessage>(raw) {
+                                Ok(message) => message,
+                                Err(_) => {
+                                    return self
+                                        .finish(&state, Some(&mut worker), Some(bridge_broken("unknown message from the worker")), None)
+                                        .await;
+                                }
+                            };
+                            match self.on_message(&state, &mut worker, message).await {
+                                Some(Ok(result)) => return result,
+                                Some(Err(error)) => {
+                                    return self.finish(&state, Some(&mut worker), Some(bridge_broken(&error.0)), None).await;
+                                }
+                                None => {}
                             }
                         }
                         None => {
@@ -526,32 +630,42 @@ impl Execution {
         }
     }
 
-    /// Handles one worker message; `Some(result)` ends the execution.
+    /// Handles one worker message; `Some(Ok(result))` ends the execution, `Some(Err)` is a
+    /// broken bridge (upstream `handleMessage` throwing `BridgeError` inside the listener).
     async fn on_message(
         &self,
         state: &Arc<ExecutionState>,
         worker: &mut RunningWorker,
         message: WorkerToHostMessage,
-    ) -> Option<CodemodeResult> {
+    ) -> Option<Result<CodemodeResult, BridgeError>> {
         match message {
             WorkerToHostMessage::Output { item } => {
                 state.output.lock().push(item);
                 None
             }
-            WorkerToHostMessage::Call { id, target, name, args } => {
+            WorkerToHostMessage::Call {
+                id,
+                target,
+                name,
+                args,
+            } => {
+                if state.pending.lock().contains_key(&id) {
+                    return Some(Err(BridgeError(format!("duplicate call id {id}"))));
+                }
                 self.handle_call(state, &worker.to_worker, id, target, name, args);
                 None
             }
-            WorkerToHostMessage::Done { ok, outcome } => self.on_done(state, worker, ok, outcome).await,
-            WorkerToHostMessage::Crash { message } => Some(
-                self.finish(
+            WorkerToHostMessage::Done { ok, outcome } => {
+                self.on_done(state, worker, ok, outcome).await
+            }
+            WorkerToHostMessage::Crash { message } => Some(Ok(self
+                .finish(
                     state,
                     Some(worker),
                     Some(CodemodeError::new(CodemodeErrorKind::Sandbox, message)),
                     None,
                 )
-                .await,
-            ),
+                .await)),
         }
     }
 
@@ -561,65 +675,43 @@ impl Execution {
         worker: &mut RunningWorker,
         ok: bool,
         outcome: DoneOutcome,
-    ) -> Option<CodemodeResult> {
+    ) -> Option<Result<CodemodeResult, BridgeError>> {
+        // Decode everything before finish(), which must not throw once it starts.
         if !ok {
             let DoneOutcome::Err { error } = outcome else {
-                return Some(
-                    self.finish(
-                        state,
-                        Some(worker),
-                        Some(CodemodeError::new(CodemodeErrorKind::Sandbox, "malformed done message".to_string())),
-                        None,
-                    )
-                    .await,
-                );
+                // Missing `error` field: upstream parses `undefined` and JSON.parse throws.
+                return Some(Err(BridgeError(
+                    "script error is not valid JSON".to_string(),
+                )));
             };
-            let script_error = parse_script_error(&error);
-            return Some(self.finish(state, Some(worker), Some(script_error), None).await);
+            let script_error = match parse_script_error(&error) {
+                Ok(error) => error,
+                Err(error) => return Some(Err(error)),
+            };
+            return Some(Ok(self
+                .finish(state, Some(worker), Some(script_error), None)
+                .await));
         }
         let DoneOutcome::Ok { value, writes } = outcome else {
-            return Some(
-                self.finish(
-                    state,
-                    Some(worker),
-                    Some(CodemodeError::new(CodemodeErrorKind::Sandbox, "malformed done message".to_string())),
-                    None,
-                )
-                .await,
-            );
+            // Missing `value` field: upstream parses `undefined` and JSON.parse throws.
+            return Some(Err(BridgeError(
+                "return value is not valid JSON".to_string(),
+            )));
         };
-        let parsed_value = match value {
+        let value = match value {
             None => None,
-            Some(json) => match serde_json::from_str::<Value>(&json) {
+            Some(json) => match parse_bridge_json(&json, "return value") {
                 Ok(value) => Some(value),
-                Err(error) => {
-                    return Some(
-                        self.finish(
-                            state,
-                            Some(worker),
-                            Some(CodemodeError::new(CodemodeErrorKind::Sandbox, error.to_string())),
-                            None,
-                        )
-                        .await,
-                    );
-                }
+                Err(error) => return Some(Err(error)),
             },
         };
         let writes = match parse_store_writes(&writes) {
             Ok(writes) => writes,
-            Err(error) => {
-                return Some(
-                    self.finish(
-                        state,
-                        Some(worker),
-                        Some(CodemodeError::new(CodemodeErrorKind::Sandbox, error)),
-                        None,
-                    )
-                    .await,
-                );
-            }
+            Err(error) => return Some(Err(error)),
         };
-        Some(self.finish(state, Some(worker), None, Some((parsed_value, writes))).await)
+        Some(Ok(self
+            .finish(state, Some(worker), None, Some((value, writes)))
+            .await))
     }
 
     fn handle_call(
@@ -645,10 +737,14 @@ impl Execution {
         };
         let controller = AbortSignal::new();
         let started_at = std::time::Instant::now();
-        state
-            .pending
-            .lock()
-            .insert(id, PendingCall { record_index, controller: controller.clone(), started_at });
+        state.pending.lock().insert(
+            id,
+            PendingCall {
+                record_index,
+                controller: controller.clone(),
+                started_at,
+            },
+        );
 
         let state = Arc::clone(state);
         let to_worker = to_worker.clone();
@@ -660,11 +756,19 @@ impl Execution {
             let (status, reply) = match dispatch(table, label, &name, args, controller).await {
                 Ok(payload) => (
                     CodemodeCallStatus::Ok,
-                    HostToWorkerMessage::Result { id, ok: true, payload },
+                    HostToWorkerMessage::Result {
+                        id,
+                        ok: true,
+                        payload,
+                    },
                 ),
                 Err(message) => (
                     CodemodeCallStatus::Error,
-                    HostToWorkerMessage::Result { id, ok: false, payload: Some(message) },
+                    HostToWorkerMessage::Result {
+                        id,
+                        ok: false,
+                        payload: Some(message),
+                    },
                 ),
             };
             // Already cancelled by finish(): the record keeps "cancelled" and the
@@ -749,7 +853,9 @@ async fn dispatch(
     args: Option<String>,
     controller: AbortSignal,
 ) -> Result<Option<String>, String> {
-    let tool = table.get(name).ok_or_else(|| format!("Unknown {label} \"{name}\""))?;
+    let tool = table
+        .get(name)
+        .ok_or_else(|| format!("Unknown {label} \"{name}\""))?;
     let args: Option<Value> = match args {
         None => None,
         Some(json) => Some(serde_json::from_str(&json).map_err(|error| error.to_string())?),
@@ -758,6 +864,8 @@ async fn dispatch(
     let value = (tool.execute)(args, context).await?;
     match value {
         None => Ok(None),
-        Some(value) => Ok(Some(serde_json::to_string(&value).map_err(|error| error.to_string())?)),
+        Some(value) => Ok(Some(
+            serde_json::to_string(&value).map_err(|error| error.to_string())?,
+        )),
     }
 }

@@ -10,51 +10,59 @@ use thiserror::Error;
 #[derive(Debug, Error, Clone)]
 #[error("{message}")]
 pub struct OAuthError {
-	pub code: String,
-	pub message: String,
-	pub error_uri: Option<String>,
+    pub code: String,
+    pub message: String,
+    pub error_uri: Option<String>,
 }
 
 impl OAuthError {
-	/// Upstream `new OAuthError(code, message, errorUri)`: a missing message falls
-	/// back to the code.
-	pub fn new(code: impl Into<String>, message: impl Into<String>, error_uri: Option<String>) -> OAuthError {
-		let code = code.into();
-		let message = message.into();
-		OAuthError {
-			message: if message.is_empty() { code.clone() } else { message },
-			code,
-			error_uri,
-		}
-	}
+    /// Upstream `new OAuthError(code, message, errorUri)`: a missing message falls
+    /// back to the code.
+    pub fn new(
+        code: impl Into<String>,
+        message: impl Into<String>,
+        error_uri: Option<String>,
+    ) -> OAuthError {
+        let code = code.into();
+        let message = message.into();
+        OAuthError {
+            message: if message.is_empty() {
+                code.clone()
+            } else {
+                message
+            },
+            code,
+            error_uri,
+        }
+    }
 }
 
 /// Upstream `OAuthIssuerMismatchError`.
 #[derive(Debug, Error, Clone)]
 #[error("OAuth issuer mismatch: expected {}, received {}", quote(&expected), match received { None => "none".to_string(), Some(received) => quote(&received) })]
 pub struct OAuthIssuerMismatchError {
-	pub expected: String,
-	/// `None` when an authorization response lacks the `iss` parameter its server promised (RFC 9207).
-	pub received: Option<String>,
+    pub expected: String,
+    /// `None` when an authorization response lacks the `iss` parameter its server promised (RFC 9207).
+    pub received: Option<String>,
 }
 
 fn quote(value: &str) -> String {
-	format!("{value:?}")
+    format!("{value:?}")
 }
 
 /// Upstream `OAuthInsecureEndpointError`.
 #[derive(Debug, Error, Clone)]
 #[error("Refusing to send OAuth credentials to non-HTTPS endpoint {endpoint}")]
 pub struct OAuthInsecureEndpointError {
-	pub endpoint: String,
+    pub endpoint: String,
 }
 
 /// Upstream `OAuthRegistrationError`.
 #[derive(Debug, Error, Clone)]
 #[error("OAuth dynamic client registration failed with status {status}: {body}")]
 pub struct OAuthRegistrationError {
-	pub status: u16,
-	pub body: String,
+    pub status: u16,
+    pub body: String,
 }
 
 /// Upstream `McpOAuthAuthorizationRequiredError`.

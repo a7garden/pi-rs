@@ -18,26 +18,31 @@ use crate::providers::cloudflare_stream::{cloudflare_classifier, cloudflare_stre
 
 /// Upstream `cloudflareWorkersAIProvider()`.
 pub fn cloudflare_workers_ai_provider() -> Arc<dyn Provider> {
-	let mut classifiers = BTreeMap::new();
-	classifiers.insert(
-		"cloudflare-workers-ai-system-one".to_string(),
-		cloudflare_classifier(crate::api::cloudflare_workers_ai_system_one::cloudflare_workers_ai_system_one_api()),
-	);
-	create_provider(CreateProviderOptions {
-		id: "cloudflare-workers-ai".to_string(),
-		name: Some("Cloudflare Workers AI".to_string()),
-		base_url: None,
-		headers: None,
-		auth: ProviderAuth { api_key: Some(cloudflare_workers_ai_auth()), oauth: None },
-		models: super::cloudflare_workers_ai_models::cloudflare_workers_ai_any_models(),
-		fetch_models: None,
-		filter_models: None,
-		filter_all_models: None,
-		api: Some(ApiDispatch::Single(cloudflare_streams(
-			crate::api::openai_completions::openai_completions_api(),
-		))),
-		images: Default::default(),
-		classifiers,
-	})
-	.expect("static cloudflare-workers-ai provider configuration is valid")
+    let mut classifiers = BTreeMap::new();
+    classifiers.insert(
+        "cloudflare-workers-ai-system-one".to_string(),
+        cloudflare_classifier(
+            crate::api::cloudflare_workers_ai_system_one::cloudflare_workers_ai_system_one_api(),
+        ),
+    );
+    create_provider(CreateProviderOptions {
+        id: "cloudflare-workers-ai".to_string(),
+        name: Some("Cloudflare Workers AI".to_string()),
+        base_url: None,
+        headers: None,
+        auth: ProviderAuth {
+            api_key: Some(cloudflare_workers_ai_auth()),
+            oauth: None,
+        },
+        models: super::cloudflare_workers_ai_models::cloudflare_workers_ai_any_models(),
+        fetch_models: None,
+        filter_models: None,
+        filter_all_models: None,
+        api: Some(ApiDispatch::Single(cloudflare_streams(
+            crate::api::openai_completions::openai_completions_api(),
+        ))),
+        images: Default::default(),
+        classifiers,
+    })
+    .expect("static cloudflare-workers-ai provider configuration is valid")
 }

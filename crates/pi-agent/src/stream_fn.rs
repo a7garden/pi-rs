@@ -19,7 +19,7 @@ static DEFAULT_STREAM_FN: LazyLock<Mutex<Option<StreamFn>>> = LazyLock::new(|| M
 /// function here without making pi-agent depend on a provider catalog or
 /// compatibility layer.
 pub fn set_default_stream_fn(stream_fn: Option<StreamFn>) {
-	*DEFAULT_STREAM_FN.lock() = stream_fn;
+    *DEFAULT_STREAM_FN.lock() = stream_fn;
 }
 
 /// Upstream `getDefaultStreamFn`.
@@ -27,9 +27,9 @@ pub fn set_default_stream_fn(stream_fn: Option<StreamFn>) {
 /// # Panics
 /// With the upstream error message when no default is configured.
 pub fn get_default_stream_fn() -> StreamFn {
-	DEFAULT_STREAM_FN.lock().clone().unwrap_or_else(|| {
-		panic!(
+    DEFAULT_STREAM_FN.lock().clone().unwrap_or_else(|| {
+        panic!(
 			"No default stream function configured. Pass streamFn explicitly or call setDefaultStreamFn()."
 		)
-	})
+    })
 }

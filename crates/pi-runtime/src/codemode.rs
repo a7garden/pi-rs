@@ -15,11 +15,11 @@
 //! a V8 near-heap-limit callback that requests termination (upstream: a wasm
 //! memory cap).
 
+use parking_lot::Mutex;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU64, Ordering};
 use std::sync::Arc;
-use parking_lot::Mutex;
 
 use deno_core::v8::IsolateHandle;
 use deno_core::{OpState, PollEventLoopOptions};
@@ -28,7 +28,7 @@ use pi_codemode::runtime::prelude_source::PRELUDE_SOURCE;
 use pi_codemode::runtime::protocol::{
     CallTarget, DoneOutcome, HostToWorkerMessage, WorkerData, WorkerToHostMessage,
 };
-use pi_codemode::types::CodemodeOutputItem;
+use pi_codemode::types::{CodemodeOutputItem, True};
 use pi_codemode::wasm::{CodemodeWasmModule, WasmLoader};
 use tokio::sync::{mpsc, oneshot};
 
@@ -36,12 +36,22 @@ use crate::host::{make_runtime, spawn_js_thread};
 
 /// The per-execution state shared between the bridge op and the worker loop.
 struct WorkerShared {
-    /// The worker→host channel; ops push protocol messages onto it.
-    to_host: mpsc::Sender<WorkerToHostMessage>,
+    /// The worker→host channel; ops push raw protocol payloads onto it (the host
+    /// validates every payload it receives, like upstream's raw `postMessage`).
+    to_host: mpsc::Sender<serde_json::Value>,
     /// `bridge("call"|"global", …)` calls awaiting a `result` reply.
     pending: AtomicU64,
     /// Set once `bridge("done", …)` fired; the worker exits soon after.
     done: AtomicBool,
+}
+
+/// Serializes a protocol message to its raw wire value and posts it. The host
+/// decodes and validates payloads at the boundary (upstream `isWorkerToHostMessage`),
+/// so malformed values surface there as bridge errors. Returns whether the
+/// message was delivered.
+fn post(shared: &WorkerShared, message: WorkerToHostMessage) -> bool {
+    let raw = serde_json::to_value(message).expect("codemode protocol message serializes");
+    shared.to_host.try_send(raw).is_ok()
 }
 
 /// pi-codemode worker factory backed by an embedded `JsRuntime`.
@@ -63,7 +73,9 @@ pub struct DenoWasmLoader;
 struct WasmToken;
 
 impl WasmLoader for DenoWasmLoader {
-    fn load(&self) -> Pin<Box<dyn Future<Output = Result<CodemodeWasmModule, String>> + Send + '_>> {
+    fn load(
+        &self,
+    ) -> Pin<Box<dyn Future<Output = Result<CodemodeWasmModule, String>> + Send + '_>> {
         Box::pin(async { Ok(Arc::new(WasmToken) as CodemodeWasmModule) })
     }
 }
@@ -105,7 +117,7 @@ impl WorkerHandle for DenoWorkerHandle {
 
 fn spawn_worker(data: WorkerData) -> Result<RunningWorker, String> {
     let (to_worker, mut to_worker_rx) = mpsc::channel::<HostToWorkerMessage>(64);
-    let (to_host, from_worker) = mpsc::channel::<WorkerToHostMessage>(256);
+    let (to_host, from_worker) = mpsc::channel::<serde_json::Value>(256);
     let (exit_tx, exit_rx) = oneshot::channel::<()>();
     let (isolate_tx, isolate_rx) = tokio::sync::watch::channel(None::<IsolateHandle>);
     let terminate_requested = Arc::new(AtomicI32::new(0));
@@ -216,16 +228,32 @@ fn op_codemode_bridge(
             shared.pending.fetch_add(1, Ordering::SeqCst);
             WorkerToHostMessage::Call {
                 id,
-                target: if kind == "call" { CallTarget::Tool } else { CallTarget::Global },
+                target: if kind == "call" {
+                    CallTarget::Tool
+                } else {
+                    CallTarget::Global
+                },
                 name: b.to_string(),
                 args: (!c.is_empty()).then(|| c.to_string()),
             }
         }
         "output" => {
             let item = if a == "image" {
-                CodemodeOutputItem::Image { data: b.to_string(), mime_type: c.to_string() }
+                CodemodeOutputItem::Image {
+                    data: b.to_string(),
+                    mime_type: c.to_string(),
+                }
+            } else if a == "console" {
+                // `console.*` output is marked so hosts can tell it apart from `text()` (v1.1.0).
+                CodemodeOutputItem::Text {
+                    text: b.to_string(),
+                    console: Some(True),
+                }
             } else {
-                CodemodeOutputItem::Text { text: b.to_string() }
+                CodemodeOutputItem::Text {
+                    text: b.to_string(),
+                    console: None,
+                }
             };
             WorkerToHostMessage::Output { item }
         }
@@ -243,7 +271,9 @@ fn op_codemode_bridge(
             } else {
                 WorkerToHostMessage::Done {
                     ok: false,
-                    outcome: DoneOutcome::Err { error: b.to_string() },
+                    outcome: DoneOutcome::Err {
+                        error: b.to_string(),
+                    },
                 }
             }
         }
@@ -254,7 +284,7 @@ fn op_codemode_bridge(
         }
     };
     // The host drains this channel continuously while an execution runs.
-    if shared.to_host.try_send(message).is_err() {
+    if !post(&shared, message) {
         return Err(deno_error::JsErrorBox::generic(
             "codemode worker: host message channel is full or closed",
         ));
@@ -262,10 +292,7 @@ fn op_codemode_bridge(
     Ok(())
 }
 
-deno_core::extension!(
-    deno_codemode_ops,
-    ops = [op_codemode_bridge],
-);
+deno_core::extension!(deno_codemode_ops, ops = [op_codemode_bridge],);
 
 #[allow(clippy::too_many_arguments)]
 async fn run_worker_loop(
@@ -315,12 +342,13 @@ async fn run_worker_loop(
             ok: false,
             outcome: DoneOutcome::Err { error: error_json },
         };
-        if shared.to_host.try_send(message).is_ok() {
+        if post(&shared, message) {
             shared.done.store(true, Ordering::SeqCst);
         }
         return;
     }
-    if let Err(error) = runtime.execute_script("codemode-run.js", "__piRun(globalThis.__piUserFn)") {
+    if let Err(error) = runtime.execute_script("codemode-run.js", "__piRun(globalThis.__piUserFn)")
+    {
         if stopping(&interrupt, &terminate_requested) {
             return;
         }
@@ -385,7 +413,14 @@ async fn run_worker_loop(
             }
         }
     }
-    exit_code.store(if shared.done.load(Ordering::SeqCst) { 0 } else { 1 }, Ordering::SeqCst);
+    exit_code.store(
+        if shared.done.load(Ordering::SeqCst) {
+            0
+        } else {
+            1
+        },
+        Ordering::SeqCst,
+    );
 }
 
 fn stopping(interrupt: &AtomicI32, terminate_requested: &AtomicI32) -> bool {
@@ -393,7 +428,10 @@ fn stopping(interrupt: &AtomicI32, terminate_requested: &AtomicI32) -> bool {
 }
 
 fn send_crash(shared: &WorkerShared, message: &str) {
-    let _ = shared.to_host.try_send(WorkerToHostMessage::Crash {
-        message: message.to_string(),
-    });
+    post(
+        shared,
+        WorkerToHostMessage::Crash {
+            message: message.to_string(),
+        },
+    );
 }

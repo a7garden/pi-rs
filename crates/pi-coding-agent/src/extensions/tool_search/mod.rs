@@ -35,14 +35,14 @@ use tool::{ApiToolSource, ToolSearchToolOptions};
 
 /// Build the `tool_search` extension factory (`createToolSearchExtension`).
 pub fn create_tool_search_extension() -> ExtensionFactory {
-	std::sync::Arc::new(|pi: ExtensionApiHandle| {
-		Box::pin(async move {
-			let mut definition = tool::create_tool_search_tool_definition(ToolSearchToolOptions {
-				tools: Some(std::sync::Arc::new(ApiToolSource::new(pi.clone()))),
-			});
-			definition.default_active = Some(false);
-			pi.register_tool(definition);
-			Ok(())
-		})
-	})
+    std::sync::Arc::new(|pi: ExtensionApiHandle| {
+        Box::pin(async move {
+            let mut definition = tool::create_tool_search_tool_definition(ToolSearchToolOptions {
+                tools: Some(std::sync::Arc::new(ApiToolSource::new(pi.clone()))),
+            });
+            definition.default_active = Some(false);
+            pi.register_tool(definition);
+            Ok(())
+        })
+    })
 }

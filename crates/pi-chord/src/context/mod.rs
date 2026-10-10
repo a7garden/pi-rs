@@ -11,12 +11,12 @@
 //!   stored value out (values must be `Clone`), matching upstream's immutable
 //!   value semantics.
 
+use parking_lot::Mutex;
 use std::any::Any;
 use std::fmt;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, LazyLock};
-use {parking_lot::Mutex};
 use std::task::{Context as TaskContext, Poll, Waker};
 
 use crate::services::errors::AnyError;
@@ -42,8 +42,14 @@ impl fmt::Debug for AbortReason {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             AbortReason::Aborted => f.write_str("AbortReason::Aborted"),
-            AbortReason::Message(message) => f.debug_tuple("AbortReason::Message").field(message).finish(),
-            AbortReason::Error(error) => f.debug_tuple("AbortReason::Error").field(&error.to_string()).finish(),
+            AbortReason::Message(message) => f
+                .debug_tuple("AbortReason::Message")
+                .field(message)
+                .finish(),
+            AbortReason::Error(error) => f
+                .debug_tuple("AbortReason::Error")
+                .field(&error.to_string())
+                .finish(),
         }
     }
 }
@@ -123,7 +129,10 @@ impl AbortSignal {
 
     /// Register a listener invoked synchronously on abort (and immediately if
     /// already aborted). Returns a disposer that removes the registration.
-    pub fn add_listener(&self, listener: impl Fn() + Send + Sync + 'static) -> Box<dyn FnOnce() + Send> {
+    pub fn add_listener(
+        &self,
+        listener: impl Fn() + Send + Sync + 'static,
+    ) -> Box<dyn FnOnce() + Send> {
         let listener: AbortListener = Box::new(listener);
         let id = {
             let mut inner = self.state.inner.lock();
@@ -284,7 +293,9 @@ impl<T> Clone for ContextKey<T> {
 
 impl<T> fmt::Debug for ContextKey<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("ContextKey").field("description", &self.description).finish()
+        f.debug_struct("ContextKey")
+            .field("description", &self.description)
+            .finish()
     }
 }
 
@@ -379,7 +390,11 @@ impl fmt::Display for Context {
         match self.node.as_ref() {
             ContextNode::Empty { name } => f.write_str(name),
             ContextNode::Value(value_node) => {
-                write!(f, "{}.WithValue({})", value_node.parent, value_node.key_description)
+                write!(
+                    f,
+                    "{}.WithValue({})",
+                    value_node.parent, value_node.key_description
+                )
             }
         }
     }
@@ -395,7 +410,11 @@ impl fmt::Debug for Context {
 /// keeps a frozen `ContextKey<AbortSignal | undefined>` with a unique symbol).
 const ABORT_SIGNAL_CONTEXT_KEY_ID: u64 = u64::MAX;
 
-fn context_value<T: Send + Sync + 'static>(key: &ContextKey<T>, value: T, parent: Context) -> Context {
+fn context_value<T: Send + Sync + 'static>(
+    key: &ContextKey<T>,
+    value: T,
+    parent: Context,
+) -> Context {
     Context {
         node: Arc::new(ContextNode::Value(Box::new(ContextValueNode {
             parent,
@@ -406,11 +425,17 @@ fn context_value<T: Send + Sync + 'static>(key: &ContextKey<T>, value: T, parent
     }
 }
 
-pub static BACKGROUND_CONTEXT: LazyLock<Context> = LazyLock::new(|| Context::empty("[Context BACKGROUND_CONTEXT]"));
-pub static TODO_CONTEXT: LazyLock<Context> = LazyLock::new(|| Context::empty("[Context TODO_CONTEXT]"));
+pub static BACKGROUND_CONTEXT: LazyLock<Context> =
+    LazyLock::new(|| Context::empty("[Context BACKGROUND_CONTEXT]"));
+pub static TODO_CONTEXT: LazyLock<Context> =
+    LazyLock::new(|| Context::empty("[Context TODO_CONTEXT]"));
 
 /// Derive a context containing one additional or replaced value.
-pub fn with_context_value<T: Send + Sync + 'static>(key: &ContextKey<T>, value: T, parent: Context) -> Context {
+pub fn with_context_value<T: Send + Sync + 'static>(
+    key: &ContextKey<T>,
+    value: T,
+    parent: Context,
+) -> Context {
     context_value(key, value, parent)
 }
 

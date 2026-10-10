@@ -17,11 +17,14 @@
 //! checked [`super::write_container_value`] guard so the impossible case fails
 //! loudly instead of materializing a non-JSON value.
 
-use super::{Op, Seg, DeltaError};
+use super::{DeltaError, Op, Seg};
 use crate::json::JsonValue;
 
 /// Apply self-produced trusted operations, returning the new immutable value.
-pub fn apply_immutable_trusted(target: &JsonValue, operations: &[Op]) -> Result<JsonValue, DeltaError> {
+pub fn apply_immutable_trusted(
+    target: &JsonValue,
+    operations: &[Op],
+) -> Result<JsonValue, DeltaError> {
     let mut root = target.clone();
     for operation in operations {
         match operation {
@@ -37,14 +40,18 @@ pub fn apply_immutable_trusted(target: &JsonValue, operations: &[Op]) -> Result<
             } => {
                 let container = copy_path(&mut root, path, path.len())?;
                 let Some(array) = container.as_array_mut() else {
-                    return Err(trusted_error("Trusted array operation target is not an array"));
+                    return Err(trusted_error(
+                        "Trusted array operation target is not an array",
+                    ));
                 };
                 super::splice_array(array, *start, *remove, items);
             }
             Op::Permute { path, permutation } => {
                 let container = copy_path(&mut root, path, path.len())?;
                 let Some(array) = container.as_array_mut() else {
-                    return Err(trusted_error("Trusted array operation target is not an array"));
+                    return Err(trusted_error(
+                        "Trusted array operation target is not an array",
+                    ));
                 };
                 if array.len() != permutation.len() {
                     return Err(trusted_error("Trusted permutation length mismatch"));
@@ -104,7 +111,11 @@ fn trusted_error(message: &str) -> DeltaError {
 /// Upstream `copyPath`: walk `length` segments from the root, requiring a
 /// container at every step. The deep clone replaces upstream's owned-copy
 /// bookkeeping — every container is already private.
-fn copy_path<'a>(root: &'a mut JsonValue, path: &[Seg], length: usize) -> Result<&'a mut JsonValue, DeltaError> {
+fn copy_path<'a>(
+    root: &'a mut JsonValue,
+    path: &[Seg],
+    length: usize,
+) -> Result<&'a mut JsonValue, DeltaError> {
     if !is_container(root) {
         return Err(trusted_error("Trusted operation root is not a container"));
     }
@@ -354,7 +365,10 @@ mod tests {
         ];
         let batch_refs: Vec<&[Op]> = batches.iter().map(Vec::as_slice).collect();
         let result = apply_immutable_batches(&JsonValue::Null, batch_refs).unwrap();
-        assert_eq!(result, json!({"nested": {"value": 2}, "values": [3, 1, 4, 5]}));
+        assert_eq!(
+            result,
+            json!({"nested": {"value": 2}, "values": [3, 1, 4, 5]})
+        );
         assert_eq!(replacement, replacement_before);
 
         let array = freeze_deep(json!([1, 2, 3]));
@@ -488,7 +502,8 @@ mod tests {
                     3 => {
                         let length = state.length(&[Seg::key("values")]).unwrap();
                         let index = (revision as usize) % length;
-                        let mut element = state.at(&[Seg::key("values"), Seg::index(index)]).unwrap();
+                        let mut element =
+                            state.at(&[Seg::key("values"), Seg::index(index)]).unwrap();
                         element.set(&[], "score", json!(revision)).unwrap();
                     }
                     _ => {
@@ -523,17 +538,23 @@ mod tests {
                 value: json!(2),
             }],
             vec![Op::Set {
-                path: vec![Seg::key("constructor"), Seg::key("prototype"), Seg::key("polluted")],
+                path: vec![
+                    Seg::key("constructor"),
+                    Seg::key("prototype"),
+                    Seg::key("polluted"),
+                ],
                 value: json!(true),
             }],
         ];
         let batch_refs: Vec<&[Op]> = invalid_batches.iter().map(Vec::as_slice).collect();
         assert!(apply_immutable_batches(&base, batch_refs).is_err());
         assert_eq!(base, base_before);
-        assert!(serde_json::from_str::<serde_json::Map<String, JsonValue>>("{}")
-            .unwrap()
-            .get("polluted")
-            .is_none());
+        assert!(
+            serde_json::from_str::<serde_json::Map<String, JsonValue>>("{}")
+                .unwrap()
+                .get("polluted")
+                .is_none()
+        );
 
         // Upstream also fails a batch stream whose iterator throws mid-iteration
         // and asserts generator-closure bookkeeping; Rust batch inputs are
@@ -555,7 +576,9 @@ mod tests {
             }],
         )
         .unwrap_err();
-        assert!(string_spelled_index.to_string().contains("unresolvable path"));
+        assert!(string_spelled_index
+            .to_string()
+            .contains("unresolvable path"));
     }
 
     #[test]
@@ -659,7 +682,10 @@ mod tests {
             }],
         )
         .unwrap_err();
-        assert_eq!(err.to_string(), "Trusted array operation target is not an array");
+        assert_eq!(
+            err.to_string(),
+            "Trusted array operation target is not an array"
+        );
 
         let err = apply_immutable_trusted(
             &json!({"rows": []}),

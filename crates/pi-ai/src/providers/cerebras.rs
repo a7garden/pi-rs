@@ -13,22 +13,24 @@ use crate::models::{create_provider, ApiDispatch, CreateProviderOptions, Provide
 
 /// Upstream `cerebrasProvider()`.
 pub fn cerebras_provider() -> Arc<dyn Provider> {
-	create_provider(CreateProviderOptions {
-		id: "cerebras".to_string(),
-		name: Some("Cerebras".to_string()),
-		base_url: Some("https://api.cerebras.ai/v1".to_string()),
-		headers: None,
-		auth: ProviderAuth {
-			api_key: Some(env_api_key_auth("Cerebras API key", &["CEREBRAS_API_KEY"])),
-			oauth: None,
-		},
-		models: super::cerebras_models::cerebras_any_models(),
-		fetch_models: None,
-		filter_models: None,
-		filter_all_models: None,
-		api: Some(ApiDispatch::Single(crate::api::openai_completions::openai_completions_api())),
-		images: Default::default(),
-		classifiers: Default::default(),
-	})
-	.expect("static cerebras provider configuration is valid")
+    create_provider(CreateProviderOptions {
+        id: "cerebras".to_string(),
+        name: Some("Cerebras".to_string()),
+        base_url: Some("https://api.cerebras.ai/v1".to_string()),
+        headers: None,
+        auth: ProviderAuth {
+            api_key: Some(env_api_key_auth("Cerebras API key", &["CEREBRAS_API_KEY"])),
+            oauth: None,
+        },
+        models: super::cerebras_models::cerebras_any_models(),
+        fetch_models: None,
+        filter_models: None,
+        filter_all_models: None,
+        api: Some(ApiDispatch::Single(
+            crate::api::openai_completions::openai_completions_api(),
+        )),
+        images: Default::default(),
+        classifiers: Default::default(),
+    })
+    .expect("static cerebras provider configuration is valid")
 }

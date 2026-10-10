@@ -9,4 +9,6 @@ pub use crate::node::bundle::{
     FacetBuildRequest, FacetBundlePlatform, FacetCompiler,
 };
 pub use crate::node::manifest::{FacetBundleArtifact, FacetBundleEntry, FacetBundleManifest};
-pub use crate::node::package::{bundle_facet_package, BundleFacetPackageOptions, BundleFacetPackageResult};
+pub use crate::node::package::{
+    bundle_facet_package, BundleFacetPackageOptions, BundleFacetPackageResult,
+};

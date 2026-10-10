@@ -475,7 +475,7 @@
 //!   `std::io::Error` display strings and lengths use Unicode scalar counts
 //!   where upstream uses UTF-16 units (interacts with D10: the minimal
 //!   frontmatter parser accepts upstream's #9354 invalid-YAML fixture as a
-//!   plain scalar, so that regression uses a non-mapping frontmatter). 
+//!   plain scalar, so that regression uses a non-mapping frontmatter).
 //!   **D57c** — `timings` namespace arguments are explicit with `*_main`
 //!   convenience wrappers (JS default parameters). **D57d** — only
 //!   `findGitPaths` is ported from `footer-data-provider.ts`; the
@@ -1242,11 +1242,54 @@
 //!   prompt error carries a fallback message when the server omits
 //!   `error.message`; the JS `finally { await runtime.dispose() }` masking
 //!   semantics (dispose failure replaces the body outcome) are preserved.
+//!
+//! # v1.1.0 sync (upstream `v1.0.3..v1.1.0`)
+//!
+//! - **D183 — connection-attempt identity.** Upstream tags each MCP
+//!   connection attempt with a fresh `symbol` and keeps per-server
+//!   `ready`/`closing` promises; the port uses a monotonic attempt counter on
+//!   each server slot plus the connection's own `get_client()` memoization as
+//!   the readiness primitive, and `wait_for_servers` re-checks attempt
+//!   identity (`Arc::ptr_eq` on connections) after each wait.
+//! - **D184 — session lifetime.** The `generation` counter plus
+//!   `session_active` flag become one `AbortController` per session (starts
+//!   aborted, replaced on `session_start`, aborted on `session_shutdown`);
+//!   background work registers through `track` (a `Shared` future list) that
+//!   shutdown joins.
+//! - **D185 — tool-call client revalidation.** MCP tool `getClient` hooks
+//!   resolve the server's *current* connection at execution time and reject
+//!   disabled/still-starting/withdrawn tools, instead of capturing the
+//!   connection at registration; `readableResources` resolves servers by
+//!   name the same way.
+//! - **D186 — client shutdown.** The connection `closed` flag pairs with a
+//!   `Notify` so the retry backoff sleep aborts, the connect setup races the
+//!   shutdown signal, and `close()` joins the client shutdown with any
+//!   in-flight connect (upstream `Promise.all([client.close(), opening])`);
+//!   per-client closes serialize through a lock instead of a memoized
+//!   promise (same "no transport open when close resolves" contract).
+//! - **D187 — sign-in cancellation.** `signInMcpServer` takes the session's
+//!   abort signal; the OAuth flow gets a 15s per-request timeout
+//!   (`timedFetch`, renamed from the refresh-only constant) and the signal.
+//!   pi-mcp's signal has no `any` combinator, so the prompt combines signals
+//!   through a relay controller.
+//! - **D188 — worker response tags.** The image resize worker responses
+//!   carry the `pi:image-resize-response` type tag on the documented serde
+//!   payload (the Rust port has no shared Node channel to disambiguate).
+//! - **D189 — streamed ANSI.** `splitIncompleteAnsiSuffix` ports as
+//!   hand-rolled unfinished-OSC/CSI scanners (same 256-character hold-back
+//!   window; the window slices chars, upstream UTF-16 units — equivalent on
+//!   ASCII, a boundary shift at most on astral input).
+//! - **D190 — tool selection.** `--tools`/`tools` validation
+//!   (`getToolListError`), `+name`/`-name` modifiers over `defaultTools`
+//!   (`applyToolModifiers`), and pattern allow/denylists
+//!   (`createToolNameMatcher`) port directly; the matcher is a struct, not a
+//!   closure. MCP tools stay registered for codemode/tool_search unless the
+//!   allowlist filters them (`is_mcp_tool_name`).
 
 pub mod cli;
 pub mod config;
-pub mod experimental;
 pub mod core;
+pub mod experimental;
 pub mod extensions;
 pub mod migrations;
 pub mod modes;
@@ -1255,53 +1298,61 @@ pub mod theme;
 pub mod utils;
 
 pub use config::{
-	detect_install_change, detect_install_method, expand_tilde_path, find_node_package_dir, get_agent_dir,
-	get_auth_path, get_bin_dir, get_changelog_path, get_custom_themes_dir, get_debug_log_path, get_docs_path,
-	get_examples_path, get_export_template_dir, get_interactive_assets_dir, get_models_path, get_package_dir,
-	get_package_json_path, get_prompts_dir, get_readme_path, get_sessions_dir, get_settings_path, get_share_viewer_url,
-	get_themes_dir, get_tools_dir, get_update_instruction, get_self_update_command, get_self_update_unavailable_instruction,
-	InstallChange, InstallMethod, SelfUpdateCommand, SelfUpdateCommandStep, SelfUpdatePackageTarget, APP_NAME,
-	APP_TITLE, CONFIG_DIR_NAME, ENV_AGENT_DIR, ENV_SESSION_DIR, PACKAGE_NAME, VERSION,
+    detect_install_change, detect_install_method, expand_tilde_path, find_node_package_dir,
+    get_agent_dir, get_auth_path, get_bin_dir, get_changelog_path, get_custom_themes_dir,
+    get_debug_log_path, get_docs_path, get_examples_path, get_export_template_dir,
+    get_interactive_assets_dir, get_models_path, get_package_dir, get_package_json_path,
+    get_prompts_dir, get_readme_path, get_self_update_command,
+    get_self_update_unavailable_instruction, get_sessions_dir, get_settings_path,
+    get_share_viewer_url, get_themes_dir, get_tools_dir, get_update_instruction, InstallChange,
+    InstallMethod, SelfUpdateCommand, SelfUpdateCommandStep, SelfUpdatePackageTarget, APP_NAME,
+    APP_TITLE, CONFIG_DIR_NAME, ENV_AGENT_DIR, ENV_SESSION_DIR, PACKAGE_NAME, VERSION,
+};
+pub use core::agent_session::{parse_skill_block, ParsedSkillBlock};
+pub use core::auth_storage::read_stored_credential;
+pub use core::compaction::{
+    calculate_context_tokens, collect_entries_for_branch_summary, compact, complete_summarization,
+    estimate_context_tokens, estimate_projected_context_tokens, estimate_tokens, find_cut_point,
+    find_turn_start_index, generate_branch_summary, generate_summary, generate_summary_with_usage,
+    get_last_assistant_usage, get_summarization_failure, prepare_branch_entries,
+    prepare_compaction, should_compact, BranchPreparation, BranchSummaryDetails,
+    BranchSummaryResult, CollectEntriesResult, CompactionDetails, CompactionPreparation,
+    CompactionResult, CompactionSettings, ContextUsageEstimate, CutPointResult, FileLists,
+    FileOperations, GenerateBranchSummaryOptions, SummaryWithUsage, DEFAULT_COMPACTION_SETTINGS,
+    SUMMARIZATION_SYSTEM_PROMPT,
 };
 pub use core::defaults::{DEFAULT_THINKING_LEVEL, THINKING_LEVEL_OPTIONS};
 pub use core::messages::{
-	bash_execution_to_text, create_branch_summary_message, create_compaction_summary_message, create_custom_message,
-	custom_message_from_agent, custom_message_to_agent, convert_to_llm, BashExecutionMessage, BranchSummaryMessage,
-	BranchSummaryRole, CompactionSummaryMessage, CompactionSummaryRole, CustomMessage, CustomRole,
-	BRANCH_SUMMARY_PREFIX, BRANCH_SUMMARY_SUFFIX, COMPACTION_SUMMARY_PREFIX, COMPACTION_SUMMARY_SUFFIX,
-};
-pub use core::session_manager::{
-	assert_valid_session_id, build_context_entries, build_session_context, build_session_projection,
-	find_most_recent_session, get_default_session_dir, get_latest_compaction_entry, load_entries_from_file,
-	migrate_session_entries, parse_session_entries, session_entry_to_context_messages, BranchSummaryEntry,
-	CompactionEntry, ContextEditEntry, ContextEditReplacement, ContextEditableContent, CustomEntry,
-	CustomMessageEntry, FileEntry, LabelEntry, Leaf, ModelChangeEntry, NewSessionOptions, ProjectedSessionEntry,
-	SessionContext, SessionEntry, SessionEntryBase, SessionHeader, SessionInfo, SessionInfoEntry, SessionManager,
-	SessionManagerError, SessionMessageEntry, SessionModelRef, SessionProjection, SessionTreeNode, UsageEntry,
-	CURRENT_SESSION_VERSION,
-};
-pub use core::agent_session::{parse_skill_block, ParsedSkillBlock};
-pub use core::compaction::{
-	calculate_context_tokens, collect_entries_for_branch_summary, compact, complete_summarization,
-	estimate_context_tokens, estimate_projected_context_tokens, estimate_tokens, find_cut_point, find_turn_start_index,
-	generate_branch_summary, generate_summary, generate_summary_with_usage, get_last_assistant_usage,
-	get_summarization_failure, prepare_branch_entries, prepare_compaction, should_compact, BranchPreparation,
-	BranchSummaryDetails, BranchSummaryResult, CollectEntriesResult, CompactionDetails, CompactionPreparation,
-	CompactionResult, CompactionSettings, ContextUsageEstimate, CutPointResult, FileLists, FileOperations,
-	GenerateBranchSummaryOptions, SummaryWithUsage, DEFAULT_COMPACTION_SETTINGS, SUMMARIZATION_SYSTEM_PROMPT,
-};
-pub use core::usage_totals::{
-	add_usage_to_totals, combine_usage, create_usage_totals, get_usage_cost_breakdown, UsageCostBreakdownEntry,
-	UsageTotals,
-};
-pub use core::settings_manager::{
-	parse_http_idle_timeout_ms, resolve_default_tools, CacheWarmingMode, CodemodeMode, DefaultProjectTrust,
-	DoubleEscapeAction, FileSettingsStorage, FullscreenExitOutput, InMemorySettingsStorage, MermaidRenderingMode,
-	PackageSource, QuietStartup, ScrollViewScrollbar, Settings, SettingsError, SettingsManager,
-	SettingsManagerCreateOptions, SettingsScope, SteeringMode, TuiMode, TerminalCapabilityOverrides, TerminalImages,
-	WheelScrollLines, DEFAULT_HTTP_IDLE_TIMEOUT_MS, DEFAULT_TOOL_NAMES,
+    bash_execution_to_text, convert_to_llm, create_branch_summary_message,
+    create_compaction_summary_message, create_custom_message, custom_message_from_agent,
+    custom_message_to_agent, BashExecutionMessage, BranchSummaryMessage, BranchSummaryRole,
+    CompactionSummaryMessage, CompactionSummaryRole, CustomMessage, CustomRole,
+    BRANCH_SUMMARY_PREFIX, BRANCH_SUMMARY_SUFFIX, COMPACTION_SUMMARY_PREFIX,
+    COMPACTION_SUMMARY_SUFFIX,
 };
 pub use core::models_store_wrapper::{FileModelsStore, InMemoryCodingAgentModelsStore};
-pub use core::auth_storage::read_stored_credential;
+pub use core::session_manager::{
+    assert_valid_session_id, build_context_entries, build_session_context,
+    build_session_projection, find_most_recent_session, get_default_session_dir,
+    get_latest_compaction_entry, load_entries_from_file, migrate_session_entries,
+    parse_session_entries, session_entry_to_context_messages, BranchSummaryEntry, CompactionEntry,
+    ContextEditEntry, ContextEditReplacement, ContextEditableContent, CustomEntry,
+    CustomMessageEntry, FileEntry, LabelEntry, Leaf, ModelChangeEntry, NewSessionOptions,
+    ProjectedSessionEntry, SessionContext, SessionEntry, SessionEntryBase, SessionHeader,
+    SessionInfo, SessionInfoEntry, SessionManager, SessionManagerError, SessionMessageEntry,
+    SessionModelRef, SessionProjection, SessionTreeNode, UsageEntry, CURRENT_SESSION_VERSION,
+};
+pub use core::settings_manager::{
+    parse_http_idle_timeout_ms, resolve_default_tools, CacheWarmingMode, CodemodeMode,
+    DefaultProjectTrust, DoubleEscapeAction, FileSettingsStorage, FullscreenExitOutput,
+    InMemorySettingsStorage, MermaidRenderingMode, PackageSource, QuietStartup,
+    ScrollViewScrollbar, Settings, SettingsError, SettingsManager, SettingsManagerCreateOptions,
+    SettingsScope, SteeringMode, TerminalCapabilityOverrides, TerminalImages, TuiMode,
+    WheelScrollLines, DEFAULT_HTTP_IDLE_TIMEOUT_MS, DEFAULT_TOOL_NAMES,
+};
+pub use core::usage_totals::{
+    add_usage_to_totals, combine_usage, create_usage_totals, get_usage_cost_breakdown,
+    UsageCostBreakdownEntry, UsageTotals,
+};
 // Upstream `index.ts`: `export { createSyntheticSourceInfo } from "./core/source-info.ts"`.
 pub use core::source_info::create_synthetic_source_info;
