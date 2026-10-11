@@ -52,6 +52,55 @@ fn format_project_trust_prompt(cwd: &str) -> String {
     format!("Trust project folder?\n{cwd}\n\nThis allows {APP_NAME} to load {CONFIG_DIR_NAME} settings and resources, install missing project packages, and execute project extensions.")
 }
 
+/// Build the [`ExtensionContext`] paired with the pre-trust
+/// [`LoadExtensionsResult`] in [`ResolveProjectTrustedOptions::extensions`]
+/// (D115): upstream hands the trust context to handlers directly; the Rust
+/// emit seam threads a full `ExtensionContext`, so the handler-observable
+/// fields (`ui`, `mode`, `has_ui`, `cwd`) mirror `ctx`. The model registry is
+/// inert (in-memory runtime, no network): `project_trust` handlers decide
+/// from the event, not the registry.
+pub(crate) async fn trust_emit_extension_context(
+    ctx: &ProjectTrustContext,
+    session_manager: Arc<parking_lot::Mutex<crate::core::session_manager::SessionManager>>,
+) -> ExtensionContext {
+    // ModelRegistry needs a ModelRuntime since the D64 port replaced the
+    // unit stand-in; this one runs fully in memory (no network, no files).
+    let runtime = crate::core::model_runtime::ModelRuntime::create(
+        crate::core::model_runtime::CreateModelRuntimeOptions {
+            credentials: Some(Arc::new(pi_ai::InMemoryCredentialStore::new())),
+            models_path: Some(None),
+            models_store: Some(Arc::new(
+                crate::core::models_store_wrapper::InMemoryCodingAgentModelsStore::new(),
+            )),
+            allow_model_network: false,
+            refresh_on_create: false,
+            ..Default::default()
+        },
+    )
+    .await
+    .expect("ModelRuntime::create succeeds for the trust emit context");
+    ExtensionContext {
+        ui: Arc::clone(&ctx.ui),
+        mode: ctx.mode,
+        has_ui: ctx.has_ui,
+        cwd: ctx.cwd.clone(),
+        session_manager,
+        model_registry: Arc::new(crate::core::extensions::types::ModelRegistry::new(runtime)),
+        model: None,
+        scoped_models: Vec::new(),
+        thinking_level: None,
+        signal: None,
+        is_idle: Arc::new(|| true),
+        is_project_trusted: Arc::new(|| false),
+        abort: Arc::new(|| {}),
+        has_pending_messages: Arc::new(|| false),
+        shutdown: Arc::new(|| {}),
+        get_context_usage: Arc::new(|| None),
+        compact: Arc::new(|_| {}),
+        get_system_prompt: Arc::new(String::new),
+    }
+}
+
 async fn select_project_trust_option(
     cwd: &str,
     ctx: &ProjectTrustContext,

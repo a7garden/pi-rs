@@ -23,7 +23,7 @@
 //! | `core/skills.ts` | [`core::skills`] (D24, D26) | complete |
 //! | `core/system-prompt.ts` | [`core::system_prompt`] | complete (D59; AgentSession-driven update cases defer with AgentSession) |
 //! | `core/slash-commands.ts` | [`core::slash_commands`] | complete — surface types and built-in catalog |
-//! | `core/package-manager.ts` | [`core::package_manager`] | complete (D55; `isStdoutTakenOver` stand-in lands with `core/output-guard.ts`) |
+//! | `core/package-manager.ts` | [`core::package_manager`] | complete (D55; `isStdoutTakenOver` reads [`core::output_guard`]) |
 //! | `core/pi-manifest.ts` | [`core::pi_manifest`] | complete |
 //! | `core/prompt-templates.ts` | [`core::prompt_templates`] | complete (D57, D57b) |
 //! | `core/event-bus.ts` | [`core::event_bus`] | complete (D57a) |
@@ -104,24 +104,23 @@
 //! | `experimental/cli.ts` | [`experimental::cli`] | complete (D180; bin wiring stays with the `pi` bin slice) |
 //! | (dependency seam) npm `proper-lockfile` | [`experimental::lockfile`] | complete (D149) |
 //!
-//! Not ported yet (next passes), in dependency order:
-//! `core/agent-session.ts` (`AgentSession` class), `core/agent-session-runtime.ts`,
-//! `core/agent-session-services.ts` — blocked on `core/tools/`,
-//! `core/extensions/` JS module loading (jiti seam, D40) and the session/agent
-//! dispatch integration,
-//! `core/export-html/`,
-//! and the
-//! `modes/interactive` theme layer; then `core/tools/renderers/` (with the
-//! theme layer), `core/export-html/`, `core/modes/{print,json-event,rpc,interactive}`
-//! (interactive TUI excluded by decision), `core/model-runtime.ts` +
-//! `core/model-registry.ts` (the registry is a facade over the runtime and
-//! ports with it, D47),
-//! `core/system-prompt.ts`, `core/slash-commands.ts`,
-//! `extensions/{mcp,tool-search,llama,codemode}/`, `experimental/`,
-//! `services/`, `plugins/`, `durable/`, `migrations/`, and TUI-only utils
-//! (`modes/interactive/**`). `rpc-entry`, `main.ts`, and the `pi` binary
-//! target (`src/cli.ts` upstream) have since landed (D102/D109).
+//! All upstream modules are ported or accounted for as of v1.1.0. Remaining
+//! exclusions, by decision:
+//! - **Interactive mode / TUI** (excluded 2026-10-05): `modes/interactive/**`
+//!   and its TUI-only satellites — `cli/config-selector.ts` (D130),
+//!   `cli/session-picker.ts` (D131), `core/keybindings.ts` manager (D132,
+//!   migration subset ported), `core/tools/renderers/` (D32), the interactive
+//!   `FooterDataProvider` (D57d), and HTML-export TUI theme helpers (D56d).
+//! - **Credential-gated live E2E** (upstream also skips them without keys):
+//!   provider live tests, `pi-durable` provider-cache E2E.
+//! - **Cloudflare Durable Object SQLite adapter** in `pi-durable`
+//!   (omitted with user approval; rusqlite-coupled).
 //!
+//! Deferred-item ledger of former gaps, since lifted: `mcp` subcommand,
+//! `--export`, `AgentSession::summarize_for_bug_report` (D79),
+//! `isStdoutTakenOver` spawn gating (D55), and project-trust resolution in
+//! `main()` (D103) — all wired in `cli::main_dispatch` / their home modules.
+
 //! # Deviations from upstream
 //!
 //! - **D1 — wire types are serde structs; legacy files parse with defaults.**
@@ -357,7 +356,7 @@
 //!   case-insensitive byte compare (`a.to_lowercase().cmp(...)`) standing in
 //!   for `localeCompare`.
 //! - **D47 — model-resolver `ModelRuntime` is an injected seam trait.**
-//!   `core/model-runtime.ts` is not ported yet; the resolver functions take
+//!   The resolver functions take
 //!   [`core::model_resolver::ModelRuntimeSource`], an object-safe trait with
 //!   exactly the five read methods they use (`getModels`,
 //!   `getAvailableSnapshot`, `getAvailable`, `getModel`,
@@ -443,9 +442,10 @@
 //!   effect immediately; the loader API keeps its private queue, so
 //!   immediate-effect registration lands with the runner-bind work (D107
 //!   scopes).
-//! - **D55 — package-manager dependency stand-ins and seams.**
-//!   `isStdoutTakenOver` (upstream `core/output-guard.ts`, unported) is a
-//!   stand-in returning `false`; test mocks of private methods become the
+//! - **D55 — package-manager dependency seams.**
+//!   `isStdoutTakenOver` (upstream `core/output-guard.ts`) reads the ported
+//!   [`core::output_guard`] flag to gate the inherit-spawn stdio; test mocks
+//!   of private methods become the
 //!   [`core::package_manager::CommandRunner`] seam (`with_runner`); and
 //!   `resolve`'s `onMissing` callback is synchronous. **D55a** — npm
 //!   `minimatch` is approximated with the `glob` crate's `Pattern` (no brace
@@ -660,11 +660,10 @@
 //!   `vi.spyOn`; the port routes the call through an internal override
 //!   slot that only the in-module tests set
 //!   (`run_auto_compaction_override` + `#[cfg(test)]` call log).
-//! - **D79 — bug-report summary defer ([`core::agent_session`]).**
-
-//!   `bug-report.ts` is not ported yet, so
-//!   `AgentSession::summarize_for_bug_report` returns a fixed `Err`
-//!   describing the missing module. `export-html/` has since landed (see
+//! - **D79 — bug-report summary ([`core::agent_session`]): lifted.**
+//!   `AgentSession::summarize_for_bug_report` runs the ported
+//!   [`core::bug_report`] summarizer (upstream consumer is the excluded
+//!   interactive bug-report dialog). `export-html/` landed (see
 //!   D80/D81), so `AgentSession::export_to_html` is wired to it. Every other
 //!   member is ported.
 //! - **D90 — modes runtime-host seam ([`modes`]).** Upstream passes the
@@ -760,9 +759,9 @@
 //!   `runToolCall` returns the outcome directly (upstream's promise could
 //!   reject; tool failures are `is_error` outcomes here).
 //! - **D69 — auth-guidance ([`core::auth_guidance`]).** Upstream has no
-//!   direct suite; consumers (`core/sdk.ts`, `core/agent-session.ts`,
-//!   `main.ts`, `cli/list-models.ts`) are deferred modules, so the functions
-//!   land with a string-shape test and their suites travel with those ports.
+//!   direct suite; its consumers (`core/sdk.ts`, `core/agent-session.ts`,
+//!   `main.ts`, `cli/list-models.ts`) are all ported, so the functions are
+//!   covered by a string-shape test.
 
 //!
 //! # Tests
@@ -840,17 +839,21 @@
 //!   interactive mode is excluded with the TUI. `prepareInitialMessage`
 //!   consumes the first message from the owned `Args` (same observable
 //!   shift as upstream).
-//! - **D103 — deferred startup infra.** `takeOverStdout`/`restoreStdout`,
-//!   http dispatcher/proxy configuration, timing probes, theme init, and
-//!   `setCapabilityOverrides` are not invoked from `main()`; project trust
-//!   resolves from `--approve`/`--no-approve` (the `ProjectTrustStore`/
-//!   trust-manager modules are deferred, so project-local files are trusted
-//!   by default); `--resume` requires the excluded TUI session picker and
-//!   reports an error; missing-session-cwd always takes the non-interactive
-//!   error path; `showDeprecationWarnings` prints without the keypress.
-//! - **D104 — package/config/mcp CLI commands defer.** `install`, `remove`,
-//!   `uninstall`, `update`, `list`, `config`, and `mcp` print an error
-//!   naming the deferred modules.
+//! - **D103 — startup infra.** `takeOverStdout` runs for every
+//!   non-interactive, non-plain-metadata invocation (D91: the guard records
+//!   state; library output already goes to stderr); project trust resolves
+//!   through [`core::trust_manager::ProjectTrustStore`] with
+//!   `--approve`/`--no-approve` override and per-cwd resolution (the
+//!   interactive prompt path is excluded, so unresolved trust is `false`);
+//!   `--resume` requires the excluded TUI session picker and reports an
+//!   error; missing-session-cwd always takes the non-interactive error path;
+//!   `showDeprecationWarnings` prints without the keypress. http
+//!   dispatcher/proxy configuration, timing probes, theme init, and
+//!   `setCapabilityOverrides` stay uninvoked (TUI-adjacent or no-op seams).
+//! - **D104 — package/config/mcp CLI commands.** `install`, `remove`,
+//!   `uninstall`, `update`, `list`, and `mcp` are lifted
+//!   ([`package_manager_cli`], [`crate::extensions::mcp::cli`]); `config`
+//!   prints the excluded-TUI-selector report (D130/D137).
 //! - **D105 — keybindings migration subset
 //!   ([`core::keybindings_migration`]).** Only
 //!   `migrateKeybindingsConfig` + config ordering are ported; the

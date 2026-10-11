@@ -3,8 +3,8 @@
 //!
 //! There is no upstream `auth-guidance.test.ts`: every consumer
 //! (`core/sdk.ts`, `core/agent-session.ts`, `main.ts`, `cli/list-models.ts`)
-//! is a deferred module, so the suite travels with those ports (deviation
-//! D69). The functions are exported now because they are dependency-free.
+//! is ported, so the functions are covered by a string-shape test here
+//! (deviation D69).
 
 use crate::config::get_docs_path;
 use crate::utils::paths::join;

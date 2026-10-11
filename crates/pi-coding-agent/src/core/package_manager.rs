@@ -4,9 +4,8 @@
 //!
 //! Deviations:
 //! - **D55** — dependency stand-ins and seams for this module:
-//!   - `isStdoutTakenOver` (upstream `core/output-guard.ts`, not ported yet)
-//!     is a stand-in returning `false`; replaced by a `pub use` re-export when
-//!     the home module lands (crate docs D29 lifecycle).
+//!   - `isStdoutTakenOver` gates the inherit-spawn stdio; it reads
+//!     [`crate::core::output_guard::is_stdout_taken_over`] (D91 state flag).
 //!   - Upstream tests mock private methods via `vi.spyOn`; here process
 //!     execution lives behind the [`CommandRunner`] trait
 //!     ([`ProcessCommandRunner`] is the real implementation, tests inject a
@@ -51,17 +50,6 @@ use crate::utils::text::strip_bom;
 const NETWORK_TIMEOUT_MS: u64 = 10000;
 const UPDATE_CHECK_CONCURRENCY: usize = 4;
 const GIT_UPDATE_CONCURRENCY: usize = 4;
-
-// ============================================================================
-// Dependency stand-ins (crate docs D29 / module docs D55)
-// ============================================================================
-
-/// Upstream `isStdoutTakenOver` from `core/output-guard.ts` (module not ported
-/// yet): stand-in returning `false` (module docs D55).
-#[allow(dead_code)] // stand-in (D55); used once output-guard-dependent spawn modes land
-fn is_stdout_taken_over() -> bool {
-    false
-}
 
 const RESOURCE_TYPES: [ResourceType; 4] = [
     ResourceType::Extensions,
@@ -1320,6 +1308,13 @@ impl CommandRunner for ProcessCommandRunner {
     fn run(&self, call: &CommandCall) -> Result<(), String> {
         let mut command = std::process::Command::new(&call.command);
         command.args(&call.args);
+        if crate::core::output_guard::is_stdout_taken_over() {
+            // Upstream `stdio: ["ignore", 2, 2]` in `spawnCommand`: raw
+            // protocol output owns stdout, so the child's stdin/stdout are
+            // dropped and only its stderr passes through.
+            command.stdin(std::process::Stdio::null());
+            command.stdout(std::process::Stdio::null());
+        }
         if let Some(cwd) = &call.cwd {
             command.current_dir(cwd);
         }

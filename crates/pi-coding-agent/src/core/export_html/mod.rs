@@ -598,8 +598,14 @@ fn pre_render_custom_tools(
 
 /// Default output path (upstream inline `${APP_NAME}-session-${basename}.html`).
 fn default_output_path(session_file: &str) -> String {
-    let basename = session_file.strip_suffix(".jsonl").unwrap_or(session_file);
-    format!("{APP_NAME}-session-{basename}.html")
+    // Node `basename(resolvedInputPath, ".jsonl")`: last path segment with a
+    // trailing `.jsonl` suffix stripped (upstream writes cwd-relative).
+    let base = session_file
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or(session_file);
+    let base = base.strip_suffix(".jsonl").unwrap_or(base);
+    format!("{APP_NAME}-session-{base}.html")
 }
 
 fn write_output(path: &str, html: &str) -> Result<String, String> {

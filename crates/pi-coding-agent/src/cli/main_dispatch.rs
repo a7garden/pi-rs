@@ -7,18 +7,23 @@
 //! a dispatcher, print/json/rpc modes exit with an error naming the seam;
 //! the `pi` binary target (D109) installs the production runners.
 //!
-//! Further documented omissions (see crate docs D103/D104):
-//! - `takeOverStdout`/`restoreStdout`, http dispatcher/proxy configuration,
-//!   timing probes, theme init, and `setCapabilityOverrides` are
-//!   interactive/TUI-adjacent infra and are not invoked.
-//! - `install`/`remove`/`update`/`list`/`config` subcommands now live in
-//!   [`crate::package_manager_cli`] (D104 lifted for them, D133–D137);
-//!   the `mcp` subcommand remains deferred (D104).
-//! - `--export` is deferred with HTML export (D79).
+//! Further documented notes (see crate docs D103/D104):
+//! - `takeOverStdout` runs for every non-interactive, non-metadata invocation
+//!   (D91: the Rust guard records state; library output already goes to
+//!   stderr). http dispatcher/proxy configuration, timing probes, theme
+//!   init, and `setCapabilityOverrides` remain uninvoked (TUI-adjacent or
+//!   no-op seams).
+//! - `install`/`remove`/`update`/`list`/`config` subcommands live in
+//!   [`crate::package_manager_cli`] (D133–D137); the `mcp` subcommand runs
+//!   [`crate::extensions::mcp::cli`] (D104 lifted). `config` still reports
+//!   the excluded TUI selector (D130).
+//! - `--export` runs [`crate::core::export_html::export_from_file`] (D79
+//!   lifted with the HTML export port).
 //! - `--resume` needs the TUI session picker (excluded); it reports an
 //!   error like other unavailable interactive surfaces.
-//! - Project trust uses `--approve`/`--no-approve`; the `ProjectTrustStore`
-//!   and trust-manager modules are deferred (D103).
+//! - Project trust resolves through the [`crate::core::trust_manager::
+//!   ProjectTrustStore`] and per-cwd resolution (D103 lifted); the
+//!   interactive prompt path stays excluded, so unresolved trust is `false`.
 
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
@@ -838,6 +843,14 @@ fn print_mode_unavailable(mode: AppMode) -> ! {
     std::process::exit(1);
 }
 
+/// `isPlainRuntimeMetadataCommand`: help/list-models invocations that print to
+/// stdout without a protocol mode — exempt from stdout takeover.
+fn is_plain_runtime_metadata_command(parsed: &Args) -> bool {
+    !parsed.print
+        && parsed.mode.is_none()
+        && (parsed.help || parsed.list_models.is_some())
+}
+
 /// `MainOptions`.
 #[derive(Default)]
 pub struct MainOptions;
@@ -887,11 +900,20 @@ pub async fn main(args: Vec<String>, _options: Option<MainOptions>) {
         Ok(false) => {}
     }
 
-    // Upstream `mcp` subcommand lives in the mcp CLI module (still deferred).
-    if let Some(first) = args.first() {
+    // Upstream `mcp` subcommand (extensions/mcp/cli.ts `runMcpCommand`).
+    if let Some((first, rest)) = args.split_first() {
         if first == "mcp" {
-            eprintln!("Error: \"{first}\" is not available in this build (the mcp CLI module is deferred).");
-            std::process::exit(1);
+            let options = crate::extensions::mcp::cli::McpCommandOptions {
+                cwd: cwd.clone(),
+                agent_dir: agent_dir.clone(),
+                credentials: None,
+                open_url: None,
+                log: None,
+                error: None,
+                project_trusted: None,
+            };
+            let exit_code = crate::extensions::mcp::cli::run_mcp_command(rest, &options).await;
+            std::process::exit(exit_code);
         }
     }
 
@@ -917,13 +939,35 @@ pub async fn main(args: Vec<String>, _options: Option<MainOptions>) {
         std::process::exit(0);
     }
 
-    if parsed.export.is_some() {
-        // HTML export is deferred (D79).
-        eprintln!("Error: --export requires the HTML export module, which is deferred (D79).");
-        std::process::exit(1);
+    if let Some(export_path) = &parsed.export {
+        // Upstream `exportFromFile(parsed.export, parsed.messages[0])`.
+        match crate::core::export_html::export_from_file(
+            export_path,
+            crate::core::export_html::ExportOptions {
+                output_path: parsed.messages.first().cloned(),
+                ..Default::default()
+            },
+        ) {
+            Ok(output) => {
+                println!("Exported to: {output}");
+                std::process::exit(0);
+            }
+            Err(message) => {
+                eprintln!("Error: {message}");
+                std::process::exit(1);
+            }
+        }
     }
 
     let app_mode = resolve_app_mode(&parsed, !use_stdin_pipe(), stdout_is_tty());
+
+    // Upstream `takeOverStdout` for every non-interactive mode that is not a
+    // plain runtime-metadata command (help/list-models without --print/--mode).
+    // D91: the Rust guard records the takeover state; library output already
+    // stays on stderr.
+    if app_mode != AppMode::Interactive && !is_plain_runtime_metadata_command(&parsed) {
+        crate::core::output_guard::take_over_stdout();
+    }
 
     if parsed.mode == Some(Mode::Rpc) && !parsed.file_args.is_empty() {
         eprintln!("Error: @file arguments are not supported in RPC mode");
@@ -985,10 +1029,21 @@ pub async fn main(args: Vec<String>, _options: Option<MainOptions>) {
         let _ = session_manager.append_session_info(&name);
     }
 
-    // Project trust: `--approve`/`--no-approve` override; the trust store and
-    // trust-requiring resource detection are deferred (D103), so project-local
-    // files are trusted unless overridden.
-    let project_trusted = parsed.project_trust_override.unwrap_or(true);
+    // Project trust (upstream main.ts): the store and per-cwd resolution run
+    // inside the runtime factory; `--approve`/`--no-approve` override wins.
+    // The interactive prompt (`hasUI`) is excluded with the TUI, so unresolved
+    // trust lands on `false` (upstream non-interactive behavior).
+    let trust_store = Arc::new(crate::core::trust_manager::ProjectTrustStore::new(&agent_dir));
+    let project_trust_by_cwd: Arc<Mutex<HashMap<String, bool>>> =
+        Arc::new(Mutex::new(HashMap::new()));
+    let project_trust_diagnostics: Arc<Mutex<Vec<AgentSessionRuntimeDiagnostic>>> =
+        Arc::new(Mutex::new(Vec::new()));
+    let app_extension_mode = match app_mode {
+        AppMode::Print => crate::core::extensions::types::ExtensionMode::Print,
+        AppMode::Json => crate::core::extensions::types::ExtensionMode::Json,
+        AppMode::Rpc => crate::core::extensions::types::ExtensionMode::Rpc,
+        AppMode::Interactive => unreachable!("interactive mode exits above"),
+    };
     let resolved_extension_paths = resolve_cli_paths(&cwd, parsed.extensions.as_ref());
     let resolved_skill_paths = resolve_cli_paths(&cwd, parsed.skills.as_ref());
     let resolved_prompt_template_paths = resolve_cli_paths(&cwd, parsed.prompt_templates.as_ref());
@@ -1006,7 +1061,116 @@ pub async fn main(args: Vec<String>, _options: Option<MainOptions>) {
             let resolved_skill_paths = resolved_skill_paths.clone();
             let resolved_prompt_template_paths = resolved_prompt_template_paths.clone();
             let resolved_theme_paths = resolved_theme_paths.clone();
+            let trust_store = Arc::clone(&trust_store);
+            let project_trust_by_cwd = Arc::clone(&project_trust_by_cwd);
+            let project_trust_diagnostics = Arc::clone(&project_trust_diagnostics);
+            // Upstream reads the startup settings manager per createRuntime.
+            let default_project_trust = startup_settings_manager.get_default_project_trust();
+            // `trustPromptMode`: help/list-models print without a protocol mode.
+            let trust_prompt_mode = if options.session_start_event.is_none()
+                && (parsed.help || parsed.list_models.is_some())
+            {
+                crate::core::extensions::types::ExtensionMode::Print
+            } else {
+                app_extension_mode
+            };
             Box::pin(async move {
+                // Upstream per-runtime project-trust resolution: the runtime
+                // cwd decides trust (`--session`/`--resume` may target another
+                // project directory).
+                let cached_project_trust =
+                    project_trust_by_cwd.lock().get(&options.cwd).copied();
+                let has_trust_requiring_resources =
+                    crate::core::trust_manager::has_trust_requiring_project_resources(
+                        &options.cwd,
+                    );
+                let should_resolve_project_trust = parsed.project_trust_override.is_none()
+                    && cached_project_trust.is_none()
+                    && has_trust_requiring_resources;
+                let project_trusted = if should_resolve_project_trust {
+                    false
+                } else {
+                    cached_project_trust
+                        .or(parsed.project_trust_override)
+                        .unwrap_or(
+                            !has_trust_requiring_resources
+                                || trust_store.get(&options.cwd).unwrap_or(None) == Some(true),
+                        )
+                };
+                let resource_loader_reload_options = if should_resolve_project_trust {
+                    let trust_context =
+                        options.project_trust_context.clone().unwrap_or_else(|| {
+                            crate::core::extensions::types::ProjectTrustContext {
+                                cwd: options.cwd.clone(),
+                                mode: trust_prompt_mode,
+                                // Interactive-only startup prompt stays
+                                // excluded with the TUI (hasUI: false).
+                                has_ui: false,
+                                ui: Arc::new(crate::core::extensions::runner::NoopExtensionUi),
+                            }
+                        });
+                    let resolve_cwd = options.cwd.clone();
+                    let resolve_store = Arc::clone(&trust_store);
+                    let resolve_cache = Arc::clone(&project_trust_by_cwd);
+                    let resolve_diagnostics = Arc::clone(&project_trust_diagnostics);
+                    let resolve_context = trust_context.clone();
+                    let resolve_session_manager = Arc::clone(&options.session_manager);
+                    ResourceLoaderReloadOptions {
+                        resolve_project_trust: Some(Box::new(move |extensions_result| {
+                            // Runs on the loader's blocking thread (no ambient
+                            // runtime); drive the async resolution on a
+                            // throwaway current-thread runtime (D58 pattern).
+                            tokio::runtime::Builder::new_current_thread()
+                                .enable_all()
+                                .build()
+                                .expect("failed to build tokio runtime")
+                                .block_on(async {
+                                    let emit_context =
+                                        crate::core::project_trust::trust_emit_extension_context(
+                                            &resolve_context,
+                                            resolve_session_manager,
+                                        )
+                                        .await;
+                                    crate::core::project_trust::resolve_project_trusted(
+                                        crate::core::project_trust::ResolveProjectTrustedOptions {
+                                            cwd: resolve_cwd.clone(),
+                                            trust_store: Arc::clone(&resolve_store),
+                                            trust_override: None,
+                                            default_project_trust: Some(default_project_trust),
+                                            extensions: Some((
+                                                extensions_result.clone(),
+                                                emit_context,
+                                            )),
+                                            project_trust_context: resolve_context.clone(),
+                                            on_extension_error: Some(Box::new({
+                                                let diagnostics =
+                                                    Arc::clone(&resolve_diagnostics);
+                                                move |message| {
+                                                    diagnostics.lock().push(
+                                                        AgentSessionRuntimeDiagnostic {
+                                                            diagnostic_type:
+                                                                RuntimeDiagnosticType::Warning,
+                                                            message,
+                                                        },
+                                                    );
+                                                }
+                                            })),
+                                        },
+                                    )
+                                    .await
+                                })
+                                .map(|trusted| {
+                                    resolve_cache
+                                        .lock()
+                                        .insert(resolve_cwd.clone(), trusted);
+                                    trusted
+                                })
+                                .unwrap_or(false)
+                        })),
+                    }
+                } else {
+                    ResourceLoaderReloadOptions::default()
+                };
                 let runtime_settings_manager = SettingsManager::create(
                     &options.cwd,
                     &options.agent_dir,
@@ -1061,14 +1225,19 @@ pub async fn main(args: Vec<String>, _options: Option<MainOptions>) {
                         append_system_prompt: parsed.append_system_prompt.clone(),
                         ..Default::default()
                     },
-                    resource_loader_reload_options: ResourceLoaderReloadOptions::default(),
+                    resource_loader_reload_options,
                 })
                 .await;
 
                 let model_runtime = services.model_runtime.clone();
                 let settings_manager = services.settings_manager.clone();
-                let mut diagnostics: Vec<AgentSessionRuntimeDiagnostic> =
-                    services.diagnostics.clone();
+                // Upstream order: project-trust resolution diagnostics first,
+                // then service diagnostics, then settings diagnostics.
+                let mut diagnostics: Vec<AgentSessionRuntimeDiagnostic> = project_trust_diagnostics
+                    .lock()
+                    .drain(..)
+                    .collect();
+                diagnostics.extend(services.diagnostics.clone());
                 diagnostics.extend(collect_settings_diagnostics(&mut settings_manager.lock()));
                 let extensions_result = {
                     let loader = services.resource_loader.lock();

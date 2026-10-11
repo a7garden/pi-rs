@@ -31,11 +31,12 @@
 //! - **D78 — auto-compaction test seam**: upstream tests monkey-patch the
 //!   private `_runAutoCompaction` via `vi.spyOn`; the port routes the call
 //!   through an internal override slot that only the in-module tests set.
-//! - **D79 — bug-report summary defer**: `bug-report.ts` is not ported yet,
-//!   so [`AgentSession::summarize_for_bug_report`] returns a fixed `Err`
-//!   describing the missing module. `export-html/` has since landed in
-//!   [`core::export_html`] (D80/D81), so [`AgentSession::export_to_html`] is
-//!   wired to it. Every other member is ported.
+//! - **D79 — bug-report summary**: lifted. [`AgentSession::
+//!   summarize_for_bug_report`] runs the ported [`core::bug_report`]
+//!   summarizer (upstream consumer is the excluded interactive bug-report
+//!   dialog); `export-html/` landed in [`core::export_html`] (D80/D81), so
+//!   [`AgentSession::export_to_html`] is wired to it. Every other member is
+//!   ported.
 //!
 //! `agent-session-runtime.ts` and `agent-session-services.ts` (the
 //! `AgentSessionRuntime`/services layer) are separate ports; the upstream
@@ -3173,14 +3174,47 @@ impl AgentSession {
     }
 
     /// Ask the current model to describe what went wrong in this session for
-    /// a bug report (D79: `bug-report.ts` is not ported yet).
+    /// a bug report (`summarizeForBugReport`; upstream consumer is the
+    /// excluded interactive bug-report dialog). Without a signal, a fresh
+    /// one is used — upstream requires the argument.
     pub async fn summarize_for_bug_report(
         &self,
-        _hint: Option<&str>,
-        _signal: Option<&AiAbortSignal>,
+        hint: Option<&str>,
+        signal: Option<&AiAbortSignal>,
     ) -> Result<String, String> {
-        let _ = self;
-        Err("bug_report summary is not ported yet (upstream bug-report.ts defers; D79)".to_string())
+        let model = self
+            .model()
+            .ok_or_else(|| "No model selected".to_string())?;
+        let inner = &self.inner;
+        let owned_signal;
+        let signal = match signal {
+            Some(signal) => signal,
+            None => {
+                owned_signal = AiAbortSignal::new();
+                &owned_signal
+            }
+        };
+        let auth = inner
+            .get_summarization_request_auth(&model, Some(signal))
+            .await?;
+        let messages = inner.agent.messages();
+        let session_id = self.session_id();
+        crate::core::bug_report::generate_bug_report_summary(
+            crate::core::bug_report::GenerateBugReportSummaryOptions {
+                messages: &messages,
+                hint,
+                model: &auth.model,
+                api_key: auth.api_key.as_deref(),
+                headers: auth.headers.as_ref(),
+                env: auth.env.as_ref(),
+                signal: signal.clone(),
+                thinking_level: auth.thinking_level,
+                stream_fn: Some(Arc::clone(&inner.agent.stream_function)),
+                retry: Some(&inner.retry_policy()),
+                session_id: Some(&session_id),
+            },
+        )
+        .await
     }
 
     /// Text content of the last assistant message (`getLastAssistantText`).
