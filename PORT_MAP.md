@@ -65,7 +65,10 @@ The sync session MUST:
 3. Update ported tests per rule 4; run `cargo test --workspace`.
 4. Update the status ledger below (crate rows: `@ <tag>` once current).
 5. Bump workspace version to `<new-tag>` (rule 6); commit as `sync: upstream v<new-tag>`.
-6. Report: changed crates, skipped items + reason, test results.
+6. Publish: push `main`; if the version bumped (full sync), push tag `v<new-tag>` —
+   `.github/workflows/release.yml` builds the four platform binaries and publishes
+   the GitHub release.
+7. Report: changed crates, skipped items + reason, test results.
 
 ## Status ledger
 

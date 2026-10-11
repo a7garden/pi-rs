@@ -23,7 +23,9 @@ mapping, module-mirror rules, test-transport rules, deviation policy, status led
 6. If ALL crates in the ledger are at `<NEW_TAG>`, bump `[workspace.package] version` to
    the tag without the leading `v` (rule 6).
 7. Commit everything (including PORT_MAP.md) as one commit: `sync: upstream <NEW_TAG>`.
-   Do NOT push.
+8. Publish: `git push origin main`. If step 6 bumped the workspace version (full sync),
+   also `git tag v<NEW_TAG> && git push origin v<NEW_TAG>` — the tag triggers the
+   release workflow, which publishes platform binaries to a GitHub release.
 
 ## Hard rules
 

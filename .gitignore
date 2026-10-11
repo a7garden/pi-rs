@@ -2,3 +2,7 @@ target/
 upstream/
 sync/.release-state
 sync/*.lock
+local/
+sync/*.log
+sync/sync.lock
+sync/launchd.log
