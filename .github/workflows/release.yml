@@ -3,6 +3,9 @@ name: release
 # Tag push (`v*`, matching the workspace version) builds release binaries for
 # the four upstream-supported platforms and publishes a GitHub release with
 # upstream-style assets (pi-<os>-<arch>.tar.gz).
+#
+# darwin-x64 is cross-compiled on an arm64 runner: Apple's toolchain ships the
+# x86_64 slice and the retired macos-13 x64 runners queue for hours.
 
 on:
   push:
@@ -18,25 +21,31 @@ jobs:
       matrix:
         include:
           - os: macos-14
+            target: aarch64-apple-darwin
             asset: darwin-arm64
-          - os: macos-13
+          - os: macos-14
+            target: x86_64-apple-darwin
             asset: darwin-x64
           - os: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
             asset: linux-x64
           - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
             asset: linux-arm64
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2
         with:
-          key: ${{ matrix.asset }}
+          key: ${{ matrix.target }}
       - name: Build pi (release)
-        run: cargo build --release --locked -p pi-coding-agent --bin pi
+        run: cargo build --release --locked --target ${{ matrix.target }} -p pi-coding-agent --bin pi
       - name: Package
         run: |
-          tar czf "pi-${{ matrix.asset }}.tar.gz" -C target/release pi
+          tar czf "pi-${{ matrix.asset }}.tar.gz" -C "target/${{ matrix.target }}/release" pi
       - uses: actions/upload-artifact@v4
         with:
           name: pi-${{ matrix.asset }}
